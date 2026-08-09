@@ -1,0 +1,145 @@
+/**
+ * Design tokens.
+ *
+ * Light is defined on bare `:root` so a viewer with no explicit preference gets a
+ * complete palette; dark is redefined twice — once under `prefers-color-scheme`
+ * for the OS setting, once under `[data-theme="dark"]` so the in-app toggle wins
+ * in both directions. Never give a color its only definition inside a media
+ * query: that borrows the host's theme instead of stating one.
+ *
+ * Chart colors come from the validated reference palette. The categorical slots
+ * are capped at three because that is the subset that clears the all-pairs
+ * colorblind gates in both modes.
+ */
+
+:root {
+  color-scheme: light;
+
+  --plane: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --surface-2: #f2f1ed;
+  --surface-raised: #ffffff;
+
+  --ink-primary: #0b0b0b;
+  --ink-secondary: #52514e;
+  --ink-muted: #898781;
+
+  --rule: rgba(11, 11, 11, 0.1);
+  --rule-strong: #c3c2b7;
+  --grid: #e1e0d9;
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+
+  /* Sequential blue, light→dark. Ordinal use starts no lighter than step 250. */
+  --seq-100: #cde2fb;
+  --seq-250: #86b6ef;
+  --seq-400: #3987e5;
+  --seq-550: #1c5cab;
+  --seq-700: #0d366b;
+
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --success-text: #006300;
+
+  --accent: #2a78d6;
+  --accent-wash: rgba(42, 120, 214, 0.08);
+  --accent-ink: #ffffff;
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Consolas', monospace;
+
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.0625rem;
+  --step-2: 1.375rem;
+  --step-3: 1.875rem;
+  --step-4: 2.5rem;
+  --step-hero: clamp(2.75rem, 6vw, 4rem);
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4.5rem;
+
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 14px;
+
+  --shell: 1140px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+
+    --plane: #0d0d0d;
+    --surface-1: #131312;
+    --surface-2: #1a1a19;
+    --surface-raised: #1f1f1d;
+
+    --ink-primary: #ffffff;
+    --ink-secondary: #c3c2b7;
+    --ink-muted: #898781;
+
+    --rule: rgba(255, 255, 255, 0.1);
+    --rule-strong: #383835;
+    --grid: #2c2c2a;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+
+    --seq-100: #0d366b;
+    --seq-250: #184f95;
+    --seq-400: #2a78d6;
+    --seq-550: #5598e7;
+    --seq-700: #9ec5f4;
+
+    --success-text: #0ca30c;
+
+    --accent: #3987e5;
+    --accent-wash: rgba(57, 135, 229, 0.14);
+    --accent-ink: #ffffff;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --plane: #0d0d0d;
+  --surface-1: #131312;
+  --surface-2: #1a1a19;
+  --surface-raised: #1f1f1d;
+
+  --ink-primary: #ffffff;
+  --ink-secondary: #c3c2b7;
+  --ink-muted: #898781;
+
+  --rule: rgba(255, 255, 255, 0.1);
+  --rule-strong: #383835;
+  --grid: #2c2c2a;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+
+  --seq-100: #0d366b;
+  --seq-250: #184f95;
+  --seq-400: #2a78d6;
+  --seq-550: #5598e7;
+  --seq-700: #9ec5f4;
+
+  --success-text: #0ca30c;
+
+  --accent: #3987e5;
+  --accent-wash: rgba(57, 135, 229, 0.14);
+  --accent-ink: #ffffff;
+}
