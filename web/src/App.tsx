@@ -8,6 +8,7 @@ import WeightLab from './pages/WeightLab'
 import AttackCost from './pages/AttackCost'
 import ScopeBuilder from './pages/ScopeBuilder'
 import PolicyPage from './pages/PolicyPage'
+import Docs from './pages/Docs'
 import NotFound from './pages/NotFound'
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="attack" element={<AttackCost />} />
         <Route path="scope" element={<ScopeBuilder />} />
         <Route path="policy" element={<PolicyPage />} />
+        <Route path="docs" element={<Docs />} />
         <Route path="index.html" element={<Navigate to="/" replace />} />
         <Route path="*" element={<NotFound />} />
       </Route>

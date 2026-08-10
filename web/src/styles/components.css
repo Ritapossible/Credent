@@ -12,8 +12,8 @@
   position: sticky;
   top: 0;
   z-index: 20;
-  background: color-mix(in srgb, var(--plane) 88%, transparent);
-  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--plane) 80%, transparent);
+  backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--rule);
 }
 
@@ -21,7 +21,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  min-height: 64px;
+  min-height: 72px;
   flex-wrap: wrap;
 }
 
@@ -36,8 +36,8 @@
 }
 
 .brand__mark {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   flex: none;
 }
 
@@ -45,30 +45,36 @@
   display: flex;
   flex-direction: column;
   line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-size: var(--step-1);
 }
 
 .brand__sub {
   font-size: 0.6875rem;
   font-weight: 500;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--ink-muted);
   text-transform: uppercase;
 }
 
 .nav {
   display: flex;
+  align-items: center;
   gap: var(--space-1);
   flex-wrap: wrap;
 }
 
 .nav__link {
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
   color: var(--ink-secondary);
   text-decoration: none;
   font-size: var(--step--1);
   font-weight: 500;
   white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .nav__link:hover {
@@ -78,40 +84,73 @@
 
 .nav__link--active {
   color: var(--ink-primary);
-  background: var(--accent-wash);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-1);
+  font-weight: 600;
+}
+
+.nav__docs {
+  margin-left: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-1);
+  color: var(--ink-primary);
+  text-decoration: none;
+  font-size: var(--step--1);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-1);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.nav__docs:hover,
+.nav__docs--active {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-1), 0 0 0 3px var(--accent-wash);
 }
 
 .theme-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  background: transparent;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 50%;
+  background: var(--surface-1);
   color: var(--ink-secondary);
   cursor: pointer;
   flex: none;
+  box-shadow: var(--shadow-1);
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .theme-toggle:hover {
-  background: var(--surface-2);
+  border-color: var(--accent);
   color: var(--ink-primary);
 }
 
 .masthead__toggle {
   display: none;
-  padding: var(--space-2) var(--space-3);
+  min-height: 42px;
+  padding: var(--space-2) var(--space-4);
   border: 1px solid var(--rule-strong);
-  border-radius: var(--radius);
-  background: transparent;
+  border-radius: var(--radius-pill);
+  background: var(--surface-1);
   font-size: var(--step--1);
   font-weight: 600;
   cursor: pointer;
+  box-shadow: var(--shadow-1);
 }
 
-@media (max-width: 860px) {
+/* Seven destinations plus the brand and the toggle stop fitting well before the
+   old 860px cut, where they silently wrapped onto a second row. */
+@media (max-width: 1040px) {
   .masthead__toggle {
     display: inline-flex;
     order: 2;
@@ -126,42 +165,92 @@
     display: none;
     width: 100%;
     flex-direction: column;
-    padding-bottom: var(--space-3);
+    align-items: stretch;
+    gap: var(--space-2);
+    padding-bottom: var(--space-4);
   }
 
   .nav--open {
     display: flex;
+  }
+
+  .nav__docs {
+    margin-left: 0;
+    text-align: center;
   }
 }
 
 /* --- hero --------------------------------------------------------------- */
 
 .hero {
-  border-bottom: 1px solid var(--rule);
-  background:
-    radial-gradient(60rem 30rem at 12% -10%, var(--accent-wash), transparent 70%),
-    var(--plane);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  /* No bottom rule and no fade to the card surface: the page below the hero is
+     the same plane, and a gradient landing on white put a hard seam across the
+     fold. The halo alone marks the hero. */
+  background: var(--plane);
+}
+
+/* Concentric halo behind the headline. Masked to a soft disc so the rings never
+   reach an edge and read as a light source rather than as a drawn diagram. */
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: -14rem 0 auto;
+  height: 52rem;
+  z-index: -1;
+  background: repeating-radial-gradient(
+    circle at 50% 28%,
+    transparent 0 6.6rem,
+    var(--rule) 6.6rem 6.68rem
+  );
+  -webkit-mask-image: radial-gradient(circle at 50% 28%, #000 0%, transparent 62%);
+  mask-image: radial-gradient(circle at 50% 28%, #000 0%, transparent 62%);
+  pointer-events: none;
+}
+
+.hero::after {
+  content: '';
+  position: absolute;
+  inset: -20rem 0 auto;
+  height: 44rem;
+  z-index: -1;
+  background: radial-gradient(38rem 24rem at 50% 46%, var(--accent-wash), transparent 70%);
+  pointer-events: none;
 }
 
 .hero__inner {
-  padding-block: var(--space-8) var(--space-7);
+  padding-block: var(--space-8) var(--space-8);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  align-items: flex-start;
+  align-items: center;
+  text-align: center;
 }
 
 .hero__title {
   font-size: var(--step-hero);
-  max-width: 20ch;
-  letter-spacing: -0.03em;
+  max-width: 18ch;
+  letter-spacing: -0.035em;
+}
+
+.hero .lede {
+  max-width: 56ch;
+}
+
+/* `.eyebrow--pill` starts left-aligned for the stretch-aligned section heads; in
+   the centered hero it has to give that back. */
+.hero__inner .eyebrow--pill {
+  align-self: center;
 }
 
 .hero__actions {
   display: flex;
   gap: var(--space-3);
   flex-wrap: wrap;
-  margin-top: var(--space-2);
+  justify-content: center;
+  margin-top: var(--space-3);
 }
 
 /* --- structure ---------------------------------------------------------- */
@@ -195,6 +284,19 @@
 .card__aside {
   margin-top: var(--space-3);
   font-size: var(--step--1);
+}
+
+/* Inline "Details →" beside a card heading, kept off the heading's weight. */
+.card__link {
+  margin-left: var(--space-2);
+  font-size: var(--step--1);
+  font-weight: 500;
+}
+
+.band__more {
+  margin-top: var(--space-5);
+  font-size: var(--step--1);
+  font-weight: 600;
 }
 
 .crumb {
@@ -231,10 +333,11 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-4);
+  padding: var(--space-5);
   background: var(--surface-1);
   border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
 }
 
 .stat__label {
@@ -258,8 +361,10 @@
   list-style: none;
   padding: 0;
   display: grid;
-  gap: var(--space-4);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: var(--space-5);
+  /* Narrow enough that all four steps sit on one row at full width — at 17rem the
+     fourth wrapped alone onto a second row and read as an afterthought. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
 }
 
 .steps__item {
@@ -272,13 +377,15 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  background: var(--accent-wash);
-  color: var(--accent);
+  background: var(--surface-1);
+  border: 1px solid var(--accent-edge);
+  color: var(--accent-text);
   font-size: var(--step--1);
   font-weight: 700;
+  box-shadow: var(--shadow-1);
 }
 
 .steps__title {
@@ -297,6 +404,7 @@
   background: var(--surface-1);
   border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
 }
 
 .feature__name {
@@ -323,9 +431,9 @@
 .feature__score {
   font-size: var(--step-hero);
   font-weight: 600;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.035em;
   line-height: 1;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 @media (max-width: 720px) {
@@ -509,12 +617,16 @@
 .segmented__option span {
   display: inline-flex;
   align-items: center;
-  min-height: 40px;
-  padding: 0 var(--space-4);
+  min-height: 42px;
+  padding: 0 var(--space-5);
+  background: var(--surface-1);
   border: 1px solid var(--rule-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-pill);
   font-size: var(--step--1);
   cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .segmented__option input:checked + span {
@@ -548,14 +660,17 @@
   border-radius: var(--radius-lg);
   color: inherit;
   text-decoration: none;
+  box-shadow: var(--shadow-1);
   transition:
-    border-color 0.15s ease,
-    transform 0.15s ease;
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
 }
 
 .agent-card:hover {
   border-color: var(--accent);
-  transform: translateY(-2px);
+  box-shadow: var(--shadow-3);
+  transform: translateY(-3px);
 }
 
 .agent-card__head {
@@ -632,6 +747,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
+  box-shadow: var(--shadow-1);
 }
 
 .chart__head {
@@ -713,7 +829,7 @@
   background: var(--surface-raised);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
-  box-shadow: 0 6px 24px rgb(0 0 0 / 0.18);
+  box-shadow: var(--shadow-3);
   pointer-events: none;
   font-size: var(--step--1);
 }
@@ -826,6 +942,7 @@
   background: var(--surface-1);
   border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
 }
 
 .att__head {
@@ -925,7 +1042,7 @@
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: var(--step--1);
   font-weight: 600;
   cursor: pointer;
@@ -1079,7 +1196,8 @@
   background: var(--surface-1);
   border: 1px solid var(--rule);
   border-left: 3px solid var(--accent);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
 }
 
 .notice__title {
@@ -1107,19 +1225,14 @@
   vertical-align: top;
 }
 
-/* Two classes, to outrank `.data-table td`'s nowrap — this column is prose, and
-   left as nowrap it runs off the card on one line instead of wrapping. */
-.policy-table .policy-table__why {
-  width: 52%;
-  text-align: left;
-  white-space: normal;
-  color: var(--ink-secondary);
-  font-variant-numeric: normal;
+.policy-table tbody th a {
+  font-weight: 600;
+  text-decoration-color: var(--rule-strong);
 }
 
 .policy-table__changed {
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* --- footer ------------------------------------------------------------- */
@@ -1133,12 +1246,143 @@
 .footer__inner {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: var(--space-5);
-  padding-block: var(--space-5);
+  padding-block: var(--space-6);
   flex-wrap: wrap;
   font-size: var(--step--1);
 }
 
 .footer__inner p {
+  max-width: 52ch;
+}
+
+.footer__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+  font-size: var(--step-1);
+  letter-spacing: -0.02em;
+}
+
+.footer__brand .brand__mark {
+  width: 24px;
+  height: 24px;
+}
+
+.footer__note {
+  flex: 1 1 22rem;
+}
+
+/* --- docs --------------------------------------------------------------- */
+
+.docs {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  gap: var(--space-7);
+  align-items: start;
+}
+
+.docs__toc {
+  position: sticky;
+  top: 96px;
+  padding: var(--space-5);
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.docs__toc-head {
+  font-size: var(--step--1);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: var(--space-3);
+}
+
+.docs__toc-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--step--1);
+  counter-reset: toc;
+}
+
+.docs__toc-list a {
+  color: var(--ink-secondary);
+  text-decoration: none;
+}
+
+.docs__toc-list a:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.docs__body {
+  min-width: 0;
+}
+
+.docs__group {
+  margin-top: var(--space-8);
+}
+
+.docs__group-title {
+  font-size: var(--step-3);
+  /* Cleared past the sticky masthead so an inbound anchor does not land under it. */
+  scroll-margin-top: 96px;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.docs__blurb {
+  margin-top: var(--space-3);
   max-width: 62ch;
+}
+
+.docs__section {
+  margin-top: var(--space-6);
+  padding-left: var(--space-5);
+  border-left: 2px solid var(--rule);
+}
+
+.docs__section:target,
+.docs__section:has(:target) {
+  border-left-color: var(--accent);
+}
+
+.docs__section-title {
+  font-size: var(--step-1);
+  scroll-margin-top: 96px;
+  margin-bottom: var(--space-3);
+}
+
+.docs__prose p {
+  color: var(--ink-secondary);
+  max-width: 68ch;
+}
+
+.docs__prose p + p {
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 900px) {
+  .docs {
+    grid-template-columns: 1fr;
+    gap: var(--space-5);
+  }
+
+  .docs__toc {
+    position: static;
+  }
+
+  .docs__toc-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
 }

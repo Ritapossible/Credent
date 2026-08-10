@@ -9,22 +9,29 @@ import { bpToScore, formatBond, formatCount, formatDuration } from '../core/form
 const registry = buildRegistry()
 const penalty = repeatPenalty(CREDENT_POLICY)
 
+/** One line each; the full account of every step lives at `/docs#protocol`. */
 const STEPS = [
+  { title: 'An engagement closes', body: 'The scope is hashed on open.' },
+  { title: 'A counterparty attests', body: 'One party, once, against a bond.' },
+  { title: 'Validators grade it', body: 'Outcome and support, scored separately.' },
+  { title: 'The score sets collateral', body: 'One number decides what gets posted.' },
+]
+
+const DECISIONS = [
   {
-    title: 'An engagement closes',
-    body: 'Two parties commit to a scope before the work starts. The scope is hashed on open, so the standard being graded against cannot be rewritten once the outcome is known.',
+    title: 'Unknown is not bad',
+    body: 'No attestations means exactly 50, and the prior pulls thin histories toward it.',
+    anchor: 'unknown-is-not-bad',
   },
   {
-    title: 'A counterparty attests',
-    body: 'Only a party to the engagement can attest, once, and they post a bond to do it. The attestation is prose: what was promised, what arrived.',
+    title: 'Volume is not standing',
+    body: 'Each repeat from one counterparty is worth half the last, and costs twice as much.',
+    anchor: 'volume-is-not-standing',
   },
   {
-    title: 'Validators grade it in consensus',
-    body: 'GenLayer validators independently read the attestation against the committed scope and grade two things separately — the outcome, and how well the claims were supported.',
-  },
-  {
-    title: 'The score sets the collateral',
-    body: 'Weighted, decayed, and shrunk toward neutral, the grades become one number. That number decides how much an agent must post to take on work.',
+    title: 'Criticism is never punished',
+    body: 'Bonds slash on unsubstantiated claims, never on negative ones.',
+    anchor: 'criticism-is-never-punished',
   },
 ]
 
@@ -35,21 +42,20 @@ export default function Overview() {
     <>
       <section className="hero">
         <div className="shell hero__inner">
-          <p className="eyebrow">Reputation-backed trust infrastructure</p>
+          <p className="eyebrow eyebrow--pill">Reputation-backed trust infrastructure</p>
           <h1 className="hero__title">
             An agent's history should decide what it has to put up front.
           </h1>
           <p className="lede">
             Credent grades counterparty attestations in consensus on GenLayer and turns the result
-            into a collateral requirement. Agents that have delivered post less. Agents with no
-            record post the default. Nobody is asked to trust a self-report.
+            into a collateral requirement. Nobody is asked to trust a self-report.
           </p>
           <div className="hero__actions">
             <Link className="btn" to="/agents">
               Browse the registry
             </Link>
-            <Link className="btn btn--ghost" to="/lab">
-              Open the weight lab
+            <Link className="btn btn--ghost" to="/docs">
+              Read the docs
             </Link>
           </div>
         </div>
@@ -97,6 +103,9 @@ export default function Overview() {
               </li>
             ))}
           </ol>
+          <p className="band__more">
+            <Link to="/docs#protocol">Walk through each step →</Link>
+          </p>
         </section>
 
         <section className="band">
@@ -106,43 +115,15 @@ export default function Overview() {
           </div>
 
           <div className="grid grid--3">
-            <article className="card">
-              <h3 className="card__title">Unknown is not bad</h3>
-              <p className="muted">
-                An agent with no attestations scores exactly 50, and the prior pulls every thin
-                history toward it. A single glowing review cannot mint a perfect agent — it takes
-                sustained, independent evidence to move off neutral.
-              </p>
-              <p className="card__aside">
-                <Link to={`/agents/${registry[registry.length - 1]?.agent.address ?? ''}`}>
-                  See it on a one-attestation agent →
-                </Link>
-              </p>
-            </article>
-
-            <article className="card">
-              <h3 className="card__title">Volume is not standing</h3>
-              <p className="muted">
-                Each further attestation from the same counterparty about the same agent is worth
-                half the last, while its bond doubles. Buying reputation from one voice costs
-                geometrically more for geometrically less.
-              </p>
-              <p className="card__aside">
-                <Link to="/attack">Price out an attack →</Link>
-              </p>
-            </article>
-
-            <article className="card">
-              <h3 className="card__title">Criticism is never punished</h3>
-              <p className="muted">
-                Bonds are slashed on unsubstantiated claims, never on negative ones. A scathing,
-                well-evidenced attestation is entirely safe to write. Slashing on sentiment would
-                turn the oracle into a praise machine.
-              </p>
-              <p className="card__aside">
-                <Link to="/policy">Read the policy →</Link>
-              </p>
-            </article>
+            {DECISIONS.map((decision) => (
+              <article key={decision.anchor} className="card">
+                <h3 className="card__title">{decision.title}</h3>
+                <p className="muted">{decision.body}</p>
+                <p className="card__aside">
+                  <Link to={`/docs#${decision.anchor}`}>Why →</Link>
+                </p>
+              </article>
+            ))}
           </div>
         </section>
 

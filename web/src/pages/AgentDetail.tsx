@@ -7,7 +7,7 @@ import AttestationCard from '../components/AttestationCard'
 import { buildReport } from '../core/registry'
 import { findAgent } from '../core/fixtures'
 import { CREDENT_POLICY } from '../core/policy'
-import { bpToPercent, formatCount, formatDuration } from '../core/format'
+import { bpToPercent, formatCount } from '../core/format'
 
 export default function AgentDetail() {
   const { address = '' } = useParams()
@@ -17,11 +17,11 @@ export default function AgentDetail() {
     return (
       <div className="shell page">
         <div className="section-head">
-          <p className="eyebrow">Not found</p>
+          <p className="eyebrow eyebrow--pill">Not found</p>
           <h1>No agent at that address</h1>
           <p className="lede">
-            The registry runs on fixtures while the contract is pre-deployment, so only the four
-            demo agents resolve.
+            The registry runs on fixtures, so only the demo agents resolve.{' '}
+            <Link to="/docs#recompute-not-read">Why →</Link>
           </p>
         </div>
         <Link className="btn" to="/agents">
@@ -90,8 +90,8 @@ export default function AgentDetail() {
           <p className="eyebrow">Attestations</p>
           <h2>Every claim, and what it was worth</h2>
           <p className="muted">
-            Each card shows the committed scope digest, the graded fields, and the arithmetic that
-            took the attestation from a raw substantiation score to the weight it carried.
+            The committed scope digest, the graded fields, and the arithmetic from raw
+            substantiation to carried weight.
           </p>
         </div>
 
@@ -109,9 +109,8 @@ export default function AgentDetail() {
               {slashed.length} bond{slashed.length === 1 ? '' : 's'} slashed
             </h3>
             <p>
-              Slashing keys on substantiation, never on sentiment. These attestations asserted
-              without support — a negative attestation backed by evidence is never at risk. The
-              bond stays locked for {formatDuration(CREDENT_POLICY.bondLockSeconds)} before reclaim.
+              These attestations asserted without support. Slashing keys on substantiation, never
+              on sentiment. <Link to="/docs#slashing">What that means →</Link>
             </p>
           </div>
         </section>

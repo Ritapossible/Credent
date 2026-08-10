@@ -27,6 +27,19 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* The app mounts into `#root`, so that — not `body` — is the column that has to
+   fill the viewport. Without this the footer floats mid-screen on short pages
+   like the registry, with bare plane below it. */
+#root {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+main {
+  flex: 1 0 auto;
+}
+
 img,
 svg {
   display: block;
@@ -47,7 +60,9 @@ h3,
 h4 {
   line-height: 1.2;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  /* Outfit is geometric and sets loose at display sizes; the negative tracking
+     is what keeps a headline reading as one shape rather than spaced letters. */
+  letter-spacing: -0.025em;
   text-wrap: balance;
 }
 
@@ -56,7 +71,7 @@ p {
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
@@ -97,9 +112,9 @@ a {
   top: var(--space-4);
   z-index: 100;
   padding: var(--space-2) var(--space-4);
-  background: var(--accent);
+  background: var(--accent-solid);
   color: var(--accent-ink);
-  border-radius: var(--radius);
+  border-radius: var(--radius-pill);
   transform: translateY(-200%);
 }
 
@@ -112,9 +127,33 @@ a {
 .eyebrow {
   font-size: var(--step--1);
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-muted);
+}
+
+/* Eyebrow as a bordered pill — the site's dominant small-object shape. */
+.eyebrow--pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-1);
+  color: var(--ink-secondary);
+  letter-spacing: 0.08em;
+}
+
+.eyebrow--pill::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: var(--glow);
 }
 
 .lede {
@@ -151,6 +190,7 @@ a {
   border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
+  box-shadow: var(--shadow-1);
 }
 
 .rule {
@@ -160,36 +200,42 @@ a {
 
 /* --- controls ----------------------------------------------------------- */
 
+/* Pill, not rounded-rect: it is the shape the rest of the system is tuned to. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 44px;
-  padding: var(--space-2) var(--space-5);
+  min-height: 46px;
+  padding: var(--space-2) var(--space-6);
   border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--accent-solid);
   color: var(--accent-ink);
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
-  transition: filter 0.15s ease;
+  box-shadow: var(--shadow-1);
+  transition:
+    box-shadow 0.2s ease,
+    transform 0.2s ease,
+    background-color 0.2s ease;
 }
 
 .btn:hover {
-  filter: brightness(1.08);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-2), var(--glow);
 }
 
 .btn--ghost {
-  background: transparent;
+  background: var(--surface-1);
   color: var(--ink-primary);
   border-color: var(--rule-strong);
 }
 
 .btn--ghost:hover {
-  background: var(--surface-2);
-  filter: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-2);
 }
 
 .field {
@@ -213,17 +259,32 @@ a {
 .textarea,
 .select {
   width: 100%;
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: var(--surface-raised);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
   color: var(--ink-primary);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.input {
+  min-height: 46px;
+  border-radius: var(--radius-pill);
+}
+
+.input:hover,
+.textarea:hover,
+.select:hover {
+  border-color: var(--ink-muted);
 }
 
 .input:focus-visible,
 .textarea:focus-visible,
 .select:focus-visible {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
 }
 
 .textarea {
@@ -232,10 +293,70 @@ a {
   font-family: inherit;
 }
 
+/**
+ * Ranges are drawn from tokens rather than left to `accent-color`. The UA only
+ * colors the filled side from that property and picks the remaining track
+ * itself, which came out near-black on the light plane — so both halves are
+ * stated here and the control matches the theme in both modes.
+ *
+ * Taking over the track means the browser stops painting the filled portion too,
+ * and CSS cannot read an input's value. `--range-fill` is set inline from the
+ * value at each call site; the hard-stop gradient turns it back into a fill.
+ */
 .range {
+  --range-fill: 0%;
   width: 100%;
-  accent-color: var(--accent);
   min-height: 32px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--rule);
+  background: linear-gradient(
+    to right,
+    var(--accent) var(--range-fill),
+    var(--surface-2) var(--range-fill)
+  );
+}
+
+.range::-moz-range-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--rule);
+  background: var(--surface-2);
+}
+
+.range::-moz-range-progress {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  /* Half the thumb minus half the track, so it rides centred on the rail. */
+  margin-top: -8px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface-1);
+  box-shadow: var(--shadow-1), var(--glow);
+}
+
+.range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface-1);
+  box-shadow: var(--shadow-1), var(--glow);
 }
 
 /* --- table view (the accessible twin of every chart) -------------------- */

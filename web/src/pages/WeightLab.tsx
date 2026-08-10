@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import LineChart, { type Series } from '../components/LineChart'
 import StatTile from '../components/StatTile'
+import { rangeFill } from '../components/rangeFill'
 import { attestationWeight, explainWeight, decayBp } from '../core/scoring'
 import { bondRequired } from '../core/bonding'
 import { CREDENT_POLICY } from '../core/policy'
@@ -47,13 +49,12 @@ export default function WeightLab() {
   return (
     <div className="shell page">
       <div className="section-head">
-        <p className="eyebrow">Weight lab</p>
+        <p className="eyebrow eyebrow--pill">Weight lab</p>
         <h1>What one attestation is worth</h1>
         <p className="lede">
           Move the inputs and watch the same four steps the contract runs: floors, then
-          substantiation, then repeat damping, then decay. Confidence gates but never scales — it is
-          the model's certainty about its own reading, so letting it scale would make the score
-          track hesitancy as much as evidence.
+          substantiation, then repeat damping, then decay.{' '}
+          <Link to="/docs#confidence-gates">Why confidence gates but never scales →</Link>
         </p>
       </div>
 
@@ -124,8 +125,8 @@ export default function WeightLab() {
                 {breakdown.gatedBy === 'confidence'
                   ? `Confidence ${confidence} is below the floor of ${policy.minConfidence}.`
                   : `Substantiation ${substantiated} is below the floor of ${policy.minSubstantiated}.`}{' '}
-                The attestation contributes nothing at all — not a reduced weight, zero. Below the
-                floor the reading is not reliable enough to be worth partial credit.
+                The attestation contributes nothing at all — not a reduced weight, zero.{' '}
+                <Link to="/docs#floors-not-discounts">Why floors are not discounts →</Link>
               </p>
             </div>
           ) : (
@@ -161,9 +162,8 @@ export default function WeightLab() {
           <p className="eyebrow">Decay</p>
           <h2>How this attestation fades</h2>
           <p className="muted">
-            Whole half-lives are a bit shift; the remainder is linearly interpolated between
-            neighbouring halvings. That makes the curve a ramp rather than a staircase an agent
-            could time a submission around.
+            A ramp rather than a staircase, so there is no halving edge to time a submission
+            around. <Link to="/docs#decay-curve">How the interpolation works →</Link>
           </p>
         </div>
 
@@ -179,14 +179,13 @@ export default function WeightLab() {
 
       <section className="band">
         <div className="notice">
-          <h3 className="notice__title">Why confidence gates instead of scaling</h3>
+          <h3 className="notice__title">Confidence gates, it does not scale</h3>
           <p>
-            Substantiation is a judgement about the <em>evidence</em>; confidence is a judgement
-            about the <em>judgement</em>. Multiplying weight by confidence would blend the two and
-            let a hesitant-but-correct reading quietly count for less than a certain-but-shakier
-            one. A floor keeps the two separable: below it the reading is discarded, above it the
-            evidence speaks for itself. Gated attestations still show up at{' '}
-            {bpToPercent(0, 0)} weight rather than disappearing.
+            Substantiation judges the <em>evidence</em>; confidence judges the <em>judgement</em>.
+            Blending them would let a hesitant-but-correct reading count for less than a
+            certain-but-shakier one, so a gated attestation shows {bpToPercent(0, 0)} weight rather
+            than a fraction of it.{' '}
+            <Link to="/docs#confidence-gates">The full argument →</Link>
           </p>
         </div>
       </section>
@@ -221,6 +220,7 @@ function Slider({ id, label, hint, min, max, value, display, onChange }: SliderP
         min={min}
         max={max}
         value={value}
+        style={rangeFill(value, min, max)}
         onChange={(event) => onChange(Number(event.target.value))}
       />
       <p className="hint">{hint}</p>

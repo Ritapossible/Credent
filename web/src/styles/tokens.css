@@ -7,37 +7,46 @@
  * in both directions. Never give a color its only definition inside a media
  * query: that borrows the host's theme instead of stating one.
  *
- * Chart colors come from the validated reference palette. The categorical slots
- * are capped at three because that is the subset that clears the all-pairs
- * colorblind gates in both modes.
+ * The palette is light-first and built on one vivid blue, #008bff. That blue is
+ * the brand and it is what marks, glows, and borders are painted with — but at
+ * 3.4:1 on white it cannot carry text, so two darker steps of the same hue take
+ * the roles that must be legible: `--accent-solid` behind white button labels,
+ * `--accent-text` for links. Three tokens, one hue, no accidental illegibility.
+ *
+ * Chart colors come from the validated palette with slot 1 re-stepped onto the
+ * brand blue. `#008bff` clears the lightness band, chroma floor, all-pairs CVD
+ * separation, and the normal-vision floor against both surfaces, so it serves as
+ * series 1 in both modes. Slots 2 and 3 stay orange and aqua: the brand has one
+ * hue and a categorical scale needs three that nobody can confuse, so the
+ * remaining slots are not the brand's to spend.
  */
 
 :root {
   color-scheme: light;
 
-  --plane: #f9f9f7;
-  --surface-1: #fcfcfb;
-  --surface-2: #f2f1ed;
+  --plane: #eef2f7;
+  --surface-1: #ffffff;
+  --surface-2: #e1e6ec;
   --surface-raised: #ffffff;
 
-  --ink-primary: #0b0b0b;
-  --ink-secondary: #52514e;
-  --ink-muted: #898781;
+  --ink-primary: #111111;
+  --ink-secondary: #595f69;
+  --ink-muted: #656e7c;
 
-  --rule: rgba(11, 11, 11, 0.1);
-  --rule-strong: #c3c2b7;
-  --grid: #e1e0d9;
+  --rule: #dbe1ea;
+  --rule-strong: #c0cad6;
+  --grid: #e1e6ec;
 
-  --series-1: #2a78d6;
+  --series-1: #008bff;
   --series-2: #eb6834;
   --series-3: #1baf7a;
 
   /* Sequential blue, light→dark. Ordinal use starts no lighter than step 250. */
-  --seq-100: #cde2fb;
-  --seq-250: #86b6ef;
-  --seq-400: #3987e5;
-  --seq-550: #1c5cab;
-  --seq-700: #0d366b;
+  --seq-100: #cae2ff;
+  --seq-250: #78b6ff;
+  --seq-400: #0086f7;
+  --seq-550: #005daf;
+  --seq-700: #00376d;
 
   --good: #0ca30c;
   --warning: #fab219;
@@ -45,11 +54,17 @@
   --critical: #d03b3b;
   --success-text: #006300;
 
-  --accent: #2a78d6;
-  --accent-wash: rgba(42, 120, 214, 0.08);
+  /* Non-text only: marks, borders, glows, fills. */
+  --accent: #008bff;
+  /* Behind white labels — 4.8:1. */
+  --accent-solid: #0072d3;
+  /* Inline link text — 5.0:1 on the plane, 5.6:1 on a card. */
+  --accent-text: #0068c3;
+  --accent-wash: rgba(0, 139, 255, 0.08);
+  --accent-edge: rgba(0, 139, 255, 0.28);
   --accent-ink: #ffffff;
 
-  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'Outfit', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Consolas', monospace;
 
   --step--1: 0.8125rem;
@@ -58,7 +73,7 @@
   --step-2: 1.375rem;
   --step-3: 1.875rem;
   --step-4: 2.5rem;
-  --step-hero: clamp(2.75rem, 6vw, 4rem);
+  --step-hero: clamp(2.75rem, 6vw, 4.25rem);
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -69,9 +84,16 @@
   --space-7: 3rem;
   --space-8: 4.5rem;
 
-  --radius-sm: 4px;
-  --radius: 8px;
-  --radius-lg: 14px;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  /* Elevation is carried by soft, wide, low-opacity shadows rather than borders. */
+  --shadow-1: 0 4px 6px rgba(16, 24, 40, 0.04);
+  --shadow-2: 0 2px 4px rgba(16, 24, 40, 0.04), 0 16px 32px -12px rgba(16, 24, 40, 0.14);
+  --shadow-3: 0 8px 16px -4px rgba(16, 24, 40, 0.08), 0 24px 56px -20px rgba(16, 24, 40, 0.22);
+  --glow: 0 0 24px rgba(0, 139, 255, 0.3);
 
   --shell: 1140px;
 }
@@ -80,66 +102,82 @@
   :root:where(:not([data-theme='light'])) {
     color-scheme: dark;
 
-    --plane: #0d0d0d;
-    --surface-1: #131312;
-    --surface-2: #1a1a19;
-    --surface-raised: #1f1f1d;
+    --plane: #0b0d10;
+    --surface-1: #121519;
+    --surface-2: #181c21;
+    --surface-raised: #1c2026;
 
     --ink-primary: #ffffff;
-    --ink-secondary: #c3c2b7;
-    --ink-muted: #898781;
+    --ink-secondary: #b8c0cc;
+    --ink-muted: #939dab;
 
     --rule: rgba(255, 255, 255, 0.1);
-    --rule-strong: #383835;
-    --grid: #2c2c2a;
+    --rule-strong: #2e343d;
+    --grid: #23282f;
 
-    --series-1: #3987e5;
+    --series-1: #008bff;
     --series-2: #d95926;
     --series-3: #199e70;
 
-    --seq-100: #0d366b;
-    --seq-250: #184f95;
-    --seq-400: #2a78d6;
-    --seq-550: #5598e7;
-    --seq-700: #9ec5f4;
+    --seq-100: #00376d;
+    --seq-250: #005daf;
+    --seq-400: #0086f7;
+    --seq-550: #78b6ff;
+    --seq-700: #cae2ff;
 
     --success-text: #0ca30c;
 
-    --accent: #3987e5;
-    --accent-wash: rgba(57, 135, 229, 0.14);
+    --accent: #008bff;
+    --accent-solid: #0072d3;
+    --accent-text: #3c9aff;
+    --accent-wash: rgba(0, 139, 255, 0.16);
+    --accent-edge: rgba(0, 139, 255, 0.42);
     --accent-ink: #ffffff;
+
+    --shadow-1: 0 4px 6px rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 2px 4px rgba(0, 0, 0, 0.3), 0 16px 32px -12px rgba(0, 0, 0, 0.55);
+    --shadow-3: 0 8px 16px -4px rgba(0, 0, 0, 0.4), 0 24px 56px -20px rgba(0, 0, 0, 0.7);
+    --glow: 0 0 28px rgba(0, 139, 255, 0.4);
   }
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --plane: #0d0d0d;
-  --surface-1: #131312;
-  --surface-2: #1a1a19;
-  --surface-raised: #1f1f1d;
+  --plane: #0b0d10;
+  --surface-1: #121519;
+  --surface-2: #181c21;
+  --surface-raised: #1c2026;
 
   --ink-primary: #ffffff;
-  --ink-secondary: #c3c2b7;
-  --ink-muted: #898781;
+  --ink-secondary: #b8c0cc;
+  --ink-muted: #939dab;
 
   --rule: rgba(255, 255, 255, 0.1);
-  --rule-strong: #383835;
-  --grid: #2c2c2a;
+  --rule-strong: #2e343d;
+  --grid: #23282f;
 
-  --series-1: #3987e5;
+  --series-1: #008bff;
   --series-2: #d95926;
   --series-3: #199e70;
 
-  --seq-100: #0d366b;
-  --seq-250: #184f95;
-  --seq-400: #2a78d6;
-  --seq-550: #5598e7;
-  --seq-700: #9ec5f4;
+  --seq-100: #00376d;
+  --seq-250: #005daf;
+  --seq-400: #0086f7;
+  --seq-550: #78b6ff;
+  --seq-700: #cae2ff;
 
   --success-text: #0ca30c;
 
-  --accent: #3987e5;
-  --accent-wash: rgba(57, 135, 229, 0.14);
+  --accent: #008bff;
+  --accent-solid: #0072d3;
+  --accent-text: #3c9aff;
+  --accent-wash: rgba(0, 139, 255, 0.16);
+  --accent-edge: rgba(0, 139, 255, 0.42);
   --accent-ink: #ffffff;
+
+  --shadow-1: 0 4px 6px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 2px 4px rgba(0, 0, 0, 0.3), 0 16px 32px -12px rgba(0, 0, 0, 0.55);
+  --shadow-3: 0 8px 16px -4px rgba(0, 0, 0, 0.4), 0 24px 56px -20px rgba(0, 0, 0, 0.7);
+  --glow: 0 0 28px rgba(0, 139, 255, 0.4);
 }

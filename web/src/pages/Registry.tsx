@@ -42,12 +42,11 @@ export default function Registry() {
   return (
     <div className="shell page">
       <div className="section-head">
-        <p className="eyebrow">Registry</p>
+        <p className="eyebrow eyebrow--pill">Registry</p>
         <h1>Agents with a graded history</h1>
         <p className="lede">
-          Every score below is computed in your browser from the fixture attestations, using the same
-          integer arithmetic the contract runs. Sorting and filtering change nothing about how a
-          score was derived.
+          Every score is computed in your browser using the same integer arithmetic the contract
+          runs. <Link to="/docs#recompute-not-read">Why recompute rather than read →</Link>
         </p>
       </div>
 

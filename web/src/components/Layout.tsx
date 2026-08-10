@@ -13,12 +13,15 @@ const NAV = [
 type Theme = 'dark' | 'light'
 
 /**
- * Theme starts from whatever `index.html` stamped, so the toggle agrees with the
- * paint that already happened rather than flipping on mount.
+ * Theme starts from whatever already painted, so the toggle agrees with the page
+ * rather than flipping on mount. The document ships unstamped, in which case the
+ * paint came from `prefers-color-scheme` and that is what has to be read back —
+ * defaulting to light here would show a dark page behind a sun icon.
  */
 function initialTheme(): Theme {
   const stamped = document.documentElement.getAttribute('data-theme')
-  return stamped === 'light' ? 'light' : 'dark'
+  if (stamped === 'dark' || stamped === 'light') return stamped
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
 export default function Layout() {
@@ -32,8 +35,24 @@ export default function Layout() {
 
   useEffect(() => {
     setMenuOpen(false)
-    window.scrollTo(0, 0)
   }, [location.pathname])
+
+  /**
+   * Scroll-to-top on navigation, except when the link carried a hash — the docs
+   * page is linked into by section, and resetting to the top would swallow the
+   * anchor. Router navigation does not move the document itself, so the target
+   * has to be scrolled into view by hand; `scroll-margin-top` on the headings
+   * keeps it clear of the sticky masthead.
+   */
+  useEffect(() => {
+    if (!location.hash) {
+      window.scrollTo(0, 0)
+      return
+    }
+    const target = document.getElementById(decodeURIComponent(location.hash.slice(1)))
+    if (target) target.scrollIntoView()
+    else window.scrollTo(0, 0)
+  }, [location.pathname, location.hash, location.key])
 
   return (
     <>
@@ -76,6 +95,15 @@ export default function Layout() {
                 {item.label}
               </NavLink>
             ))}
+
+            {/* Docs is a destination rather than a peer section, so it sits apart
+                as a pill instead of becoming a seventh identical link. */}
+            <NavLink
+              to="/docs"
+              className={({ isActive }) => `nav__docs${isActive ? ' nav__docs--active' : ''}`}
+            >
+              Docs
+            </NavLink>
           </nav>
 
           <button
@@ -96,9 +124,13 @@ export default function Layout() {
 
       <footer className="footer">
         <div className="shell footer__inner">
-          <p className="muted">
-            Credent is a demonstration interface. Scores are computed in-browser from fixture
-            attestations using the same integer math as the contract — no deployment is being read.
+          <div className="footer__brand">
+            <Mark />
+            <span>Credent</span>
+          </div>
+          <p className="muted footer__note">
+            A demonstration interface. Scores are computed in-browser from fixture attestations
+            using the same integer math as the contract — no deployment is being read.
           </p>
           <p className="muted">
             Built on <strong>GenLayer</strong> intelligent contracts.
@@ -109,18 +141,34 @@ export default function Layout() {
   )
 }
 
+/**
+ * The mark is a scoring gauge drawn as five discrete arcs: four carried, one
+ * still open. That is the product in one glyph — a standing built out of
+ * countable attestations rather than a continuous ring that could mean anything.
+ * The rotated core is the only non-circular element, which is what makes it
+ * legible as a silhouette at favicon size.
+ */
 function Mark() {
   return (
     <svg className="brand__mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-      <circle cx="16" cy="16" r="14" fill="none" stroke="var(--rule-strong)" strokeWidth="2" />
-      <path
-        d="M16 2a14 14 0 0 1 0 28"
-        fill="none"
-        stroke="var(--accent)"
-        strokeWidth="3"
-        strokeLinecap="round"
+      <g fill="none" strokeWidth="3.2" strokeLinecap="round">
+        <path d="M6.571 10.335A11 11 0 0 1 13.526 5.282" stroke="var(--rule-strong)" />
+        <g stroke="var(--accent)">
+          <path d="M18.474 5.282A11 11 0 0 1 25.429 10.335" />
+          <path d="M26.958 15.041A11 11 0 0 1 24.302 23.217" />
+          <path d="M20.298 26.126A11 11 0 0 1 11.702 26.126" />
+          <path d="M7.698 23.217A11 11 0 0 1 5.042 15.041" />
+        </g>
+      </g>
+      <rect
+        x="12.4"
+        y="12.4"
+        width="7.2"
+        height="7.2"
+        rx="2.3"
+        fill="var(--accent)"
+        transform="rotate(45 16 16)"
       />
-      <circle cx="16" cy="16" r="4.5" fill="var(--accent)" />
     </svg>
   )
 }

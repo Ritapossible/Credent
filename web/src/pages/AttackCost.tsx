@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import LineChart, { type Series } from '../components/LineChart'
 import StatTile from '../components/StatTile'
+import { rangeFill } from '../components/rangeFill'
 import { CREDENT_POLICY } from '../core/policy'
 import { costCurve, repeatPath, repeatPenalty, sybilFleetPath } from '../core/simulate'
 import { bpToScore, formatBond, formatCount, formatUnits } from '../core/format'
@@ -52,13 +54,13 @@ export default function AttackCost() {
   return (
     <div className="shell page">
       <div className="section-head">
-        <p className="eyebrow">Attack cost</p>
+        <p className="eyebrow eyebrow--pill">Attack cost</p>
         <h1>What it costs to buy a score</h1>
         <p className="lede">
-          The scoring and bonding curves move in opposite directions on purpose. Weight halves on
-          every repeat from the same counterparty while the bond doubles, so cost per unit of weight
-          rises as the square. Every figure here comes from calling the same{' '}
-          <code>aggregate</code> and <code>bondRequired</code> the contract uses.
+          Weight halves on every repeat from the same counterparty while the bond doubles, so cost
+          per unit of weight rises as the square. Every figure comes from the same{' '}
+          <code>aggregate</code> and <code>bondRequired</code> the contract uses.{' '}
+          <Link to="/docs#volume-is-not-standing">Why the curves oppose →</Link>
         </p>
       </div>
 
@@ -77,6 +79,7 @@ export default function AttackCost() {
             min={51}
             max={98}
             value={targetScore}
+            style={rangeFill(targetScore, 51, 98)}
             onChange={(event) => setTargetScore(Number(event.target.value))}
           />
           <p className="hint">Where the attacker wants the agent to land.</p>
@@ -96,6 +99,7 @@ export default function AttackCost() {
             min={60}
             max={100}
             value={gradeScore}
+            style={rangeFill(gradeScore, 60, 100)}
             onChange={(event) => setGradeScore(Number(event.target.value))}
           />
           <p className="hint">
@@ -185,13 +189,10 @@ export default function AttackCost() {
         <div className="notice">
           <h3 className="notice__title">What this does and does not defend against</h3>
           <p>
-            The bond curve makes <em>repetition</em> expensive, not attestation. A fresh attester
-            always pays the flat first-attestation bond — that is deliberate, because an honest new
-            counterparty is indistinguishable from a fresh sybil at the moment they post. What
-            stops the fleet is not the bond but the rest of the protocol: only a party to a closed
-            engagement can attest, each attestation needs a committed scope and evidence that
-            survives grading, and an unsubstantiated claim loses the bond outright. The bond prices
-            the attack; the engagement requirement is what makes it work.
+            The bond curve makes <em>repetition</em> expensive, not attestation — a fresh attester
+            always pays the flat first bond. What stops a sybil fleet is the engagement
+            requirement, not the price.{' '}
+            <Link to="/docs#attack-surface">What actually stops the fleet →</Link>
           </p>
         </div>
       </section>

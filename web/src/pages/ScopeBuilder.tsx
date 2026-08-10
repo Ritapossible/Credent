@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { attestationSalt, normalizeAddress, scopeDigest } from '../core/digest'
 import { CREDENT_POLICY } from '../core/policy'
@@ -29,12 +30,11 @@ export default function ScopeBuilder() {
   return (
     <div className="shell page">
       <div className="section-head">
-        <p className="eyebrow">Scope builder</p>
+        <p className="eyebrow eyebrow--pill">Scope builder</p>
         <h1>Commit the standard before the outcome is known</h1>
         <p className="lede">
-          The scope digest is what proves the bar did not move. It is committed when an engagement
-          opens, so a disappointed client cannot retrofit the standard they are grading against, and
-          an agent cannot argue the goalposts after a miss. Both digests below update as you type.
+          The scope digest is what proves the bar did not move. Both digests below update as you
+          type. <Link to="/docs#commitments">How the commitments work →</Link>
         </p>
       </div>
 
@@ -49,8 +49,7 @@ export default function ScopeBuilder() {
               onChange={(event) => setScope(event.target.value)}
             />
             <p className="hint">
-              Specific enough to grade against. Vague scopes produce low substantiation later, which
-              is a floor, not a discount.
+              Specific enough to grade against. Vague scopes produce low substantiation later.
             </p>
           </div>
 
@@ -62,10 +61,7 @@ export default function ScopeBuilder() {
               value={attester}
               onChange={(event) => setAttester(event.target.value)}
             />
-            <p className="hint">
-              Case-folded before hashing, so a checksummed address and its lowercase spelling land in
-              the same bucket.
-            </p>
+            <p className="hint">Case-folded before hashing.</p>
           </div>
 
           <div className="field">
@@ -93,8 +89,8 @@ export default function ScopeBuilder() {
           <div className="card">
             <h2 className="card__title">Scope digest</h2>
             <p className="muted">
-              SHA-256 over the canonical JSON encoding of the scope string — ASCII-escaped, no
-              separator whitespace, matching Python's <code>json.dumps</code> byte for byte.
+              SHA-256 over the canonical JSON encoding of the scope string.{' '}
+              <Link to="/docs#scope-digest">Details →</Link>
             </p>
             <output className="digest mono">{digest}</output>
           </div>
@@ -102,9 +98,8 @@ export default function ScopeBuilder() {
           <div className="card">
             <h2 className="card__title">Attestation salt</h2>
             <p className="muted">
-              Derived from content, never randomness — every validator has to build a byte-identical
-              prompt. It is still unpredictable to the attester, because it commits to a scope digest
-              they do not solely control.
+              Derived from content, never randomness — yet still unpredictable to the attester.{' '}
+              <Link to="/docs#attestation-salt">Details →</Link>
             </p>
             <output className="digest mono">{salt}</output>
             <p className="hint digest__material">
@@ -114,7 +109,9 @@ export default function ScopeBuilder() {
           </div>
 
           <div className="card">
-            <h2 className="card__title">What posting this costs</h2>
+            <h2 className="card__title">
+              What posting this costs <Link className="card__link" to="/docs#bond-cost">Details →</Link>
+            </h2>
             <dl className="mini-facts">
               <div>
                 <dt>First attestation bond</dt>
