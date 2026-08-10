@@ -43,15 +43,35 @@ export default function Layout() {
    * anchor. Router navigation does not move the document itself, so the target
    * has to be scrolled into view by hand; `scroll-margin-top` on the headings
    * keeps it clear of the sticky masthead.
+   *
+   * It lands twice on purpose. The webfont is `display: swap`, so the first
+   * scroll is measured against fallback metrics and everything above the target
+   * reflows taller when Outfit arrives — which slid the heading about 100px up,
+   * behind the masthead. Landing again once font metrics are final fixes it, and
+   * is a no-op when the font was already cached.
    */
   useEffect(() => {
     if (!location.hash) {
       window.scrollTo(0, 0)
       return
     }
-    const target = document.getElementById(decodeURIComponent(location.hash.slice(1)))
-    if (target) target.scrollIntoView()
+
+    const id = decodeURIComponent(location.hash.slice(1))
+    let cancelled = false
+
+    const land = () => {
+      if (cancelled) return
+      document.getElementById(id)?.scrollIntoView()
+    }
+
+    if (document.getElementById(id)) land()
     else window.scrollTo(0, 0)
+
+    void document.fonts.ready.then(land)
+
+    return () => {
+      cancelled = true
+    }
   }, [location.pathname, location.hash, location.key])
 
   return (

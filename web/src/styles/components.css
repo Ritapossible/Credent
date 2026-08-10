@@ -180,6 +180,19 @@
   }
 }
 
+/* On a phone the "reputation as collateral" line is ~160px wide, which pushed
+   the theme toggle onto a second masthead row on its own. The tagline is the
+   expendable part — the wordmark and both controls are not. */
+@media (max-width: 560px) {
+  .masthead__inner {
+    gap: var(--space-3);
+  }
+
+  .brand__sub {
+    display: none;
+  }
+}
+
 /* --- hero --------------------------------------------------------------- */
 
 .hero {
