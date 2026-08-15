@@ -51,7 +51,6 @@ export default function Overview() {
     <>
       <section className="hero">
         <div className="shell hero__inner">
-          <p className="eyebrow eyebrow--pill">Reputation-backed trust infrastructure</p>
           <h1 className="hero__title">
             An agent's history should decide what it has to put up front.
           </h1>

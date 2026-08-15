@@ -205,64 +205,47 @@
   background: var(--plane);
 }
 
-/* Concentric halo behind the headline. Masked to a soft disc so the rings never
-   reach an edge and read as a light source rather than as a drawn diagram. */
-.hero::before {
-  content: '';
-  position: absolute;
-  inset: -14rem 0 auto;
-  height: 52rem;
-  z-index: -1;
-  background: repeating-radial-gradient(
-    circle at 50% 28%,
-    transparent 0 6.6rem,
-    var(--rule) 6.6rem 6.68rem
-  );
-  -webkit-mask-image: radial-gradient(circle at 50% 28%, #000 0%, transparent 62%);
-  mask-image: radial-gradient(circle at 50% 28%, #000 0%, transparent 62%);
-  pointer-events: none;
-}
-
+/* A single soft wash, anchored to the headline rather than to the page centre.
+   The concentric rings that used to sit here read as decoration competing with
+   the sentence; one light source behind the text does the same job of marking
+   the hero without asking to be looked at. */
 .hero::after {
   content: '';
   position: absolute;
   inset: -20rem 0 auto;
   height: 44rem;
   z-index: -1;
-  background: radial-gradient(38rem 24rem at 50% 46%, var(--accent-wash), transparent 70%);
+  background: radial-gradient(38rem 22rem at 26% 46%, var(--accent-wash), transparent 72%);
   pointer-events: none;
 }
 
+/* Left-aligned, because the pill above the headline is gone and a centred block
+   with nothing over it floats. Ranged left, the headline, the lede and the
+   buttons share one edge with every section below the fold. */
 .hero__inner {
   padding-block: var(--space-8) var(--space-8);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  align-items: center;
-  text-align: center;
+  align-items: flex-start;
+  text-align: left;
 }
 
 .hero__title {
   font-size: var(--step-hero);
-  max-width: 18ch;
+  max-width: 20ch;
   letter-spacing: -0.035em;
+  text-wrap: balance;
 }
 
 .hero .lede {
-  max-width: 56ch;
-}
-
-/* `.eyebrow--pill` starts left-aligned for the stretch-aligned section heads; in
-   the centered hero it has to give that back. */
-.hero__inner .eyebrow--pill {
-  align-self: center;
+  max-width: 54ch;
 }
 
 .hero__actions {
   display: flex;
   gap: var(--space-3);
   flex-wrap: wrap;
-  justify-content: center;
   margin-top: var(--space-3);
 }
 
@@ -1256,18 +1239,22 @@
   background: var(--surface-1);
 }
 
-.footer__inner {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-5);
-  padding-block: var(--space-6);
-  flex-wrap: wrap;
+/* Identity on the left, link columns on the right. The columns are `auto` rather
+   than equal fractions so each is only as wide as its longest label, which keeps
+   the docs column (the widest labels) from stretching the other two apart. */
+.footer__top {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) auto;
+  gap: var(--space-6) var(--space-7);
+  padding-block: var(--space-7) var(--space-6);
   font-size: var(--step--1);
 }
 
-.footer__inner p {
-  max-width: 52ch;
+.footer__identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: flex-start;
 }
 
 .footer__brand {
@@ -1277,6 +1264,8 @@
   font-weight: 600;
   font-size: var(--step-1);
   letter-spacing: -0.02em;
+  color: var(--ink-primary);
+  text-decoration: none;
 }
 
 .footer__brand .brand__mark {
@@ -1285,7 +1274,67 @@
 }
 
 .footer__note {
-  flex: 1 1 22rem;
+  max-width: 42ch;
+}
+
+.footer__nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6) var(--space-7);
+}
+
+.footer__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* An `h2` for the document outline, sized down to a label - the visual weight
+   belongs to the links under it, not to the word above them. */
+.footer__heading {
+  font-size: var(--step--1);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
+.footer__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.footer__link {
+  color: var(--ink-secondary);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.footer__link:hover,
+.footer__link:focus-visible {
+  color: var(--accent);
+}
+
+.footer__bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-block: var(--space-4);
+  border-top: 1px solid var(--rule);
+  font-size: var(--step--1);
+}
+
+@media (max-width: 60rem) {
+  .footer__top {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* --- docs --------------------------------------------------------------- */

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 const NAV = [
   { to: '/', label: 'Overview', end: true },
@@ -8,6 +8,40 @@ const NAV = [
   { to: '/attack', label: 'Attack cost', end: false },
   { to: '/scope', label: 'Scope builder', end: false },
   { to: '/policy', label: 'Policy', end: false },
+]
+
+/**
+ * The footer is a site map, not a second masthead. It repeats every route the
+ * nav carries and adds the docs sections, which are the only destinations deep
+ * enough that a visitor who scrolled to the bottom looking for one would
+ * otherwise have to go back up and hunt for them.
+ */
+const FOOTER_NAV = [
+  {
+    title: 'Product',
+    links: [
+      { to: '/', label: 'Overview' },
+      { to: '/agents', label: 'Registry' },
+      { to: '/policy', label: 'Policy' },
+    ],
+  },
+  {
+    title: 'Tools',
+    links: [
+      { to: '/lab', label: 'Weight lab' },
+      { to: '/attack', label: 'Attack cost' },
+      { to: '/scope', label: 'Scope builder' },
+    ],
+  },
+  {
+    title: 'Documentation',
+    links: [
+      { to: '/docs#protocol', label: 'How the protocol works' },
+      { to: '/docs#scoring', label: 'The scoring math' },
+      { to: '/docs#economics', label: 'Bonds and attacks' },
+      { to: '/docs#parameters', label: 'Parameter reference' },
+    ],
+  },
 ]
 
 type Theme = 'dark' | 'light'
@@ -143,18 +177,43 @@ export default function Layout() {
       </main>
 
       <footer className="footer">
-        <div className="shell footer__inner">
-          <div className="footer__brand">
-            <Mark />
-            <span>Credent</span>
+        <div className="shell">
+          <div className="footer__top">
+            <div className="footer__identity">
+              <Link to="/" className="footer__brand" aria-label="Credent home">
+                <Mark />
+                <span>Credent</span>
+              </Link>
+              <p className="muted footer__note">
+                Reputation as collateral. Scores are read from the deployed contract; the
+                derivations beside them are recomputed in-browser by a port pinned to the engine.
+              </p>
+            </div>
+
+            <nav className="footer__nav" aria-label="Footer">
+              {FOOTER_NAV.map((group) => (
+                <div key={group.title} className="footer__group">
+                  <h2 className="footer__heading">{group.title}</h2>
+                  <ul className="footer__list">
+                    {group.links.map((link) => (
+                      <li key={link.to}>
+                        <Link to={link.to} className="footer__link">
+                          {link.label}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </nav>
           </div>
-          <p className="muted footer__note">
-            Every score on this site is read from the deployed contract. The derivations beside
-            them are recomputed in-browser by a port pinned to the engine, vector for vector.
-          </p>
-          <p className="muted">
-            Built on <strong>GenLayer</strong> intelligent contracts.
-          </p>
+
+          <div className="footer__bottom">
+            <p className="muted">© {new Date().getFullYear()} Credent</p>
+            <p className="muted">
+              Built on <strong>GenLayer</strong> intelligent contracts
+            </p>
+          </div>
         </div>
       </footer>
     </>
