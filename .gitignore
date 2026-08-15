@@ -5,7 +5,7 @@ __pycache__/
 .venv/
 venv/
 
-# Node — the web app keeps its own ignore file too; these are the root-level guards
+# Node - the web app keeps its own ignore file too; these are the root-level guards
 node_modules/
 dist/
 .tmp/
@@ -13,7 +13,7 @@ dist/
 # Vercel
 .vercel/
 
-# Secrets — never commit these
+# Secrets - never commit these
 .env
 .env.*
 !.env.example

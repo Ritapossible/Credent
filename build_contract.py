@@ -11,11 +11,28 @@ into it. Run it after touching any of the three; `test_build_contract.py` fails
 the suite if the checked-in artifact is stale.
 
 The transformation is deliberately almost nothing. Every inlined line is copied
-byte for byte except `from __future__ import annotations`, which Python requires
-to be the first statement in a file and therefore cannot appear a third of the
-way down one. It is hoisted into the generated header instead. Nothing is
-reformatted, reordered, or rewritten - a codegen step that "tidies" consensus
-arithmetic is a consensus bug waiting for a validator to disagree.
+byte for byte except `from __future__ import annotations`, which is dropped.
+Nothing is reformatted, reordered, or rewritten - a codegen step that "tidies"
+consensus arithmetic is a consensus bug waiting for a validator to disagree.
+
+The dropped import is not a stylistic choice, and it is the one place the
+generated file is allowed to differ from its sources. Python only permits that
+line as a file's first statement, so an inlined module cannot keep its own; the
+obvious repair is to hoist a single copy into the generated header. That is what
+this script used to do, and it silently broke the contract's ABI.
+
+Postponed annotations turn every signature into a string. The GenVM standard
+library builds its ABI schema with `inspect.signature`, without `eval_str=True`,
+so it reads the *string* `'u256'` where it expects the type and refuses it:
+`Schema extraction failed: couldn't get schema for method __init__`. The class
+still imports, the storage layout still generates - `generate_storage` resolves
+annotations through `typing.get_type_hints`, which evaluates strings - and the
+contract still deploys. Only the schema is gone, and the schema is what every
+client reads to learn the call surface. `genvm-lint check` is where this is
+visible; `test_build_contract.py` pins it so it cannot come back.
+
+The sources keep their own `__future__` imports. They are ordinary modules that
+never face the GenVM reflection path, and 245 tests import them directly.
 """
 
 from __future__ import annotations
@@ -39,11 +56,21 @@ FUTURE_IMPORT = "from __future__ import annotations"
 
 # The runner pin. This is the single line that decides whether the contract can
 # deploy at all, and it is version-locked to the SDK surface the shell is written
-# against: `gl.vm.run_nondet_default`, `gl.vm.UserError.immediate`,
-# `gl.vm.get_timestamp`, `gl.chain.Account` and `gl.storage` are all v0.3.x
-# spellings. Bumping the hash without re-checking those names against
-# https://sdk.genlayer.com/main/_static/ai/api.txt is how this breaks.
-RUNNER = "py-genlayer:9b8kjyda2ycxyq4ea6g4yfpnydxhd52gqba5rb8dw7krkh5mn9p0"
+# against: `gl.Contract`, `gl.vm.run_nondet`, `gl.vm.UserError`, `gl.message_raw`
+# and `gl.get_contract_at` are all spellings of *this* runner's standard library
+# (`py-lib-genlayer-std:11rhn002...`), not of the one documented at
+# https://sdk.genlayer.com/main/_static/ai/api.txt.
+#
+# That distinction is the whole reason this comment is long. There are two live
+# generations of the SDK and they disagree about nearly every name this contract
+# touches. The published api.txt describes the other one: it documents
+# `gl.vm.get_timestamp`, which exists in neither generation on disk, and
+# `gl.chain.Account`, which exists only in the generation `genvm-lint` cannot
+# load. Verify a bump against the extracted std library under
+# `~/.cache/genvm-linter/extracted/`, and against `genvm-lint check`, rather than
+# against the website. `test_build_contract.py` asserts this hash resolves to a
+# runner the linter can actually find.
+RUNNER = "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6"
 
 BANNER = f'''# {{ "Depends": "{RUNNER}" }}
 # ---------------------------------------------------------------------------
@@ -60,35 +87,12 @@ BANNER = f'''# {{ "Depends": "{RUNNER}" }}
 '''
 
 
-def _split_docstring(source: str) -> tuple[str, str]:
-    """Separate a module's leading docstring from the rest of its source.
-
-    The generated file needs its docstring above `from __future__ import
-    annotations`, because anything after that line is a plain string expression
-    rather than the module's docstring. Split on the AST's own line span rather
-    than by matching quotes, so a docstring containing quote characters cannot
-    confuse it.
-    """
-    tree = ast.parse(source)
-    if not (
-        tree.body
-        and isinstance(tree.body[0], ast.Expr)
-        and isinstance(tree.body[0].value, ast.Constant)
-        and isinstance(tree.body[0].value.value, str)
-    ):
-        return "", source
-
-    node = tree.body[0]
-    lines = source.splitlines(keepends=True)
-    end = node.end_lineno  # 1-based, inclusive
-    return "".join(lines[:end]), "".join(lines[end:])
-
-
 def _strip_future(source: str, origin: str) -> str:
     """Drop the `__future__` import from an inlined module.
 
     Removes the line and nothing else, so the remainder stays byte-identical to
-    the file the tests run against.
+    the file the tests run against. Nothing re-emits it: see the module
+    docstring for why the generated contract must have no postponed annotations.
     """
     lines = source.splitlines(keepends=True)
     kept = [line for line in lines if line.rstrip("\r\n") != FUTURE_IMPORT]
@@ -116,12 +120,10 @@ def render() -> str:
         )
 
     engine = "\n\n".join(engine_parts)
-    # The shell's own `__future__` line is hoisted too, so the generated file has
-    # exactly one and it is the first statement. Its docstring has to clear that
-    # line as well, or it stops being a docstring and becomes dead text.
+    # The shell's own `__future__` line goes too. The banner above it is comments
+    # only, so the shell's docstring stays the generated module's docstring.
     shell = _strip_future(shell, SHELL.name)
-    docstring, body = _split_docstring(shell)
-    return BANNER + "\n" + docstring + "\n" + FUTURE_IMPORT + "\n" + body.replace(MARKER, engine)
+    return BANNER + "\n" + shell.replace(MARKER, engine)
 
 
 def main() -> int:

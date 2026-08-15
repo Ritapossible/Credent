@@ -24,7 +24,7 @@ needs `gl.storage.inmem_allocate` and the parallel form uses only constructs
 whose semantics are unambiguous. It is less pretty and it is the version I can
 reason about without a runtime to check me against.
 
-**Grading uses `run_nondet_default`, not `eq_principle.prompt_comparative`.** The
+**Grading uses `run_nondet`, not `eq_principle.prompt_comparative`.** The
 engine already ships the exact comparison this needs: `grades_agree` allows a
 numeric tolerance per graded field, and `errors_agree` classifies failures so
 validators agree about *failing* too. Asking an LLM to judge whether two JSON
@@ -35,6 +35,19 @@ non-deterministic judgement inside the consensus step.
 releasable one is reclaimed by the attester after the lock elapses. Nothing
 transfers implicitly during grading, so a failed nondet round cannot strand or
 duplicate a payment.
+
+One warning about the SDK, because it cost a full rewrite to learn. Two
+generations of `py-genlayer` are in circulation and they disagree about most of
+the names below. This file is written against the generation the pinned runner
+loads (std lib `11rhn002...`): `from genlayer import *` exposing a `gl` proxy,
+`gl.Contract`, `gl.vm.run_nondet`, `gl.vm.UserError` (a dataclass with
+`.message`), `gl.message_raw["datetime"]`, and `gl.get_contract_at(addr)
+.emit_transfer(value=...)`. The other generation spells those
+`import genlayer as gl`, `gl.contract.Contract`, `run_nondet_default`,
+`UserError.immediate` / `.data`, `gl.message.raw`, and `gl.chain.Account`. The
+published API reference at sdk.genlayer.com documents the second set plus a
+`gl.vm.get_timestamp` that exists in neither. Check names against the extracted
+std library and `genvm-lint check`, never against the website.
 """
 
 from __future__ import annotations
@@ -69,8 +82,13 @@ def _fail(reason: str) -> None:
     string and `errors_agree` can compare them exactly. Unclassified failures
     force validator rotation instead, which is the correct outcome for a bug but
     the wrong one for a business rule.
+
+    `gl.vm.UserError` is a dataclass carrying a single `message`, and raising it
+    is the idiom this runner's standard library provides. (The newer SDK
+    generation offers `UserError.immediate(...)` and names the field `data`;
+    neither exists here.)
     """
-    gl.vm.UserError.immediate(f"{ERROR_EXPECTED} {reason}")
+    raise gl.vm.UserError(f"{ERROR_EXPECTED} {reason}")
 
 
 def _now_seconds() -> int:
@@ -80,8 +98,15 @@ def _now_seconds() -> int:
     timezone-sensitive conversion in the system stays in the tested module. In
     deterministic mode this is the transaction timestamp, identical on every
     node.
+
+    `gl.message_raw["datetime"]` is a *string*, which is exactly the input
+    `parse_block_time` documents itself as taking. There is no timestamp on
+    `gl.message` — it is a five-field NamedTuple here (`contract_address`,
+    `sender_address`, `origin_address`, `value`, `chain_id`) — and no
+    `gl.vm.get_timestamp` in this runner's standard library, despite the
+    published API reference describing one.
     """
-    return parse_block_time(gl.vm.get_timestamp().isoformat())
+    return parse_block_time(gl.message_raw["datetime"])
 
 
 def _pair_key(attester: Address, subject: Address) -> str:
@@ -93,7 +118,15 @@ def _pair_key(attester: Address, subject: Address) -> str:
     return f"{normalize_address(attester.as_hex)}|{normalize_address(subject.as_hex)}"
 
 
-class Contract(gl.Contract):
+# Named for what it is, and deliberately not `Contract`. The runner finds the
+# contract by subclass registration (`__init_subclass__` sets `__known_contract__`),
+# so any name deploys - but every offline tool finds it by *searching* the module,
+# and `genvm-lint`'s search skips the name `Contract` outright, because
+# `from genlayer import *` binds the base class under exactly that name and a
+# module-level scan cannot tell the two apart. A contract called `Contract`
+# therefore lints clean and then fails validation with "No contract class found",
+# taking the ABI schema down with it.
+class ReputationOracle(gl.Contract):
     owner: Address
 
     # Policy, one field per storage slot. See the module docstring.
@@ -322,9 +355,18 @@ class Contract(gl.Contract):
             return grades_agree(mine, theirs, policy)
 
         def compare_errors(mine: gl.vm.UserError, theirs: gl.vm.UserError) -> bool:
-            return errors_agree(mine.data, theirs.data)
+            # `.message`, not `.data`: this runner's `UserError` is a dataclass
+            # with a single `message` field.
+            return errors_agree(mine.message, theirs.message)
 
-        grade = gl.vm.run_nondet_default(
+        # `run_nondet`, not `run_nondet_unsafe`: the unsafe form does not sandbox
+        # the validator, so a validator that raises is indistinguishable from one
+        # that disagreed, and `compare_user_errors` does not exist on it at all.
+        # Error agreement is half of what consensus means here.
+        #
+        # The decorator on `run_nondet` makes the plain call eager -- it returns
+        # the leader's value, and `.lazy(...)` is the opt-in that returns `Lazy`.
+        grade = gl.vm.run_nondet(
             leader,
             validator,
             compare_user_errors=compare_errors,
@@ -362,7 +404,10 @@ class Contract(gl.Contract):
         # curve a floor rather than a price, and the curve is the argument.
         excess = posted - required
         if excess > 0:
-            gl.chain.Account(attester).emit_transfer(excess)
+            # `value` is keyword-only here, and `emit_transfer` raises on a
+            # non-positive amount -- hence the guard above rather than an
+            # unconditional call.
+            gl.get_contract_at(attester).emit_transfer(value=excess)
 
         return attestation_id
 
@@ -391,8 +436,17 @@ class Contract(gl.Contract):
             _fail("bond_still_locked")
 
         amount = int(self.att_bond[index])
+        # `emit_transfer` raises a bare `ValueError` on a non-positive amount,
+        # which would surface as an unclassified VM fault rather than a rejection
+        # every validator derives alike. The `_BOND_NONE` check above should
+        # already make this unreachable; classifying it costs one branch and
+        # keeps the guarantee that every failure out of this contract is
+        # comparable.
+        if amount <= 0:
+            _fail("no_bond_posted")
+
         self.att_bond_state[index] = _BOND_RELEASED
-        gl.chain.Account(attester).emit_transfer(amount)
+        gl.get_contract_at(attester).emit_transfer(value=amount)
 
     # --- views --------------------------------------------------------------
 
