@@ -305,7 +305,7 @@ function nearestIndex(
 /**
  * Round a scale top up to a clean multiple of the tick count, so every tick lands on
  * a readable value without stranding the series in the bottom half of the plot. The
- * step is snapped to 1/2/2.5/5 × a power of ten — the coarse 1/2/5 alternative turns
+ * step is snapped to 1/2/2.5/5 × a power of ten - the coarse 1/2/5 alternative turns
  * a 115M series into a 200M axis, which reads as headroom that is not there.
  */
 function niceCeil(value: number, ticks: number): number {

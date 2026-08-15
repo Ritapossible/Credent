@@ -3,7 +3,7 @@
  *
  * The scoring and bonding curves move in opposite directions: weight halves per
  * repeat while the bond doubles. This module turns that into the number the
- * attack page is actually about — cost per unit of weight — for the two shapes an
+ * attack page is actually about - cost per unit of weight - for the two shapes an
  * attack can take.
  *
  * Every figure here is derived by calling `aggregate` and `bondRequired`, never by
@@ -25,7 +25,7 @@ export const FULL_WEIGHT = BP
  *
  *   sum(w) = priorWeight * (T - NEUTRAL) / (G - T)
  *
- * Returns `null` when the target is unreachable at that grade — at `T >= G` the
+ * Returns `null` when the target is unreachable at that grade - at `T >= G` the
  * denominator is zero or negative, and no amount of weight gets there.
  */
 export function weightNeededFor(targetBp: number, gradeBp: number, policy: Policy): number | null {
@@ -52,7 +52,7 @@ export interface AttackPath {
 }
 
 /**
- * One fresh attester per attestation — the cheapest shape, and the one the bond
+ * One fresh attester per attestation - the cheapest shape, and the one the bond
  * curve cannot punish: every attestation is a first attestation, so every bond is
  * `minBond` flat.
  *
@@ -84,7 +84,7 @@ const MAX_SEARCH = 100_000
  * One attester, attesting repeatedly.
  *
  * Weight halves per repeat until `repeatShiftCap`, then stays flat at
- * `BP >> cap` — so the target is still reachable, just at a bond that doubled its
+ * `BP >> cap` - so the target is still reachable, just at a bond that doubled its
  * way to `minBond << cap` and stays there. The ceiling is economic, not
  * arithmetic, which is the honest way to state it.
  */

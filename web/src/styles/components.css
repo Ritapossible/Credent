@@ -182,7 +182,7 @@
 
 /* On a phone the "reputation as collateral" line is ~160px wide, which pushed
    the theme toggle onto a second masthead row on its own. The tagline is the
-   expendable part — the wordmark and both controls are not. */
+   expendable part - the wordmark and both controls are not. */
 @media (max-width: 560px) {
   .masthead__inner {
     gap: var(--space-3);
@@ -375,7 +375,7 @@
   padding: 0;
   display: grid;
   gap: var(--space-5);
-  /* Narrow enough that all four steps sit on one row at full width — at 17rem the
+  /* Narrow enough that all four steps sit on one row at full width - at 17rem the
      fourth wrapped alone onto a second row and read as an afterthought. */
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
 }

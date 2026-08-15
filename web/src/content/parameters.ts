@@ -33,7 +33,7 @@ export const PARAMETER_NOTES: ParameterNote[] = [
     key: 'minSubstantiated',
     label: 'Substantiation floor',
     anchor: 'substantiation-floor',
-    why: 'Below this an attestation contributes nothing at all. A claim with no support is not worth partial credit — it is worth nothing, and gets a bond slashed if it falls further.',
+    why: 'Below this an attestation contributes nothing at all. A claim with no support is not worth partial credit - it is worth nothing, and gets a bond slashed if it falls further.',
   },
   {
     key: 'minConfidence',
@@ -63,7 +63,7 @@ export const PARAMETER_NOTES: ParameterNote[] = [
     key: 'slashFloor',
     label: 'Slash floor',
     anchor: 'slash-floor',
-    why: 'Below this the bond is slashed. Keyed on substantiation, never on sentiment — slashing negative reviews would turn the oracle into a praise machine.',
+    why: 'Below this the bond is slashed. Keyed on substantiation, never on sentiment - slashing negative reviews would turn the oracle into a praise machine.',
   },
   {
     key: 'releaseFloor',

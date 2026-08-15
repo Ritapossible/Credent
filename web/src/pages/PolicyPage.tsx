@@ -71,7 +71,7 @@ export default function PolicyPage() {
           <div className="notice">
             <h3 className="notice__title">Integer arithmetic throughout</h3>
             <p>
-              Every value above is an integer, and every derived figure stays one — two validators
+              Every value above is an integer, and every derived figure stays one - two validators
               have to reach byte-identical results.{' '}
               <Link to="/docs#integer-arithmetic">Why floats fail here →</Link>
             </p>

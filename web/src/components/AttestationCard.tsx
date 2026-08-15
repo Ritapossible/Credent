@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
-import { bpToPercent, formatBond, formatDuration, shortDigest } from '../core/format'
-import type { GradedAttestation } from '../core/registry'
+import { bpToPercent, formatBond, formatDuration, shortAddress, shortDigest } from '../core/format'
+import type { GradedAttestation } from '../chain/registry'
 import type { Verdict } from '../core/bonding'
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -13,7 +13,7 @@ const VERDICT_LABEL: Record<Verdict, string> = {
 
 /**
  * Status tone per verdict. These are the reserved status colors, never the
- * categorical series slots — and each ships with its label, so the color is never
+ * categorical series slots - and each ships with its label, so the color is never
  * the only thing carrying the state.
  */
 const VERDICT_TONE: Record<Verdict, string> = {
@@ -32,7 +32,9 @@ export default function AttestationCard({ attestation }: { attestation: GradedAt
     <article className="att">
       <header className="att__head">
         <div className="att__who">
-          <h3 className="att__attester">{attestation.attesterLabel}</h3>
+          <h3 className="att__attester mono" title={attestation.attester}>
+            {shortAddress(attestation.attester)}
+          </h3>
           <p className="muted att__meta">
             {formatDuration(attestation.ageSeconds)} ago
             {attestation.repeatIndex > 0
@@ -83,7 +85,7 @@ export default function AttestationCard({ attestation }: { attestation: GradedAt
             <p className="att__gated">
               Gated: {breakdown.gatedBy === 'confidence' ? 'confidence' : 'substantiation'} fell
               below the policy floor, so this attestation contributed no weight at all. It still
-              appears in the record — a gated attestation is suppressed, not hidden.
+              appears in the record - a gated attestation is suppressed, not hidden.
             </p>
           ) : (
             <ol className="derivation">
@@ -124,8 +126,8 @@ export default function AttestationCard({ attestation }: { attestation: GradedAt
             </div>
             <div>
               <dt>Scope digest</dt>
-              <dd className="mono" title={attestation.scopeDigest}>
-                {shortDigest(attestation.scopeDigest)}
+              <dd className="mono" title={attestation.scopeDigestHex}>
+                {shortDigest(attestation.scopeDigestHex)}
               </dd>
             </div>
             <div>

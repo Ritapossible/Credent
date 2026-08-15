@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import ScoreMeter from '../components/ScoreMeter'
-import { buildRegistry } from '../core/registry'
+import ChainState from '../components/ChainState'
+import { useRegistry } from '../chain/useOracle'
+import { NETWORK } from '../chain/config'
+import type { AgentReport } from '../chain/registry'
 import { bpToPercent, formatCount, shortAddress } from '../core/format'
-
-const registry = buildRegistry()
 
 type SortKey = 'score' | 'attesters' | 'weight'
 
@@ -16,6 +17,28 @@ const SORTS: Array<{ key: SortKey; label: string }> = [
 ]
 
 export default function Registry() {
+  const state = useRegistry()
+
+  return (
+    <div className="shell page">
+      <div className="section-head">
+        <p className="eyebrow eyebrow--pill">Registry</p>
+        <h1>Agents with a graded history</h1>
+        <p className="lede">
+          Every agent here was attested about on {NETWORK}. The scores are the contract's own,
+          read from <code className="mono">get_report</code> at page load.{' '}
+          <Link to="/docs#recompute-not-read">How the score is derived →</Link>
+        </p>
+      </div>
+
+      <ChainState state={state} what="the registry">
+        {(registry) => <RegistryTable registry={registry} />}
+      </ChainState>
+    </div>
+  )
+}
+
+function RegistryTable({ registry }: { registry: AgentReport[] }) {
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('score')
 
@@ -24,32 +47,39 @@ export default function Registry() {
     const filtered = needle
       ? registry.filter(
           (entry) =>
-            entry.agent.name.toLowerCase().includes(needle) ||
-            entry.agent.role.toLowerCase().includes(needle) ||
-            entry.agent.address.toLowerCase().includes(needle),
+            entry.address.includes(needle) ||
+            entry.attestations.some(
+              (attestation) =>
+                attestation.scope.toLowerCase().includes(needle) ||
+                attestation.claim.toLowerCase().includes(needle),
+            ),
         )
       : registry
 
-    // Color and identity never depend on row order here — each card is its own
+    // Color and identity never depend on row order here - each card is its own
     // entity, so re-sorting cannot repaint anything.
     return [...filtered].sort((a, b) => {
       if (sort === 'attesters') return b.report.nDistinctAttesters - a.report.nDistinctAttesters
       if (sort === 'weight') return b.report.totalWeight - a.report.totalWeight
       return b.report.scoreBp - a.report.scoreBp
     })
-  }, [query, sort])
+  }, [registry, query, sort])
 
-  return (
-    <div className="shell page">
-      <div className="section-head">
-        <p className="eyebrow eyebrow--pill">Registry</p>
-        <h1>Agents with a graded history</h1>
-        <p className="lede">
-          Every score is computed in your browser using the same integer arithmetic the contract
-          runs. <Link to="/docs#recompute-not-read">Why recompute rather than read →</Link>
+  if (registry.length === 0) {
+    return (
+      <div className="notice">
+        <h3 className="notice__title">No attestations yet</h3>
+        <p>
+          The contract is deployed and reachable, and nobody has attested to an agent on it yet.
+          The registry fills in as engagements close and counterparties attest.{' '}
+          <Link to="/docs#protocol">How an attestation gets made →</Link>
         </p>
       </div>
+    )
+  }
 
+  return (
+    <>
       <div className="filter-row">
         <div className="field filter-row__search">
           <label htmlFor="registry-search">Filter</label>
@@ -57,7 +87,7 @@ export default function Registry() {
             id="registry-search"
             className="input"
             type="search"
-            placeholder="Name, role, or address"
+            placeholder="Address, scope, or claim"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -85,16 +115,16 @@ export default function Registry() {
       ) : (
         <ul className="agent-list">
           {rows.map((entry) => (
-            <li key={entry.agent.address}>
-              <Link to={`/agents/${entry.agent.address}`} className="agent-card">
+            <li key={entry.address}>
+              <Link to={`/agents/${entry.address}`} className="agent-card">
                 <div className="agent-card__head">
                   <div>
-                    <h2 className="agent-card__name">{entry.agent.name}</h2>
-                    <p className="muted agent-card__role">{entry.agent.role}</p>
+                    <h2 className="agent-card__name mono">{shortAddress(entry.address)}</h2>
+                    <p className="muted agent-card__role">
+                      {entry.report.nAttestations} attestation
+                      {entry.report.nAttestations === 1 ? '' : 's'} on record
+                    </p>
                   </div>
-                  <span className="mono agent-card__address" title={entry.agent.address}>
-                    {shortAddress(entry.agent.address)}
-                  </span>
                 </div>
 
                 <ScoreMeter
@@ -128,6 +158,6 @@ export default function Registry() {
           ))}
         </ul>
       )}
-    </div>
+    </>
   )
 }

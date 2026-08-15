@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 
-import { bpToPercent, formatDuration } from '../core/format'
-import type { GradedAttestation } from '../core/registry'
+import { bpToPercent, formatDuration, shortAddress } from '../core/format'
+import type { GradedAttestation } from '../chain/registry'
 
 interface Props {
   attestations: GradedAttestation[]
@@ -10,7 +10,7 @@ interface Props {
 /**
  * Weight per attestation, as a horizontal bar chart.
  *
- * One series — how much each attestation counts — so it is one color (slot 1) and
+ * One series - how much each attestation counts - so it is one color (slot 1) and
  * needs no legend; the heading names what is plotted. Sorted by weight because
  * the reader's question is "which of these actually moved the score", and the
  * gated ones collect at the bottom at zero, which is the honest picture.
@@ -54,7 +54,9 @@ export default function WeightBars({ attestations }: Props) {
           return (
             <li key={entry.id} className="bars__row">
               <div className="bars__label">
-                <span className="bars__name">{entry.attesterLabel}</span>
+                <span className="bars__name mono" title={entry.attester}>
+                  {shortAddress(entry.attester)}
+                </span>
                 <span className="bars__meta muted">
                   {formatDuration(entry.ageSeconds)} old
                   {entry.repeatIndex > 0 ? ` · repeat #${entry.repeatIndex + 1}` : ''}
@@ -96,7 +98,9 @@ export default function WeightBars({ attestations }: Props) {
             <tbody>
               {sorted.map((entry) => (
                 <tr key={entry.id}>
-                  <th scope="row">{entry.attesterLabel}</th>
+                  <th scope="row" className="mono">
+                    {shortAddress(entry.attester)}
+                  </th>
                   <td>{formatDuration(entry.ageSeconds)}</td>
                   <td>{entry.repeatIndex + 1}</td>
                   <td>{entry.substantiated}</td>

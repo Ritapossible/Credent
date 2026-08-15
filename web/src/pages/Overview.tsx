@@ -1,13 +1,10 @@
 import { Link } from 'react-router-dom'
 
 import StatTile from '../components/StatTile'
-import { buildRegistry } from '../core/registry'
+import { useDeployedPolicy, useRegistry } from '../chain/useOracle'
 import { CREDENT_POLICY } from '../core/policy'
 import { repeatPenalty } from '../core/simulate'
-import { bpToScore, formatBond, formatCount, formatDuration } from '../core/format'
-
-const registry = buildRegistry()
-const penalty = repeatPenalty(CREDENT_POLICY)
+import { bpToScore, formatBond, formatCount, formatDuration, shortAddress } from '../core/format'
 
 /** One line each; the full account of every step lives at `/docs#protocol`. */
 const STEPS = [
@@ -36,7 +33,19 @@ const DECISIONS = [
 ]
 
 export default function Overview() {
-  const strongest = registry[0]
+  // The landing page never blocks on the chain: the parameters and the protocol
+  // explanation are true regardless of what is deployed, so the worked example is
+  // the only part that waits, and it simply omits itself until the read lands.
+  const { data: registry } = useRegistry()
+  const strongest = registry?.[0] ?? null
+
+  // The tiles below are labelled "deployed parameters", so they have to be the
+  // deployed ones. `CREDENT_POLICY` stands in only for the moment before the read
+  // lands - it is this repo's intended configuration, so the tiles never flash a
+  // number that contradicts the deployment by more than the shipped default.
+  const { data: deployed } = useDeployedPolicy()
+  const policy = deployed ?? CREDENT_POLICY
+  const penalty = repeatPenalty(policy)
 
   return (
     <>
@@ -65,18 +74,18 @@ export default function Overview() {
         <section className="kpi-row" aria-label="Deployed parameters">
           <StatTile
             label="Attestation half-life"
-            value={formatDuration(CREDENT_POLICY.halfLifeSeconds)}
+            value={formatDuration(policy.halfLifeSeconds)}
             note="Weight halves at this age"
           />
           <StatTile
             label="Neutral prior"
-            value={`${CREDENT_POLICY.priorWeight.toLocaleString('en-US')} bp`}
+            value={`${policy.priorWeight.toLocaleString('en-US')} bp`}
             note="Three full attestations of inertia"
           />
           <StatTile
             label="First-attestation bond"
-            value={formatBond(CREDENT_POLICY.minBond)}
-            note="Doubles on every repeat"
+            value={policy.minBond > 0n ? formatBond(policy.minBond) : 'None required'}
+            note={policy.minBond > 0n ? 'Doubles on every repeat' : 'Bonding is off on this deployment'}
           />
           <StatTile
             label="Repeat cost penalty"
@@ -135,10 +144,17 @@ export default function Overview() {
             </div>
             <div className="feature">
               <div>
-                <h3 className="feature__name">{strongest.agent.name}</h3>
-                <p className="muted feature__role">{strongest.agent.role}</p>
-                <p className="muted">{strongest.agent.summary}</p>
-                <Link className="btn btn--ghost" to={`/agents/${strongest.agent.address}`}>
+                <h3 className="feature__name mono">{shortAddress(strongest.address)}</h3>
+                <p className="muted feature__role">
+                  The highest-scoring agent currently on the contract
+                </p>
+                <p className="muted">
+                  Its standing is the shrunk weighted mean of{' '}
+                  {strongest.report.nAttestations} attestation
+                  {strongest.report.nAttestations === 1 ? '' : 's'}, decayed by age and damped for
+                  repeat counterparties.
+                </p>
+                <Link className="btn btn--ghost" to={`/agents/${strongest.address}`}>
                   Open the full report
                 </Link>
               </div>

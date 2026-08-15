@@ -32,7 +32,7 @@ export default function WeightLab() {
 
   /**
    * Decay of *this* attestation's post-damping weight over time. One series, so
-   * one hue and no legend — the title says what is plotted. The current age rides
+   * one hue and no legend - the title says what is plotted. The current age rides
    * along as the marker.
    */
   const decaySeries: Series[] = useMemo(() => {
@@ -125,7 +125,7 @@ export default function WeightLab() {
                 {breakdown.gatedBy === 'confidence'
                   ? `Confidence ${confidence} is below the floor of ${policy.minConfidence}.`
                   : `Substantiation ${substantiated} is below the floor of ${policy.minSubstantiated}.`}{' '}
-                The attestation contributes nothing at all — not a reduced weight, zero.{' '}
+                The attestation contributes nothing at all - not a reduced weight, zero.{' '}
                 <Link to="/docs#floors-not-discounts">Why floors are not discounts →</Link>
               </p>
             </div>

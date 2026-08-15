@@ -27,7 +27,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* The app mounts into `#root`, so that — not `body` — is the column that has to
+/* The app mounts into `#root`, so that - not `body` - is the column that has to
    fill the viewport. Without this the footer floats mid-screen on short pages
    like the registry, with bare plane below it. */
 #root {
@@ -132,7 +132,7 @@ a {
   color: var(--ink-muted);
 }
 
-/* Eyebrow as a bordered pill — the site's dominant small-object shape. */
+/* Eyebrow as a bordered pill - the site's dominant small-object shape. */
 .eyebrow--pill {
   display: inline-flex;
   align-items: center;
@@ -296,7 +296,7 @@ a {
 /**
  * Ranges are drawn from tokens rather than left to `accent-color`. The UA only
  * colors the filled side from that property and picks the remaining track
- * itself, which came out near-black on the light plane — so both halves are
+ * itself, which came out near-black on the light plane - so both halves are
  * stated here and the control matches the theme in both modes.
  *
  * Taking over the track means the browser stops painting the filled portion too,

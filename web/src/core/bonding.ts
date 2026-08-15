@@ -3,7 +3,7 @@
  *
  * Bond amounts are `bigint` here, unlike the rest of the ported math. They are
  * token base units, so at 18 decimals a bond of a few thousand tokens already
- * exceeds `Number.MAX_SAFE_INTEGER` — and `bondRequired` doubles it per repeat on
+ * exceeds `Number.MAX_SAFE_INTEGER` - and `bondRequired` doubles it per repeat on
  * top of that. A float rounding at the top end would misquote what an attester
  * has to post.
  */

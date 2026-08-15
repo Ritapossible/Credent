@@ -12,7 +12,7 @@ export function bpToPercent(bp: number, digits = 1): string {
   return `${(bp / (BP / 100)).toFixed(digits)}%`
 }
 
-/** Basis points on the 0–100 score scale Credent shows agents on. 7500 → "75.0". */
+/** Basis points on the 0-100 score scale Credent shows agents on. 7500 → "75.0". */
 export function bpToScore(bp: number, digits = 1): string {
   return (bp / (BP / 100)).toFixed(digits)
 }
@@ -22,7 +22,7 @@ const USDC_DECIMALS = 6n
 /**
  * Token base units as a decimal string.
  *
- * Integer division on `bigint` throughout — a bond at 18 decimals exceeds
+ * Integer division on `bigint` throughout - a bond at 18 decimals exceeds
  * `Number.MAX_SAFE_INTEGER`, so converting to a float to format it would misquote
  * what an attester has to post.
  */
@@ -47,7 +47,7 @@ export function formatBond(value: bigint): string {
 
 /** Whole seconds as the coarsest unit that stays honest. */
 export function formatDuration(seconds: number): string {
-  if (seconds < 0) return '—'
+  if (seconds < 0) return '-'
   if (seconds < 60) return `${seconds}s`
 
   const units: Array<[number, string]> = [

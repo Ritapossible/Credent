@@ -60,7 +60,7 @@ export const DEFAULT_POLICY: Policy = {
  * `minBond` is the one deliberate departure from the contract defaults. At the
  * contract's `min_bond = 0` the economic layer is switched off: attesting is free,
  * so the bond curve that makes sybil attestation unprofitable never charges
- * anyone. Nothing in the scoring math changes — only whether attesting costs
+ * anyone. Nothing in the scoring math changes - only whether attesting costs
  * something.
  */
 export const CREDENT_POLICY: Policy = {

@@ -11,7 +11,7 @@ interface Props {
 /**
  * Score as a meter, not a chart.
  *
- * A single ratio against a fixed range is a meter — a one-bar bar chart would
+ * A single ratio against a fixed range is a meter - a one-bar bar chart would
  * carry the same number with axes and gridlines around it. The track is a lighter
  * step of the fill's own ramp so the unfilled portion still reads as part of the
  * scale, and the neutral marker shows where "no history" sits, which is the whole

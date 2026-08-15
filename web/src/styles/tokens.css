@@ -2,13 +2,13 @@
  * Design tokens.
  *
  * Light is defined on bare `:root` so a viewer with no explicit preference gets a
- * complete palette; dark is redefined twice — once under `prefers-color-scheme`
+ * complete palette; dark is redefined twice - once under `prefers-color-scheme`
  * for the OS setting, once under `[data-theme="dark"]` so the in-app toggle wins
  * in both directions. Never give a color its only definition inside a media
  * query: that borrows the host's theme instead of stating one.
  *
  * The palette is light-first and built on one vivid blue, #008bff. That blue is
- * the brand and it is what marks, glows, and borders are painted with — but at
+ * the brand and it is what marks, glows, and borders are painted with - but at
  * 3.4:1 on white it cannot carry text, so two darker steps of the same hue take
  * the roles that must be legible: `--accent-solid` behind white button labels,
  * `--accent-text` for links. Three tokens, one hue, no accidental illegibility.
@@ -56,9 +56,9 @@
 
   /* Non-text only: marks, borders, glows, fills. */
   --accent: #008bff;
-  /* Behind white labels — 4.8:1. */
+  /* Behind white labels - 4.8:1. */
   --accent-solid: #0072d3;
-  /* Inline link text — 5.0:1 on the plane, 5.6:1 on a card. */
+  /* Inline link text - 5.0:1 on the plane, 5.6:1 on a card. */
   --accent-text: #0068c3;
   --accent-wash: rgba(0, 139, 255, 0.08);
   --accent-edge: rgba(0, 139, 255, 0.28);

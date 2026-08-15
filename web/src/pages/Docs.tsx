@@ -63,7 +63,7 @@ const GROUPS: Group[] = [
         body: (
           <p>
             GenLayer validators independently read the attestation against the committed scope and
-            grade two things separately — the outcome, and how well the claims were supported.
+            grade two things separately - the outcome, and how well the claims were supported.
             Leader and validator readings have to land within{' '}
             <strong>±{policy.confidenceTol}</strong> of each other on every graded field, which is
             tight enough to catch real disagreement and loose enough that two honest readings of the
@@ -95,7 +95,7 @@ const GROUPS: Group[] = [
           <>
             <p>
               An agent with no attestations scores exactly 50, and the prior pulls every thin
-              history toward it. A single glowing review cannot mint a perfect agent — it takes
+              history toward it. A single glowing review cannot mint a perfect agent - it takes
               sustained, independent evidence to move off neutral.
             </p>
             <p>
@@ -115,7 +115,7 @@ const GROUPS: Group[] = [
             <p>
               Each further attestation from the same counterparty about the same agent is worth half
               the last, while its bond doubles. Buying reputation from one voice costs geometrically
-              more for geometrically less — at the damping cap the cost per unit of weight is
+              more for geometrically less - at the damping cap the cost per unit of weight is
               roughly <strong>{formatCount(Math.round(penalty))}×</strong> what the first
               attestation paid.
             </p>
@@ -169,7 +169,7 @@ const GROUPS: Group[] = [
               evidence speaks for itself. Gated attestations still show up at 0% weight rather than
               disappearing, because an attestation that was made and then discarded is a different
               fact from one that was never made. Try it on the{' '}
-              <Link to="/lab">weight lab</Link> — drop confidence below{' '}
+              <Link to="/lab">weight lab</Link> - drop confidence below{' '}
               {policy.minConfidence} and the contribution goes to zero, not to a fraction.
             </p>
           </>
@@ -180,7 +180,7 @@ const GROUPS: Group[] = [
         title: 'Floors are floors, not discounts',
         body: (
           <p>
-            Substantiation below {policy.minSubstantiated} contributes nothing at all — not a
+            Substantiation below {policy.minSubstantiated} contributes nothing at all - not a
             reduced weight, zero. A claim with no support is not worth partial credit. Below the
             floor the reading simply is not reliable enough to be worth anything, and past the
             slash floor of {policy.slashFloor} it costs the attester their bond.
@@ -205,7 +205,7 @@ const GROUPS: Group[] = [
         body: (
           <p>
             Every parameter is an integer, and every derived figure stays one. Two validators have
-            to reach byte-identical results, and a float would let them disagree in the last place —
+            to reach byte-identical results, and a float would let them disagree in the last place -
             which in consensus is not a rounding difference, it is a failed block. Basis points give
             four decimal places of resolution without ever leaving integers.
           </p>
@@ -229,7 +229,7 @@ const GROUPS: Group[] = [
               grading against, and an agent cannot argue the goalposts after a miss.
             </p>
             <p>
-              It is SHA-256 over the canonical JSON encoding of the scope string — ASCII-escaped, no
+              It is SHA-256 over the canonical JSON encoding of the scope string - ASCII-escaped, no
               separator whitespace, matching Python's <code>json.dumps</code> byte for byte. A
               vague scope is allowed but self-defeating: it produces low substantiation later, and
               that is a floor rather than a discount. Build one on the{' '}
@@ -243,7 +243,7 @@ const GROUPS: Group[] = [
         title: 'The attestation salt',
         body: (
           <p>
-            Derived from content, never randomness — every validator has to build a byte-identical
+            Derived from content, never randomness - every validator has to build a byte-identical
             prompt, and a random salt would make that impossible. It is still unpredictable to the
             attester, because it commits to a scope digest they do not solely control. Addresses are
             case-folded before hashing, so a checksummed address and its lowercase spelling land in
@@ -291,7 +291,7 @@ const GROUPS: Group[] = [
           <>
             <p>
               The bond curve makes <em>repetition</em> expensive, not attestation. A fresh attester
-              always pays the flat first-attestation bond — that is deliberate, because an honest
+              always pays the flat first-attestation bond - that is deliberate, because an honest
               new counterparty is indistinguishable from a fresh sybil at the moment they post.
             </p>
             <p>
@@ -319,23 +319,32 @@ const GROUPS: Group[] = [
   {
     id: 'this-interface',
     title: 'About this interface',
-    blurb: 'Why the site recomputes rather than reads.',
+    blurb: 'What is read from the chain, and what is recomputed.',
     sections: [
       {
         id: 'recompute-not-read',
-        title: 'Why this interface recomputes rather than reads',
+        title: 'What is read from the chain, and what is recomputed',
         body: (
           <>
             <p>
-              The numbers on this site are derived in your browser by the same steps the contract
-              runs, ported function for function. That is more work than fetching a stored score,
-              and it is the point: an interface that approximates the math would eventually quote a
-              number the chain does not agree with, which is worse than showing nothing.
+              Every score, weight and attestation on this site is read from the deployed contract
+              through its <code className="mono">@gl.public.view</code> methods. The score beside an
+              agent is the one <code className="mono">get_report</code> returned, not a local
+              approximation of it, so the site cannot quote a number the chain disagrees with.
             </p>
             <p>
-              The registry runs on fixture attestations while the contract is pre-deployment, so no
-              deployment is being read and only the demo agents resolve. Sorting and filtering
-              change nothing about how a score was derived.
+              One thing is recomputed in your browser: the <em>derivation</em> under each
+              attestation - the base weight, the repeat damping, the decay loss. The contract
+              returns the final weight but not its decomposition, so those steps are re-run locally
+              by a TypeScript port of the engine. The port is pinned to the Python implementation by
+              3,155 parity vectors across nine function families; if the two ever disagree the build
+              fails rather than the interface drifting. Where a recomputed total and the chain's own
+              disagree at runtime, the chain's value is what gets displayed.
+            </p>
+            <p>
+              The registry is assembled by walking every attestation the contract holds and grouping
+              them by subject, which is what an indexer would do and is honest at this scale. There
+              is no cache between the chain and what you see; reloading re-reads it.
             </p>
           </>
         ),
@@ -348,7 +357,7 @@ const GROUPS: Group[] = [
             Credent sets a non-zero bond where the contract defaults to{' '}
             <code>minBond = 0</code>. At zero the economic layer is switched off entirely: attesting
             is free, so the curve that makes sybil attestation unprofitable never charges anyone. No
-            scoring math changes with it — the <Link to="/policy">policy table</Link> marks the
+            scoring math changes with it - the <Link to="/policy">policy table</Link> marks the
             departure.
           </p>
         ),
@@ -376,7 +385,7 @@ export default function Docs() {
           <p className="eyebrow eyebrow--pill">Documentation</p>
           <h1>How Credent works, in full</h1>
           <p className="lede">
-            The rest of the site stays short on purpose — the interactive pages show the arithmetic
+            The rest of the site stays short on purpose - the interactive pages show the arithmetic
             happening and link back here for the reasoning. This is the reasoning.
           </p>
         </div>

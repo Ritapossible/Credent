@@ -15,7 +15,7 @@ type Theme = 'dark' | 'light'
 /**
  * Theme starts from whatever already painted, so the toggle agrees with the page
  * rather than flipping on mount. The document ships unstamped, in which case the
- * paint came from `prefers-color-scheme` and that is what has to be read back —
+ * paint came from `prefers-color-scheme` and that is what has to be read back -
  * defaulting to light here would show a dark page behind a sun icon.
  */
 function initialTheme(): Theme {
@@ -38,7 +38,7 @@ export default function Layout() {
   }, [location.pathname])
 
   /**
-   * Scroll-to-top on navigation, except when the link carried a hash — the docs
+   * Scroll-to-top on navigation, except when the link carried a hash - the docs
    * page is linked into by section, and resetting to the top would swallow the
    * anchor. Router navigation does not move the document itself, so the target
    * has to be scrolled into view by hand; `scroll-margin-top` on the headings
@@ -46,7 +46,7 @@ export default function Layout() {
    *
    * It lands twice on purpose. The webfont is `display: swap`, so the first
    * scroll is measured against fallback metrics and everything above the target
-   * reflows taller when Outfit arrives — which slid the heading about 100px up,
+   * reflows taller when Outfit arrives - which slid the heading about 100px up,
    * behind the masthead. Landing again once font metrics are final fixes it, and
    * is a no-op when the font was already cached.
    */
@@ -149,8 +149,8 @@ export default function Layout() {
             <span>Credent</span>
           </div>
           <p className="muted footer__note">
-            A demonstration interface. Scores are computed in-browser from fixture attestations
-            using the same integer math as the contract — no deployment is being read.
+            Every score on this site is read from the deployed contract. The derivations beside
+            them are recomputed in-browser by a port pinned to the engine, vector for vector.
           </p>
           <p className="muted">
             Built on <strong>GenLayer</strong> intelligent contracts.
@@ -163,7 +163,7 @@ export default function Layout() {
 
 /**
  * The mark is a scoring gauge drawn as five discrete arcs: four carried, one
- * still open. That is the product in one glyph — a standing built out of
+ * still open. That is the product in one glyph - a standing built out of
  * countable attestations rather than a continuous ring that could mean anything.
  * The rotated core is the only non-circular element, which is what makes it
  * legible as a silhouette at favicon size.

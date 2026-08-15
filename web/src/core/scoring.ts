@@ -18,7 +18,7 @@ import { BP, NEUTRAL_BP, MAX_HALVINGS, clamp, shr, validatePolicy, type Policy }
  * and not a staircase an agent could time a submission around.
  *
  * Monotonically non-increasing in age, exactly `weight` at age 0. Negative ages
- * clamp to 0 — a timestamp newer than the block time is clock skew, not evidence
+ * clamp to 0 - a timestamp newer than the block time is clock skew, not evidence
  * an attestation is worth more than when it was written.
  */
 export function decayBp(weight: number, ageSeconds: number, halfLifeSeconds: number): number {
@@ -84,7 +84,7 @@ export function attestationWeight({
 /**
  * The stepwise reason an attestation ended up at the weight it did.
  *
- * Not in the contract — the contract only needs the number. The interface needs
+ * Not in the contract - the contract only needs the number. The interface needs
  * to explain it, and an explanation assembled separately from the calculation
  * would eventually drift from it. `weight` here is the same value
  * `attestationWeight` returns, computed by the same steps.

@@ -98,13 +98,13 @@ export default function ScopeBuilder() {
           <div className="card">
             <h2 className="card__title">Attestation salt</h2>
             <p className="muted">
-              Derived from content, never randomness — yet still unpredictable to the attester.{' '}
+              Derived from content, never randomness - yet still unpredictable to the attester.{' '}
               <Link to="/docs#attestation-salt">Details →</Link>
             </p>
             <output className="digest mono">{salt}</output>
             <p className="hint digest__material">
-              scopeDigest │ {shortAddress(normalizeAddress(attester)) || '—'} │{' '}
-              {shortAddress(normalizeAddress(subject)) || '—'} │ claim
+              scopeDigest │ {shortAddress(normalizeAddress(attester)) || '-'} │{' '}
+              {shortAddress(normalizeAddress(subject)) || '-'} │ claim
             </p>
           </div>
 

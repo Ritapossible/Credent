@@ -23,7 +23,7 @@ export default function AttackCost() {
   const curve = useMemo(() => costCurve(gradeBp, policy), [gradeBp])
 
   /**
-   * Two series — the two shapes an attack can take — so a legend is required and
+   * Two series - the two shapes an attack can take - so a legend is required and
    * both get direct comparison in the table below. One y-axis in USDC for both:
    * they are the same measure, which is exactly why they belong on one plot.
    */
@@ -117,7 +117,7 @@ export default function AttackCost() {
         />
         <StatTile
           label="Total bond, fresh attesters"
-          value={fleet.count === null ? '—' : formatBond(fleet.totalBond)}
+          value={fleet.count === null ? '-' : formatBond(fleet.totalBond)}
           note="The cheapest shape available"
         />
         <StatTile
@@ -174,10 +174,10 @@ export default function AttackCost() {
               {curve.map((point) => (
                 <tr key={point.targetBp}>
                   <th scope="row">{bpToScore(point.targetBp, 1)}</th>
-                  <td>{point.fleetCount === null ? '—' : formatCount(point.fleetCount)}</td>
-                  <td>{point.fleetCount === null ? '—' : formatUnits(point.fleetBond)}</td>
-                  <td>{point.repeatCount === null ? '—' : formatCount(point.repeatCount)}</td>
-                  <td>{point.repeatCount === null ? '—' : formatUnits(point.repeatBond)}</td>
+                  <td>{point.fleetCount === null ? '-' : formatCount(point.fleetCount)}</td>
+                  <td>{point.fleetCount === null ? '-' : formatUnits(point.fleetBond)}</td>
+                  <td>{point.repeatCount === null ? '-' : formatCount(point.repeatCount)}</td>
+                  <td>{point.repeatCount === null ? '-' : formatUnits(point.repeatBond)}</td>
                 </tr>
               ))}
             </tbody>
@@ -189,7 +189,7 @@ export default function AttackCost() {
         <div className="notice">
           <h3 className="notice__title">What this does and does not defend against</h3>
           <p>
-            The bond curve makes <em>repetition</em> expensive, not attestation — a fresh attester
+            The bond curve makes <em>repetition</em> expensive, not attestation - a fresh attester
             always pays the flat first bond. What stops a sybil fleet is the engagement
             requirement, not the price.{' '}
             <Link to="/docs#attack-surface">What actually stops the fleet →</Link>

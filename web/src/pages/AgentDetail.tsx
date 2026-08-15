@@ -4,24 +4,27 @@ import ScoreMeter from '../components/ScoreMeter'
 import StatTile from '../components/StatTile'
 import WeightBars from '../components/WeightBars'
 import AttestationCard from '../components/AttestationCard'
-import { buildReport } from '../core/registry'
-import { findAgent } from '../core/fixtures'
-import { CREDENT_POLICY } from '../core/policy'
-import { bpToPercent, formatCount } from '../core/format'
+import ChainState from '../components/ChainState'
+import { useAgent } from '../chain/useOracle'
+import { isDeployed } from '../chain/config'
+import type { AgentReport } from '../chain/registry'
+import { bpToPercent, formatCount, shortAddress } from '../core/format'
 
 export default function AgentDetail() {
   const { address = '' } = useParams()
-  const agent = findAgent(address)
 
-  if (!agent) {
+  // Checked before the read rather than after: `get_report` answers for any
+  // well-formed address, so a malformed one is the only case the contract cannot
+  // speak to, and it deserves a different message than "no history".
+  if (!isDeployed(address)) {
     return (
       <div className="shell page">
         <div className="section-head">
-          <p className="eyebrow eyebrow--pill">Not found</p>
-          <h1>No agent at that address</h1>
+          <p className="eyebrow eyebrow--pill">Not an address</p>
+          <h1>That is not a valid agent address</h1>
           <p className="lede">
-            The registry runs on fixtures, so only the demo agents resolve.{' '}
-            <Link to="/docs#recompute-not-read">Why →</Link>
+            An agent is identified by its 20-byte account address.{' '}
+            <Link to="/docs#protocol">How agents are identified →</Link>
           </p>
         </div>
         <Link className="btn" to="/agents">
@@ -31,22 +34,47 @@ export default function AgentDetail() {
     )
   }
 
-  const { report, attestations, concentrationBp } = buildReport(agent)
-  const gated = attestations.filter((entry) => entry.weight === 0)
-  const slashed = attestations.filter((entry) => entry.outcome === 'slashed')
+  return <AgentBody address={address} />
+}
+
+function AgentBody({ address }: { address: string }) {
+  const state = useAgent(address)
 
   return (
     <div className="shell page">
       <p className="crumb">
-        <Link to="/agents">Registry</Link> <span aria-hidden="true">/</span> {agent.name}
+        <Link to="/agents">Registry</Link> <span aria-hidden="true">/</span>{' '}
+        <span className="mono">{shortAddress(address)}</span>
       </p>
 
+      <ChainState state={state} what="this agent">
+        {(agent) => <AgentReportView agent={agent} />}
+      </ChainState>
+    </div>
+  )
+}
+
+function AgentReportView({ agent }: { agent: AgentReport }) {
+  const { report, attestations, concentrationBp } = agent
+  const gated = attestations.filter((entry) => entry.weight === 0)
+  const slashed = attestations.filter((entry) => entry.outcome === 'slashed')
+
+  return (
+    <>
       <div className="detail-head">
         <div>
-          <p className="eyebrow">{agent.role}</p>
-          <h1>{agent.name}</h1>
+          <p className="eyebrow">Agent</p>
+          <h1 className="mono">{shortAddress(agent.address)}</h1>
           <p className="mono detail-head__address">{agent.address}</p>
-          <p className="lede">{agent.summary}</p>
+          <p className="lede">
+            {report.nAttestations === 0
+              ? 'No attestations on record. The score is the neutral prior, not a judgement.'
+              : `${report.nAttestations} attestation${
+                  report.nAttestations === 1 ? '' : 's'
+                } from ${report.nDistinctAttesters} distinct attester${
+                  report.nDistinctAttesters === 1 ? '' : 's'
+                }.`}
+          </p>
         </div>
         <div className="detail-head__meter card">
           <ScoreMeter
@@ -72,7 +100,7 @@ export default function AgentDetail() {
         <StatTile
           label="Total weight"
           value={formatCount(report.totalWeight)}
-          note={`Against a ${formatCount(CREDENT_POLICY.priorWeight)} bp neutral prior`}
+          note={`Against a ${formatCount(agent.policy.priorWeight)} bp neutral prior`}
         />
         <StatTile
           label="Top attester share"
@@ -81,26 +109,40 @@ export default function AgentDetail() {
         />
       </section>
 
-      <section className="band">
-        <WeightBars attestations={attestations} />
-      </section>
+      {attestations.length === 0 ? (
+        <section className="band">
+          <div className="notice">
+            <h3 className="notice__title">Nothing attested yet</h3>
+            <p>
+              This address has no attestations on the deployed contract, so it scores exactly
+              neutral. <Link to="/docs#unknown-is-not-bad">Unknown is not bad →</Link>
+            </p>
+          </div>
+        </section>
+      ) : (
+        <>
+          <section className="band">
+            <WeightBars attestations={attestations} />
+          </section>
 
-      <section className="band">
-        <div className="section-head">
-          <p className="eyebrow">Attestations</p>
-          <h2>Every claim, and what it was worth</h2>
-          <p className="muted">
-            The committed scope digest, the graded fields, and the arithmetic from raw
-            substantiation to carried weight.
-          </p>
-        </div>
+          <section className="band">
+            <div className="section-head">
+              <p className="eyebrow">Attestations</p>
+              <h2>Every claim, and what it was worth</h2>
+              <p className="muted">
+                The committed scope digest, the graded fields, and the arithmetic from raw
+                substantiation to carried weight.
+              </p>
+            </div>
 
-        <div className="attestation-list">
-          {attestations.map((entry) => (
-            <AttestationCard key={entry.id} attestation={entry} />
-          ))}
-        </div>
-      </section>
+            <div className="attestation-list">
+              {attestations.map((entry) => (
+                <AttestationCard key={entry.id} attestation={entry} />
+              ))}
+            </div>
+          </section>
+        </>
+      )}
 
       {slashed.length > 0 ? (
         <section className="band">
@@ -115,6 +157,6 @@ export default function AgentDetail() {
           </div>
         </section>
       ) : null}
-    </div>
+    </>
   )
 }
