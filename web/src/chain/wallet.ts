@@ -56,6 +56,58 @@ export function hasWallet(): boolean {
   return getProvider() !== null
 }
 
+/** How long to keep waiting for an extension that has not injected itself yet. */
+const INJECTION_GRACE_MS = 3_000
+const INJECTION_POLL_MS = 200
+
+/**
+ * Call `onFound` if and when a wallet appears, for the case where it was not
+ * there yet on the first render.
+ *
+ * `window.ethereum` is set by an extension's content script, and nothing
+ * orders that against this bundle evaluating. Usually the extension wins and a
+ * synchronous `hasWallet()` is correct; when it does not, a one-shot check
+ * concludes there is no wallet and there is no second look, because the object
+ * appearing later fires no React update. The visitor is then shown "Get a
+ * wallet" for the rest of the page's life with MetaMask sitting installed in
+ * their toolbar - a cold load or a slow machine is enough to land there.
+ *
+ * So the check is repeated for a few seconds instead. `ethereum#initialized` is
+ * the event MetaMask dispatches once it is ready and is what normally settles
+ * this on the first tick; the poll beside it covers wallets that inject without
+ * announcing, and the deadline stops both so a walletless visitor is not left
+ * with a timer running for the session.
+ *
+ * Detection deliberately keys on `window.ethereum` alone, which is what
+ * `getProvider` returns. A wallet discovered by some other means would flip the
+ * button to "Connect wallet" and then fail on the press, and a control that
+ * lies about what it can do is worse than one that under-promises.
+ */
+export function watchForWallet(onFound: () => void): () => void {
+  if (typeof window === 'undefined' || hasWallet()) return () => {}
+
+  let timer: ReturnType<typeof setInterval> | undefined
+  let deadline: ReturnType<typeof setTimeout> | undefined
+
+  const stop = () => {
+    window.removeEventListener('ethereum#initialized', check)
+    if (timer !== undefined) clearInterval(timer)
+    if (deadline !== undefined) clearTimeout(deadline)
+  }
+
+  function check() {
+    if (!hasWallet()) return
+    stop()
+    onFound()
+  }
+
+  window.addEventListener('ethereum#initialized', check)
+  timer = setInterval(check, INJECTION_POLL_MS)
+  deadline = setTimeout(stop, INJECTION_GRACE_MS)
+
+  return stop
+}
+
 const CHAIN_ID_HEX = `0x${CHAIN.id.toString(16)}`
 
 // --- connection -----------------------------------------------------------
@@ -199,7 +251,7 @@ export interface WriteResult {
   returned: string | null
 }
 
-interface Outcome {
+export interface Outcome {
   /** False when the contract rejected the call, however the node spelled it. */
   ok: boolean
   /** The contract's rejection reason, when it rejected and named one. */
@@ -226,7 +278,7 @@ interface Outcome {
  * else contradicts it - the node has to say a call failed for this to raise, and
  * an unrecognised shape must not invent a failure that did not happen.
  */
-function outcomeOf(receipt: GenLayerTransaction): Outcome {
+export function outcomeOf(receipt: GenLayerTransaction): Outcome {
   const entries = receipt.consensus_data?.leader_receipt
   const list = Array.isArray(entries) ? entries : []
 

@@ -27,6 +27,7 @@ import {
   currentAccount,
   hasWallet,
   onExpectedChain,
+  watchForWallet,
   watchWallet,
 } from './wallet'
 
@@ -66,7 +67,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const available = hasWallet()
+  // State, not a bare `hasWallet()` call. An extension that injects after this
+  // first renders would otherwise never be noticed - see `watchForWallet`.
+  const [available, setAvailable] = useState(hasWallet)
+
+  useEffect(() => {
+    if (available) return
+    return watchForWallet(() => setAvailable(true))
+  }, [available])
 
   // Pick up an authorisation from a previous visit, and keep up with the wallet
   // afterwards. `live` guards the async settle against an unmount, which is the
