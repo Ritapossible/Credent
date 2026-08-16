@@ -45,8 +45,6 @@ export interface WalletState {
   connecting: boolean
   error: string | null
   connect: () => Promise<void>
-  /** Forget the address locally. Wallets have no disconnect a site can call. */
-  disconnect: () => void
 }
 
 const WalletContext = createContext<WalletState | null>(null)
@@ -84,7 +82,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (live) setRightChain(ok)
     })
 
-    return watchWallet({
+    const unwatch = watchWallet({
       onAccounts: (next) => {
         if (!live) return
         setAddress(next)
@@ -98,6 +96,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         })
       },
     })
+
+    // Both halves. Returning `unwatch` alone left `live` true forever, so every
+    // guard above was decoration and the comment describing them was wrong.
+    return () => {
+      live = false
+      unwatch()
+    }
   }, [available])
 
   const connect = useCallback(async () => {
@@ -113,14 +118,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const disconnect = useCallback(() => {
-    setAddress(null)
-    setError(null)
-  }, [])
-
+  // No `disconnect`. There was one, exposed on the context and called by
+  // nothing: wallets have no disconnect a site can invoke, so it only ever
+  // cleared this component's copy of an address the wallet still considers
+  // authorised, and the next `accountsChanged` or reload would bring it back.
+  // A control that appears to revoke access without revoking it is worse than
+  // its absence.
   const value = useMemo(
-    () => ({ address, available, rightChain, connecting, error, connect, disconnect }),
-    [address, available, rightChain, connecting, error, connect, disconnect],
+    () => ({ address, available, rightChain, connecting, error, connect }),
+    [address, available, rightChain, connecting, error, connect],
   )
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>

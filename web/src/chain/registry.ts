@@ -19,9 +19,16 @@
  * there is no `list_subjects` view, because maintaining one would mean an
  * unbounded array written on every attestation for the benefit of clients only.
  * So the registry is derived the way an indexer would derive it - walk every
- * attestation once, group by subject - which is `attestation_count()` reads.
- * That is fine at the scale this contract operates at and would want a real
- * indexer past a few thousand; the boundary is documented rather than hidden.
+ * attestation once, group by subject.
+ *
+ * That walk used to cost one request per attestation, plus one per engagement to
+ * resolve its scope, plus one per subject for its score: `2 + N + E + S`. A
+ * public RPC allowing thirty requests a minute could not answer it past about a
+ * dozen attestations, which is roughly where a registry first becomes worth
+ * looking at. It is now one request per page of attestations - each carrying its
+ * engagement's scope - plus one per page of reports, so a full page of fifty
+ * costs three calls rather than a hundred and fifty. Past a few thousand this
+ * still wants a real indexer; that boundary is documented rather than hidden.
  */
 
 import { bondOutcome, type BondOutcome } from '../core/bonding'
@@ -31,22 +38,27 @@ import { explainWeight, type Report, type WeightBreakdown } from '../core/scorin
 import { reportFor } from '../core/simulate'
 import {
   attestationCount,
-  getAttestation,
-  getEngagement,
+  getAllAttestations,
+  getAllSubjectPage,
   getPolicy,
   getReport,
-  getSubjectAttestations,
-  type ChainAttestation,
+  getReports,
+  type ChainAttestationSummary,
 } from './oracle'
 
-export interface GradedAttestation extends ChainAttestation {
+export interface GradedAttestation extends ChainAttestationSummary {
   /** How the weight decomposes, recomputed locally from the pinned port. */
   breakdown: WeightBreakdown
   outcome: BondOutcome
-  /** The engagement's committed scope text, resolved through `get_engagement`. */
-  scope: string
-  /** Digest of that scope, recomputed to show it matches what was committed. */
+  /**
+   * The committed scope digest, recomputed here from the scope text.
+   *
+   * Kept beside the chain's own `scopeDigest` rather than replacing it: the two
+   * agreeing is the evidence that the text on screen is the text that was
+   * committed, and `digestMatches` says whether they do.
+   */
   scopeDigestHex: string
+  digestMatches: boolean
   salt: string
 }
 
@@ -60,46 +72,8 @@ export interface AgentReport {
   policy: Policy
 }
 
-/**
- * Bounded concurrency over chain reads.
- *
- * Firing every read at once is the obvious spelling and the one that gets a
- * public RPC to start refusing connections partway through a registry load,
- * which surfaces as a page that renders half its agents. Eight at a time keeps
- * the walk fast without that.
- */
-async function mapLimit<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length)
-  let cursor = 0
-
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) {
-      const index = cursor++
-      if (index >= items.length) return
-      results[index] = await fn(items[index])
-    }
-  })
-
-  await Promise.all(workers)
-  return results
-}
-
-/** Resolve each engagement once, however many attestations reference it. */
-async function scopesFor(attestations: readonly ChainAttestation[]): Promise<Map<string, string>> {
-  const ids = [...new Set(attestations.map((entry) => entry.engagementId))]
-  const engagements = await mapLimit(ids, 8, (id) => getEngagement(id))
-  return new Map(engagements.map((engagement) => [engagement.id, engagement.scope]))
-}
-
-function grade(
-  attestation: ChainAttestation,
-  scope: string,
-  policy: Policy,
-): GradedAttestation {
+function grade(attestation: ChainAttestationSummary, policy: Policy): GradedAttestation {
+  const recomputed = scopeDigest(attestation.scope)
   return {
     ...attestation,
     breakdown: explainWeight({
@@ -113,10 +87,10 @@ function grade(
       { verdict: attestation.verdict, substantiated: attestation.substantiated },
       policy,
     ),
-    scope,
-    scopeDigestHex: scopeDigest(scope),
+    scopeDigestHex: recomputed,
+    digestMatches: recomputed === attestation.scopeDigest,
     salt: attestationSalt({
-      scope,
+      scope: attestation.scope,
       attester: attestation.attester,
       subject: attestation.subject,
       claim: attestation.claim,
@@ -130,7 +104,13 @@ function concentrationOf(attestations: readonly GradedAttestation[], totalWeight
   for (const entry of attestations) {
     byAttester.set(entry.attester, (byAttester.get(entry.attester) ?? 0) + entry.weight)
   }
-  const heaviest = Math.max(0, ...byAttester.values())
+  // Reduced rather than spread into `Math.max`. Spreading passes one argument
+  // per attester, which has a ceiling in the tens of thousands and would throw
+  // exactly for the agent with the most history.
+  let heaviest = 0
+  for (const weight of byAttester.values()) {
+    if (weight > heaviest) heaviest = weight
+  }
   return Math.floor((heaviest * 10_000) / totalWeight)
 }
 
@@ -148,12 +128,10 @@ export async function loadAgent(subject: string, override?: Policy): Promise<Age
   // breakdown derived from a different policy would explain a number that is not
   // the one beside it.
   const policy = override ?? (await getPolicy())
-  const ids = await getSubjectAttestations(subject)
-  const raw = await mapLimit(ids, 8, (id) => getAttestation(id))
-  const scopes = await scopesFor(raw)
-  const attestations = raw.map((entry) =>
-    grade(entry, scopes.get(entry.engagementId) ?? '', policy),
-  )
+  // One request per page of this agent's history, scopes included, instead of
+  // one per attestation plus one per engagement.
+  const raw = await getAllSubjectPage(subject)
+  const attestations = raw.map((entry) => grade(entry, policy))
 
   const report = await getReport(subject)
   assertAgrees(subject, report, attestations, policy)
@@ -212,11 +190,16 @@ export async function loadRegistry(override?: Policy): Promise<AgentReport[]> {
   const count = await attestationCount()
   if (count === 0) return []
 
-  const ids = Array.from({ length: count }, (_, index) => index)
-  const raw = await mapLimit(ids, 8, (id) => getAttestation(id))
-  const scopes = await scopesFor(raw)
+  // Two calls plus one per page of attestations plus one per page of subjects,
+  // rather than one per attestation, one per engagement and one per subject.
+  // The old shape cost `2 + N + E + S` requests, which exhausts a public RPC's
+  // thirty-a-minute budget at roughly a dozen attestations - the point at which
+  // a registry first becomes worth reading. `get_attestations` carries each
+  // engagement's scope with the record, so the per-engagement reads are gone
+  // entirely rather than merely batched.
+  const raw = await getAllAttestations(count)
 
-  const bySubject = new Map<string, ChainAttestation[]>()
+  const bySubject = new Map<string, ChainAttestationSummary[]>()
   for (const entry of raw) {
     const existing = bySubject.get(entry.subject)
     if (existing) existing.push(entry)
@@ -224,23 +207,33 @@ export async function loadRegistry(override?: Policy): Promise<AgentReport[]> {
   }
 
   const subjects = [...bySubject.keys()]
-  const reports = await mapLimit(subjects, 8, (subject) => getReport(subject))
+  const reports = await getReports(subjects)
 
   return subjects
-    .map((subject, index) => {
+    .flatMap((subject) => {
+      const report = reports.get(subject)
+      // A subject that appears in an attestation always has a report; a missing
+      // one means the two views disagree about what exists, which is worth
+      // surfacing rather than rendering as a zeroed row.
+      if (report === undefined) {
+        console.warn(`[credent] no report returned for ${subject}; omitting from the registry`)
+        return []
+      }
+
       const attestations = (bySubject.get(subject) ?? []).map((entry) =>
-        grade(entry, scopes.get(entry.engagementId) ?? '', policy),
+        grade(entry, policy),
       )
-      const report = reports[index]
       assertAgrees(subject, report, attestations, policy)
 
-      return {
-        address: subject,
-        report,
-        attestations,
-        concentrationBp: concentrationOf(attestations, report.totalWeight),
-        policy,
-      }
+      return [
+        {
+          address: subject,
+          report,
+          attestations,
+          concentrationBp: concentrationOf(attestations, report.totalWeight),
+          policy,
+        },
+      ]
     })
     .sort((a, b) => b.report.scoreBp - a.report.scoreBp)
 }

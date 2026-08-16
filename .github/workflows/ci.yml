@@ -82,6 +82,12 @@ jobs:
       - name: The TypeScript port agrees with the Python engine
         run: npm run parity
 
+      # Formatting, error text and calldata encoding - the layers around the
+      # arithmetic, which the parity vectors do not reach and which have already
+      # shipped a bond quoted at the wrong number of decimals.
+      - name: Presentation and decoding helpers
+        run: npm run units
+
       # Built without VITE_CONTRACT_ADDRESS on purpose: an unconfigured build is
       # a state the site is required to render rather than crash on, and this is
       # the only place that path is exercised automatically.

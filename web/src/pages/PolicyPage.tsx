@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom'
 
 import { PARAMETER_NOTES } from '../content/parameters'
-import { CREDENT_POLICY, DEFAULT_POLICY, type Policy } from '../core/policy'
+import { DEFAULT_POLICY, type Policy } from '../core/policy'
 import { formatBond, formatCount, formatDuration } from '../core/format'
+import { useEffectivePolicy } from '../chain/useOracle'
 
 /**
  * How each parameter is rendered, keyed by the same `Policy` field the notes use.
@@ -23,41 +24,58 @@ const RENDER: Record<keyof Policy, (policy: Policy) => string> = {
 }
 
 export default function PolicyPage() {
+  const { policy, live } = useEffectivePolicy()
+
   return (
     <div className="shell page">
       <div className="section-head">
         <p className="eyebrow eyebrow--pill">Policy</p>
-        <h1>Every parameter Credent deploys with</h1>
+        <h1>Every parameter the deployed contract runs on</h1>
         <p className="lede">
-          The contract defaults are shown beside them; a changed value is marked. Each name links
-          to the reasoning behind it.
+          Read from <code className="mono">get_policy</code> on the contract this build points at,
+          not from a constant in the source. The contract defaults are shown beside them; a changed
+          value is marked. Each name links to the reasoning behind it.
         </p>
       </div>
+
+      {/* The distinction this page exists to make. It previously rendered the
+          repo's intended constant under the heading "deploys with", which was a
+          claim about the deployment that nothing verified - and on a deployment
+          carrying `min_bond = 0` it was quoting a bond nobody was charged. */}
+      {live ? null : (
+        <div className="notice notice--warning">
+          <h2 className="notice__title">Showing intended values, not deployed ones</h2>
+          <p>
+            The deployed policy could not be read, so the table below is this repository's intended
+            configuration. It is not a statement about the live contract.
+          </p>
+        </div>
+      )}
 
       <div className="table-wrap">
         <table className="data-table policy-table">
           <caption className="visually-hidden">
-            Credent policy values against contract defaults
+            Deployed policy values against contract defaults
           </caption>
           <thead>
             <tr>
               <th scope="col">Parameter</th>
-              <th scope="col">Credent</th>
+              <th scope="col">{live ? 'Deployed' : 'Intended'}</th>
               <th scope="col">Contract default</th>
             </tr>
           </thead>
           <tbody>
             {PARAMETER_NOTES.map((note) => {
               const render = RENDER[note.key]
-              const credent = render(CREDENT_POLICY)
+              const current = render(policy)
               const fallback = render(DEFAULT_POLICY)
-              const differs = credent !== fallback
+              const differs = current !== fallback
               return (
                 <tr key={note.key}>
                   <th scope="row">
                     <Link to={`/docs#${note.anchor}`}>{note.label}</Link>
                   </th>
-                  <td className={differs ? 'policy-table__changed' : undefined}>{credent}</td>
+                  <td className={differs ? 'policy-table__changed' : undefined}>{current}</td>
                   <td className="muted">{fallback}</td>
                 </tr>
               )
@@ -76,11 +94,24 @@ export default function PolicyPage() {
               <Link to="/docs#integer-arithmetic">Why floats fail here →</Link>
             </p>
           </div>
-          <div className="notice">
-            <h3 className="notice__title">One deliberate departure</h3>
+          <div className={policy.minBond > 0n ? 'notice' : 'notice notice--critical'}>
+            <h3 className="notice__title">
+              {policy.minBond > 0n ? 'The economic layer is on' : 'The economic layer is off'}
+            </h3>
             <p>
-              The contract defaults to <code>minBond = 0</code>, which switches the economic layer
-              off entirely. No scoring math changes with it.{' '}
+              The contract <em>defaults</em> to <code>minBond = 0</code>, which switches it off
+              entirely: attesting is free, so the bond curve that makes sybil attestation
+              unprofitable never charges anyone. No scoring math changes either way.{' '}
+              {policy.minBond > 0n ? (
+                <>
+                  This deployment sets it to <strong>{formatBond(policy.minBond)}</strong>.
+                </>
+              ) : (
+                <>
+                  <strong>This deployment leaves it at zero</strong>, so every figure on the attack
+                  cost page describes a defence it is not currently running.
+                </>
+              )}{' '}
               <Link to="/docs#bond-switched-off">What that costs →</Link>
             </p>
           </div>

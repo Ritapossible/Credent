@@ -1571,3 +1571,13 @@
   color: var(--ink-primary);
   font-size: var(--step--1);
 }
+
+/**
+ * A bond note that names a reason the contract will refuse, rather than a hint.
+ * The button beside it is disabled in this state, so the colour is doing the
+ * same job as the disabled control rather than warning about something the
+ * visitor could still do.
+ */
+.bond-note--blocked {
+  color: var(--critical);
+}

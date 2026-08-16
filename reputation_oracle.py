@@ -191,6 +191,15 @@ REASON_ALREADY_ATTESTED = "already_attested"
 REASON_BOND_TOO_SMALL = "bond_below_required"
 REASON_GRADED = "graded"
 
+# Consent. An engagement names a provider who never asked to be named, so it
+# starts as a proposal and becomes real only when that provider accepts it.
+# Without this an attacker could name any address as their counterparty, close
+# the engagement alone, and attest about a victim who never participated - the
+# bond is a price on that, not a bar to it.
+REASON_NOT_ACCEPTED = "engagement_not_accepted"
+REASON_NOT_PROVIDER = "sender_not_provider"
+REASON_ALREADY_ACCEPTED = "engagement_already_accepted"
+
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
     REASON_NOT_CLOSED,
@@ -198,6 +207,9 @@ REASONS = frozenset({
     REASON_ALREADY_ATTESTED,
     REASON_BOND_TOO_SMALL,
     REASON_GRADED,
+    REASON_NOT_ACCEPTED,
+    REASON_NOT_PROVIDER,
+    REASON_ALREADY_ACCEPTED,
 })
 
 
@@ -1006,8 +1018,17 @@ def build_attestation_prompt(
 # and open must be distinguishable, and a TreeMap read of a missing key yields
 # the zero value.
 _ENG_ABSENT = 0
-_ENG_OPEN = 1
-_ENG_CLOSED = 2
+_ENG_PROPOSED = 1  # named by the client; the provider has not agreed yet
+_ENG_OPEN = 2
+_ENG_CLOSED = 3
+
+# Wire names for the same states, for `get_engagement`. Clients branch on these,
+# so they are a stable surface rather than the integers, which are storage.
+_ENG_STATE_NAMES = {
+    _ENG_PROPOSED: "proposed",
+    _ENG_OPEN: "open",
+    _ENG_CLOSED: "closed",
+}
 
 # Bond lifecycle for one attestation.
 _BOND_NONE = "none"  # nothing was posted (policy min_bond == 0)
@@ -1016,6 +1037,32 @@ _BOND_RELEASED = "released"  # returned to the attester
 _BOND_SLASHED = "slashed"  # kept by the contract, unsubstantiated claim
 
 _MAX_ID_CHARS = 128
+
+# Largest page any paged view will return. Bounds the response a single call can
+# be asked to build, which is the only thing standing between an append-only
+# array and a view that eventually cannot be answered.
+_PAGE_MAX = 50
+
+
+def _slice(items, offset: int, limit: int) -> list:
+    """One clamped page of a stored array.
+
+    Clamping rather than rejecting: a caller who asks for more than `_PAGE_MAX`
+    gets `_PAGE_MAX`, and one who pages past the end gets an empty list. Both are
+    ordinary conditions for a client walking a list whose length it learned from
+    a previous call, and neither deserves a failed transaction.
+    """
+    if limit <= 0 or offset < 0:
+        return []
+    if limit > _PAGE_MAX:
+        limit = _PAGE_MAX
+    total = len(items)
+    if offset >= total:
+        return []
+    stop = offset + limit
+    if stop > total:
+        stop = total
+    return [items[index] for index in range(offset, stop)]
 
 
 def _fail(reason: str) -> None:
@@ -1203,6 +1250,31 @@ class ReputationOracle(gl.Contract):
         self.eng_provider[engagement_id] = provider
         self.eng_scope[engagement_id] = scope
         self.eng_digest[engagement_id] = scope_digest(scope)
+        # Proposed, not open. The provider named above has not agreed to anything
+        # yet, and until they do nothing about this engagement can reach a score.
+        self.eng_state[engagement_id] = _ENG_PROPOSED
+
+    @gl.public.write
+    def accept_engagement(self, engagement_id: str) -> None:
+        """Agree to be graded on a scope someone proposed for you.
+
+        The consent step, and the reason attestation cannot be used to defame a
+        stranger. Only the named provider can call it: the client already
+        consented by opening, and letting either side accept would make the
+        signature meaningless.
+
+        The scope is fixed by now and its digest is committed, so accepting is an
+        agreement to a specific standard rather than an open-ended one - the
+        provider can read exactly what they are agreeing to be measured against.
+        """
+        state = self.eng_state.get(engagement_id, _ENG_ABSENT)
+        if state == _ENG_ABSENT:
+            _fail(REASON_NO_ENGAGEMENT)
+        if state != _ENG_PROPOSED:
+            _fail(REASON_ALREADY_ACCEPTED)
+        if gl.message.sender_address != self.eng_provider[engagement_id]:
+            _fail(REASON_NOT_PROVIDER)
+
         self.eng_state[engagement_id] = _ENG_OPEN
 
     @gl.public.write
@@ -1213,6 +1285,10 @@ class ReputationOracle(gl.Contract):
             _fail(REASON_NO_ENGAGEMENT)
         if state == _ENG_CLOSED:
             _fail("engagement_already_closed")
+        # A proposal nobody accepted is not work that can be finished. Closing it
+        # would otherwise be the whole attack: name a victim, close, attest.
+        if state == _ENG_PROPOSED:
+            _fail(REASON_NOT_ACCEPTED)
 
         sender = gl.message.sender_address
         if sender != self.eng_client[engagement_id] and sender != self.eng_provider[engagement_id]:
@@ -1472,12 +1548,124 @@ class ReputationOracle(gl.Contract):
         }
 
     @gl.public.view
-    def get_subject_attestations(self, subject: Address) -> list:
-        """Attestation ids about one subject, oldest first."""
+    def get_subject_attestations(
+        self, subject: Address, offset: u256 = 0, limit: u256 = _PAGE_MAX
+    ) -> list:
+        """Attestation ids about one subject, oldest first, one page at a time.
+
+        Paged because the list is append-only and unbounded: nothing stops a
+        subject from accumulating more attestations than a single response can
+        carry, and an unpaged view would eventually stop answering at all for the
+        agent with the longest history - which is the agent whose page matters
+        most. `limit` is clamped rather than rejected so a caller asking for
+        everything gets the maximum instead of an error.
+        """
         ids = self.subject_atts.get(subject)
         if ids is None:
             return []
-        return [int(raw) for raw in ids]
+        return [int(raw) for raw in _slice(ids, int(offset), int(limit))]
+
+    @gl.public.view
+    def get_attestations(self, offset: u256 = 0, limit: u256 = _PAGE_MAX) -> list:
+        """One page of attestations, newest-agnostic, in id order.
+
+        Exists so a client can build the registry without one call per
+        attestation. Walking `attestation_count()` and reading each id
+        individually costs `2 + N + E + S` requests for a list of `N`, which
+        exhausts a public RPC's per-minute budget at a couple of dozen
+        attestations - the point at which the registry becomes worth looking at.
+        This collapses the `N` and the `E` into `ceil(N / _PAGE_MAX)`.
+
+        `evidence` is deliberately absent. It is by far the largest stored field
+        (`MAX_EVIDENCE_CHARS` is 6000, four times the claim) and no list view
+        shows it; a caller that needs it is looking at one attestation and can
+        afford `get_attestation`. Everything the registry does render - including
+        the committed scope and its digest, which it searches - is here.
+        """
+        policy = self._policy()
+        now = _now_seconds()
+        return [
+            self._summarize(index, policy, now)
+            for index in _slice(range(len(self.att_engagement)), int(offset), int(limit))
+        ]
+
+    def _summarize(self, index: int, policy: Policy, now: int) -> dict:
+        """One attestation as the list views return it.
+
+        Shared by both paged views so they cannot drift into returning different
+        shapes for the same record, which a client decoding one with the other's
+        expectations would only discover at a missing field.
+
+        Everything `get_attestation` returns except `evidence`: it is the largest
+        stored field by a wide margin and no list renders it, so carrying it
+        would multiply every page's size for nothing.
+        """
+        engagement_id = self.att_engagement[index]
+        age = now - int(self.att_created_at[index])
+        return {
+            "id": index,
+            "engagement_id": engagement_id,
+            "attester": self.att_attester[index].as_hex,
+            "subject": self.att_subject[index].as_hex,
+            "claim": self.att_claim[index],
+            "scope": self.eng_scope[engagement_id],
+            "scope_digest": self.eng_digest[engagement_id],
+            "created_at": int(self.att_created_at[index]),
+            "age_seconds": age,
+            "verdict": self.att_verdict[index],
+            "fulfilled": int(self.att_fulfilled[index]),
+            "substantiated": int(self.att_substantiated[index]),
+            "confidence": int(self.att_confidence[index]),
+            "repeat_index": int(self.att_repeat_index[index]),
+            "bond": int(self.att_bond[index]),
+            "bond_state": self.att_bond_state[index],
+            "weight": attestation_weight(
+                substantiated=int(self.att_substantiated[index]),
+                confidence=int(self.att_confidence[index]),
+                repeat_index=int(self.att_repeat_index[index]),
+                age_seconds=age,
+                policy=policy,
+            ),
+        }
+
+    @gl.public.view
+    def get_subject_page(
+        self, subject: Address, offset: u256 = 0, limit: u256 = _PAGE_MAX
+    ) -> list:
+        """One page of attestations about a single subject.
+
+        The same records as `get_attestations`, reached through the per-subject
+        index instead of the global one, so an agent's page costs a request per
+        page of *its own* history rather than one per attestation plus one per
+        engagement.
+        """
+        ids = self.subject_atts.get(subject)
+        if ids is None:
+            return []
+        return [
+            self._summarize(int(raw), self._policy(), _now_seconds())
+            for raw in _slice(ids, int(offset), int(limit))
+        ]
+
+    @gl.public.view
+    def get_reports(self, subjects: list) -> list:
+        """Standing for several agents in one call.
+
+        The companion to `get_attestations`: having grouped a page of
+        attestations by subject, a client needs one score per subject, and
+        asking for them one at a time puts the per-request count straight back
+        where the batch view removed it.
+
+        Capped like every other page. Each entry carries its own `subject` so a
+        caller does not have to rely on positional correspondence.
+        """
+        out = []
+        for raw in _slice(subjects, 0, len(subjects)):
+            subject = Address(raw) if not isinstance(raw, Address) else raw
+            report = self.get_report(subject)
+            report["subject"] = subject.as_hex
+            out.append(report)
+        return out
 
     @gl.public.view
     def get_engagement(self, engagement_id: str) -> dict:
@@ -1491,6 +1679,10 @@ class ReputationOracle(gl.Contract):
             "provider": self.eng_provider[engagement_id].as_hex,
             "scope": self.eng_scope[engagement_id],
             "scope_digest": self.eng_digest[engagement_id],
+            # `state` is the surface to branch on; `closed` is kept because it
+            # reads well and predates the proposal state, but it cannot express
+            # the difference between a proposal and accepted work.
+            "state": _ENG_STATE_NAMES[int(state)],
             "closed": int(state) == _ENG_CLOSED,
         }
 

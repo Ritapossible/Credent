@@ -2,11 +2,11 @@
  * The write surface.
  *
  * Laid out as the engagement lifecycle rather than as a list of methods, because
- * the order is not optional: a scope has to be committed before the work, closed
- * after it, and only then can either side be graded on it. A page that offered
- * the four calls as equals would invite the sequence errors the contract then
- * rejects - `engagement_not_closed`, `sender_not_counterparty` - one gas fee at
- * a time.
+ * the order is not optional: a scope has to be committed before the work, agreed
+ * to by the party being graded, closed after it, and only then can either side
+ * be graded on it. A page that offered the calls as equals would invite the
+ * sequence errors the contract then rejects - `engagement_not_accepted`,
+ * `engagement_not_closed`, `sender_not_counterparty` - one gas fee at a time.
  *
  * Every card writes with the visitor's own wallet. The site holds no key and
  * signs nothing; see `chain/wallet.ts`.
@@ -19,6 +19,7 @@ import { CONTRACT_ADDRESS, EXPLORER_URL, IS_CONFIGURED, NETWORK } from '../chain
 import { bondForNext, getEngagement } from '../chain/oracle'
 import { useWallet } from '../chain/useWallet'
 import {
+  acceptEngagement,
   attest,
   closeEngagement,
   openEngagement,
@@ -103,6 +104,9 @@ export default function Attest() {
   const [openScope, setOpenScope] = useState('')
   const [openState, runOpen] = useAction()
 
+  const [acceptId, setAcceptId] = useState('')
+  const [acceptState, runAccept] = useAction()
+
   const [closeId, setCloseId] = useState('')
   const [closeState, runClose] = useAction()
 
@@ -117,7 +121,7 @@ export default function Attest() {
   // Read once here and passed down. Both the quoted cost and the button's
   // enabled state depend on it, and asking twice would be two chain reads per
   // keystroke in the engagement id.
-  const { bond: attestBond, note: attestNote } = useBond(attestId, address)
+  const { bond: attestBond, note: attestNote, blocked: attestBlocked } = useBond(attestId, address)
 
   const canWrite = IS_CONFIGURED && address !== null && rightChain !== false
 
@@ -144,7 +148,7 @@ export default function Attest() {
         <p className="eyebrow eyebrow--pill">Post</p>
         <h1>Write to the registry</h1>
         <p className="lede">
-          Four calls, in the order the protocol requires them. Each is signed by your own wallet -
+          Five calls, in the order the protocol requires them. Each is signed by your own wallet -
           this site never holds a key. <Link to="/docs#protocol">How the lifecycle works →</Link>
         </p>
       </div>
@@ -222,6 +226,37 @@ export default function Attest() {
 
         <Step
           index={2}
+          title="Accept it"
+          blurb="The provider agrees to be graded on that scope. Only they can, and until they do the engagement is a proposal that cannot reach anyone's score."
+        >
+          <div className="field">
+            <label htmlFor="accept-id">Engagement id</label>
+            <input
+              id="accept-id"
+              className="input mono"
+              value={acceptId}
+              placeholder="eng-001"
+              onChange={(event) => setAcceptId(event.target.value)}
+            />
+            <p className="hint">
+              You must be the named provider. This is what stops anyone naming you as a
+              counterparty and grading you on work you never agreed to.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="btn"
+            disabled={!canWrite || acceptState.pending || !acceptId}
+            onClick={() => void runAccept(() => acceptEngagement(address as string, acceptId))}
+          >
+            {acceptState.pending ? 'Accepting…' : 'Accept engagement'}
+          </button>
+          <Outcome state={acceptState} verb="Engagement accepted." />
+        </Step>
+
+        <Step
+          index={3}
           title="Close it"
           blurb="Marks the work finished, which is what opens attestation. Either counterparty may close."
         >
@@ -248,7 +283,7 @@ export default function Attest() {
         </Step>
 
         <Step
-          index={3}
+          index={4}
           title="Attest"
           blurb="Grades your counterparty's side of a closed engagement. One model call, settled by validator consensus - this is the slow one."
         >
@@ -263,7 +298,7 @@ export default function Attest() {
             />
           </div>
 
-          <BondNote bond={attestBond} note={attestNote} />
+          <BondNote bond={attestBond} note={attestNote} blocked={attestBlocked} />
 
           <div className="field">
             <label htmlFor="attest-claim">Claim</label>
@@ -296,17 +331,29 @@ export default function Attest() {
               !attestId ||
               !claim.trim() ||
               !evidence.trim() ||
-              attestBond === null
+              attestBond === null ||
+              attestBlocked !== null
             }
             onClick={() =>
-              void runAttest(() =>
-                attest(address as string, {
+              void runAttest(async () => {
+                // Re-read the bond at submit time. The quote above can be
+                // minutes old, and it rises with every attestation this attester
+                // has already made about this subject - a stale figure is
+                // rejected on chain as `bond_below_required` after the gas is
+                // spent. Reading it here costs one call and closes the window.
+                const engagement = await getEngagement(attestId)
+                const me = (address as string).toLowerCase()
+                const subject =
+                  engagement.client === me ? engagement.provider : engagement.client
+                const bond = await bondForNext(me, subject)
+
+                return attest(address as string, {
                   engagementId: attestId,
                   claim,
                   evidence,
-                  bond: attestBond ?? 0n,
-                }),
-              )
+                  bond,
+                })
+              })
             }
           >
             {attestState.pending ? 'Grading… this takes a moment' : 'Post attestation'}
@@ -315,7 +362,7 @@ export default function Attest() {
         </Step>
 
         <Step
-          index={4}
+          index={5}
           title="Reclaim the bond"
           blurb="Returns a releasable bond once its lock has elapsed. Only the attester can, and only if the grade did not slash it."
         >
@@ -452,11 +499,21 @@ function WalletGate({
 function useBond(engagementId: string, attester: string | null) {
   const [bond, setBond] = useState<bigint | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  /**
+   * Set when the contract will certainly refuse this attestation.
+   *
+   * The note alone was not enough. It said "close it before attesting" while the
+   * button stayed live, so a visitor who read past it paid gas for a call the
+   * contract rejects with `engagement_not_closed`. A hint that the form ignores
+   * is not a guard.
+   */
+  const [blocked, setBlocked] = useState<string | null>(null)
 
   useEffect(() => {
     if (!engagementId || attester === null) {
       setBond(null)
       setNote(null)
+      setBlocked(null)
       return
     }
 
@@ -480,15 +537,25 @@ function useBond(engagementId: string, attester: string | null) {
           if (!live) return
           if (subject === null) {
             setBond(null)
-            setNote('You are not a counterparty to this engagement.')
+            setNote(null)
+            setBlocked('You are not a counterparty to this engagement.')
             return
           }
 
-          setNote(
-            engagement.closed
-              ? null
-              : 'This engagement is still open. Close it before attesting.',
-          )
+          // Every state that is not `closed` is a state the contract refuses,
+          // and each refusal has a different remedy, so they are named rather
+          // than collapsed into one message.
+          if (engagement.state === 'proposed') {
+            setBlocked(
+              'This engagement has not been accepted by its provider yet, so there is nothing to grade.',
+            )
+          } else if (engagement.state === 'open') {
+            setBlocked('This engagement is still open. Close it before attesting.')
+          } else {
+            setBlocked(null)
+          }
+          setNote(null)
+
           const required = await bondForNext(me, subject)
           if (live) setBond(required)
         } catch {
@@ -496,6 +563,7 @@ function useBond(engagementId: string, attester: string | null) {
           if (live) {
             setBond(null)
             setNote(null)
+            setBlocked(null)
           }
         }
       })()
@@ -507,20 +575,28 @@ function useBond(engagementId: string, attester: string | null) {
     }
   }, [engagementId, attester])
 
-  return { bond, note }
+  return { bond, note, blocked }
 }
 
-function BondNote({ bond, note }: { bond: bigint | null; note: string | null }) {
-  if (bond === null && note === null) return null
+function BondNote({
+  bond,
+  note,
+  blocked,
+}: {
+  bond: bigint | null
+  note: string | null
+  blocked: string | null
+}) {
+  if (bond === null && note === null && blocked === null) return null
 
   return (
-    <p className="hint bond-note">
+    <p className={`hint bond-note${blocked !== null ? ' bond-note--blocked' : ''}`}>
       {bond !== null ? (
         <>
           Bond required: <strong>{formatBond(bond)}</strong>.{' '}
         </>
       ) : null}
-      {note}
+      {blocked ?? note}
     </p>
   )
 }

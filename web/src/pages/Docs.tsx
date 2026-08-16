@@ -1,13 +1,11 @@
-import type { ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import { PARAMETER_NOTES } from '../content/parameters'
-import { CREDENT_POLICY } from '../core/policy'
 import { repeatPenalty } from '../core/simulate'
+import type { Policy } from '../core/policy'
 import { formatBond, formatCount, formatDuration } from '../core/format'
-
-const policy = CREDENT_POLICY
-const penalty = repeatPenalty(policy)
+import { useEffectivePolicy } from '../chain/useOracle'
 
 /**
  * The long-form explanation, gathered in one place.
@@ -31,7 +29,15 @@ interface Group {
   sections: Section[]
 }
 
-const GROUPS: Group[] = [
+/**
+ * The prose, given the parameters it is describing.
+ *
+ * A function rather than a constant because these paragraphs quote numbers, and
+ * a number in documentation is a claim about the deployment. Built from the
+ * policy read off the contract so the explanation and the chain cannot drift.
+ */
+function buildGroups(policy: Policy, penalty: number): Group[] {
+  return [
   {
     id: 'protocol',
     title: 'How the protocol works',
@@ -39,12 +45,24 @@ const GROUPS: Group[] = [
     sections: [
       {
         id: 'engagement-closes',
-        title: '1. An engagement closes',
+        title: '1. Both parties commit to a scope',
         body: (
-          <p>
-            Two parties commit to a scope before the work starts. The scope is hashed on open, so
-            the standard being graded against cannot be rewritten once the outcome is known.
-          </p>
+          <>
+            <p>
+              The client proposes a scope and names a provider. The scope is hashed on open, so the
+              standard being graded against cannot be rewritten once the outcome is known.
+            </p>
+            <p>
+              A proposal is not yet an engagement: the named provider has to accept it before
+              anything can proceed. That step is what stops attestation being usable against a
+              stranger - without it anyone could name you as their counterparty, close the
+              engagement alone, and have you graded on work you never agreed to. Only the provider
+              can accept, and they accept a scope whose digest is already committed.
+            </p>
+            <p>
+              Either party can then close it, which is what opens attestation.
+            </p>
+          </>
         ),
       },
       {
@@ -52,8 +70,10 @@ const GROUPS: Group[] = [
         title: '2. A counterparty attests',
         body: (
           <p>
-            Only a party to the engagement can attest, once, and they post a bond to do it. The
-            attestation is prose: what was promised, what arrived.
+            Only a party to the engagement can attest, once, and they post a bond to do it - a bond
+            the contract checks before it pays a model to read anything, so an underfunded
+            attestation is refused rather than graded. The attestation is prose: what was promised,
+            what arrived.
           </p>
         ),
       },
@@ -362,17 +382,22 @@ const GROUPS: Group[] = [
           </p>
         ),
       },
-    ],
-  },
-]
+      ],
+    },
+  ]
+}
 
 export default function Docs() {
+  const { policy } = useEffectivePolicy()
+  const penalty = repeatPenalty(policy)
+  const groups = useMemo(() => buildGroups(policy, penalty), [policy, penalty])
+
   return (
     <div className="shell page docs">
       <aside className="docs__toc" aria-label="On this page">
         <p className="docs__toc-head">On this page</p>
         <ol className="docs__toc-list">
-          {GROUPS.map((group) => (
+          {groups.map((group) => (
             <li key={group.id}>
               <a href={`#${group.id}`}>{group.title}</a>
             </li>
@@ -390,7 +415,7 @@ export default function Docs() {
           </p>
         </div>
 
-        {GROUPS.map((group) => (
+        {groups.map((group) => (
           <section key={group.id} className="docs__group">
             <h2 id={group.id} className="docs__group-title">
               {group.title}

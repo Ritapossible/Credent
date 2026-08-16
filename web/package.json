@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "parity": "esbuild scripts/parity.ts --bundle --format=esm --platform=node --outfile=.tmp/parity.mjs && node .tmp/parity.mjs"
+    "parity": "esbuild scripts/parity.ts --bundle --format=esm --platform=node --outfile=.tmp/parity.mjs && node .tmp/parity.mjs",
+    "units": "esbuild scripts/units.ts --bundle --format=esm --platform=node --define:import.meta.env={} --outfile=.tmp/units.mjs && node .tmp/units.mjs"
   },
   "dependencies": {
     "genlayer-js": "^1.2.0",

@@ -6,13 +6,15 @@ import StatTile from '../components/StatTile'
 import { rangeFill } from '../components/rangeFill'
 import { attestationWeight, explainWeight, decayBp } from '../core/scoring'
 import { bondRequired } from '../core/bonding'
-import { CREDENT_POLICY } from '../core/policy'
 import { bpToPercent, formatBond, formatDuration } from '../core/format'
+import { useEffectivePolicy } from '../chain/useOracle'
 
 const DAY = 86_400
-const policy = CREDENT_POLICY
 
 export default function WeightLab() {
+  // The lab exists to show what the deployment would do with a given input, so
+  // it has to run the deployment's parameters rather than the repo's.
+  const { policy } = useEffectivePolicy()
   const [substantiated, setSubstantiated] = useState(80)
   const [confidence, setConfidence] = useState(85)
   const [repeatIndex, setRepeatIndex] = useState(0)

@@ -62,10 +62,23 @@ export const DEFAULT_POLICY: Policy = {
  * so the bond curve that makes sybil attestation unprofitable never charges
  * anyone. Nothing in the scoring math changes - only whether attesting costs
  * something.
+ *
+ * One GEN, in wei, because the contract charges the chain's native token and
+ * nothing else. This was `25_000_000n` annotated "25 USDC, 6dp", which named a
+ * token no part of the contract touches and, read at the native 18 decimals the
+ * chain actually uses, amounted to 0.000000000025 GEN - a bond curve that
+ * doubled a rounding error.
+ *
+ * One is chosen to be payable rather than impressive. Studio accounts are funded
+ * with about a hundred GEN, so a first attestation costs a percent of that and
+ * the doubling still bites a sybil fleet by the fourth or fifth; a larger figure
+ * would price honest counterparties out of a network whose tokens have no market
+ * anyway. This is the number to raise first on a chain where GEN is worth
+ * something.
  */
 export const CREDENT_POLICY: Policy = {
   ...DEFAULT_POLICY,
-  minBond: 25_000_000n, // 25 USDC, 6dp
+  minBond: 1_000_000_000_000_000_000n, // 1 GEN, 18dp
 }
 
 export function validatePolicy(policy: Policy): void {

@@ -59,13 +59,18 @@ export function readableError(cause: unknown): string {
   if (lines.length === 0) return 'Something went wrong.'
 
   const detail = lines.find((line) => line.startsWith('Details: '))?.slice('Details: '.length)
-  const headline = lines[0]
+  // Strip the label off the headline too. When `Details:` is the *first* line -
+  // which happens when viem's own headline is empty - the prefix would otherwise
+  // survive into the message and read as machinery.
+  const first = lines[0] ?? ''
+  const headline = first.startsWith('Details: ') ? first.slice('Details: '.length) : first
 
   const chosen =
-    detail && GENERIC.includes(headline.toLowerCase()) ? detail : (headline ?? detail ?? '')
+    detail && GENERIC.includes(headline.toLowerCase()) ? detail : (headline || detail || '')
 
   // Long enough to carry a contract reason, short enough not to become a wall.
-  return chosen.length > 300 ? `${chosen.slice(0, 297)}…` : chosen
+  // The ellipsis counts toward the limit, so the result is never over 300.
+  return chosen.length > 300 ? `${chosen.slice(0, 299)}…` : chosen
 }
 
 /**

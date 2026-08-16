@@ -21,6 +21,7 @@ import type { Verdict } from '../core/bonding'
 import type { Policy } from '../core/policy'
 import type { Report } from '../core/scoring'
 import { VERDICTS } from '../core/bonding'
+import { isRateLimit } from '../core/errors'
 import { readClient } from './client'
 import { CONTRACT_ADDRESS, IS_CONFIGURED } from './config'
 
@@ -54,12 +55,25 @@ export interface ChainAttestation {
   weight: number
 }
 
+/**
+ * The engagement lifecycle, as the contract spells it.
+ *
+ * `proposed` is the consent gap: the client has named a provider who has not
+ * agreed to be graded yet, and nothing about the engagement can reach a score
+ * until they do. A boolean `closed` cannot express it, which is why the contract
+ * grew a `state` beside it.
+ */
+export type EngagementState = 'proposed' | 'open' | 'closed'
+
+const ENGAGEMENT_STATES: readonly EngagementState[] = ['proposed', 'open', 'closed']
+
 export interface ChainEngagement {
   id: string
   client: string
   provider: string
   scope: string
   scopeDigest: string
+  state: EngagementState
   closed: boolean
 }
 
@@ -138,7 +152,11 @@ function address(source: Dict, key: string, what: string): string {
  * call would fail identically to a missing contract.
  */
 export function addressArg(hex: string, what: string): CalldataAddress {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(hex)) {
+  // The prefix is matched case-insensitively along with the digits. `0X…` is
+  // unusual but it is a shape addresses genuinely arrive in when pasted, and
+  // rejecting it produced a "not a 20-byte hex address" error about a string
+  // that plainly was one.
+  if (!/^0[xX][0-9a-fA-F]{40}$/.test(hex)) {
     throw new Error(`${what}: expected a 20-byte hex address, received ${JSON.stringify(hex)}`)
   }
   const bytes = new Uint8Array(20)
@@ -148,30 +166,78 @@ export function addressArg(hex: string, what: string): CalldataAddress {
   return new CalldataAddress(bytes)
 }
 
-function call(functionName: string, args: unknown[] = []): Promise<unknown> {
+/**
+ * How long to wait before a retry, or null if this failure will not pass.
+ *
+ * Only rate limiting is retried. A rejected call, a bad address or a missing
+ * contract will fail identically however long you wait, and retrying them turns
+ * one clear error into three slow ones. The public studio RPC allows thirty
+ * requests a minute and answers `-32029` with a `retry_after_seconds` when it
+ * has had enough; that hint is honoured when present.
+ */
+function retryDelay(cause: unknown, attempt: number): number | null {
+  if (!isRateLimit(cause)) return null
+  if (attempt >= 3) return null
+
+  const hinted = (cause as { cause?: { data?: { retry_after_seconds?: unknown } } })?.cause?.data
+    ?.retry_after_seconds
+  if (typeof hinted === 'number' && hinted > 0) return Math.min(hinted, 60) * 1000
+
+  // Otherwise back off: 1s, 2s, 4s.
+  return 2 ** attempt * 1000
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function call(functionName: string, args: unknown[] = []): Promise<unknown> {
   if (!IS_CONFIGURED) {
     throw new Error(
       'No contract address configured. Set VITE_CONTRACT_ADDRESS to the deployed ' +
         'ReputationOracle before building.',
     )
   }
-  return readClient().readContract({
-    address: CONTRACT_ADDRESS as `0x${string}`,
-    functionName,
-    // The decoder's `CalldataEncodable` covers the string and integer arguments
-    // every view here takes; the cast keeps that detail out of each call site.
-    args: args as never[],
-  })
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await readClient().readContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName,
+        // The decoder's `CalldataEncodable` covers the string, integer and
+        // address arguments every view here takes; the cast keeps that detail
+        // out of each call site.
+        args: args as never[],
+      })
+    } catch (cause) {
+      const delay = retryDelay(cause, attempt)
+      if (delay === null) throw cause
+      await sleep(delay)
+    }
+  }
+}
+
+/**
+ * A `u256` returned on its own rather than inside a dict.
+ *
+ * The string branch is not decoration. The decoder represents integers past
+ * 2^53 as strings, and the two scalar views here each hand-rolled a check that
+ * accepted only `bigint` and `number` - so `bond_for_next` threw
+ * "expected an integer, received "1000000000000000000"" the moment the
+ * deployment carried a bond of one whole token. The field decoders inside dicts
+ * had always accepted strings; only the top-level ones had not, which is why it
+ * survived until a bond got large.
+ */
+function scalar(raw: unknown, what: string): bigint {
+  if (typeof raw === 'bigint') return raw
+  if (typeof raw === 'number' && Number.isInteger(raw)) return BigInt(raw)
+  if (typeof raw === 'string' && /^-?\d+$/.test(raw)) return BigInt(raw)
+  throw new Error(`${what}: expected an integer, received ${JSON.stringify(raw)}`)
 }
 
 // --- views ----------------------------------------------------------------
 
 /** How many attestations exist in total. Also the id of the next one. */
 export async function attestationCount(): Promise<number> {
-  const raw = await call('attestation_count')
-  if (typeof raw === 'bigint') return Number(raw)
-  if (typeof raw === 'number') return raw
-  throw new Error(`attestation_count: expected an integer, received ${JSON.stringify(raw)}`)
+  return Number(scalar(await call('attestation_count'), 'attestation_count'))
 }
 
 export async function getReport(subject: string): Promise<Report> {
@@ -221,9 +287,26 @@ export async function getAttestation(id: number): Promise<ChainAttestation> {
   }
 }
 
-export async function getSubjectAttestations(subject: string): Promise<number[]> {
+/**
+ * How many records any paged view will return at most.
+ *
+ * Mirrors `_PAGE_MAX` in the contract, which clamps rather than rejects, so a
+ * client that asks for more silently gets this many - meaning a caller who
+ * assumed otherwise would read a truncated list and never know. Every pager
+ * below walks in these steps and stops on a short page.
+ */
+export const PAGE_SIZE = 50
+
+/** One page of attestation ids about a subject. */
+export async function getSubjectAttestations(
+  subject: string,
+  offset = 0,
+  limit = PAGE_SIZE,
+): Promise<number[]> {
   const raw = await call('get_subject_attestations', [
     addressArg(subject, 'get_subject_attestations.subject'),
+    offset,
+    limit,
   ])
   if (!Array.isArray(raw)) {
     throw new Error(`get_subject_attestations: expected a list, received ${JSON.stringify(raw)}`)
@@ -231,14 +314,160 @@ export async function getSubjectAttestations(subject: string): Promise<number[]>
   return raw.map((entry) => (typeof entry === 'bigint' ? Number(entry) : Number(entry)))
 }
 
+/**
+ * Every attestation id about a subject, walking the pages.
+ *
+ * The unpaged view it replaces could not answer at all for a subject with a
+ * long enough history, which is the subject whose page matters most.
+ */
+export async function getAllSubjectAttestations(subject: string): Promise<number[]> {
+  const ids: number[] = []
+  for (;;) {
+    const page = await getSubjectAttestations(subject, ids.length, PAGE_SIZE)
+    ids.push(...page)
+    // A short page is the end. The contract clamps `limit`, so a full page is
+    // never proof there is nothing after it, and a short one always is.
+    if (page.length < PAGE_SIZE) return ids
+  }
+}
+
+/**
+ * A page of attestations, with their engagement's scope, in one call.
+ *
+ * The batch view exists so the registry does not cost one request per
+ * attestation plus one per engagement plus one per subject. `evidence` is not
+ * carried - see `get_attestations` in the contract - so this returns the list
+ * shape rather than the full record.
+ */
+export interface ChainAttestationSummary extends Omit<ChainAttestation, 'evidence'> {
+  scope: string
+  scopeDigest: string
+}
+
+function decodeSummary(value: unknown): ChainAttestationSummary {
+  const source = asDict(value, 'get_attestations')
+
+  const verdict = str(source, 'verdict', 'get_attestations')
+  if (!(VERDICTS as readonly string[]).includes(verdict)) {
+    throw new Error(`get_attestations.verdict: unknown verdict "${verdict}"`)
+  }
+  const bondState = str(source, 'bond_state', 'get_attestations')
+  if (!(BOND_STATES as readonly string[]).includes(bondState)) {
+    throw new Error(`get_attestations.bond_state: unknown state "${bondState}"`)
+  }
+
+  return {
+    id: int(source, 'id', 'get_attestations'),
+    engagementId: str(source, 'engagement_id', 'get_attestations'),
+    attester: address(source, 'attester', 'get_attestations'),
+    subject: address(source, 'subject', 'get_attestations'),
+    claim: str(source, 'claim', 'get_attestations'),
+    scope: str(source, 'scope', 'get_attestations'),
+    scopeDigest: str(source, 'scope_digest', 'get_attestations'),
+    createdAt: int(source, 'created_at', 'get_attestations'),
+    ageSeconds: int(source, 'age_seconds', 'get_attestations'),
+    verdict: verdict as Verdict,
+    gradeBp: int(source, 'fulfilled', 'get_attestations'),
+    substantiated: int(source, 'substantiated', 'get_attestations'),
+    confidence: int(source, 'confidence', 'get_attestations'),
+    repeatIndex: int(source, 'repeat_index', 'get_attestations'),
+    bond: big(source, 'bond', 'get_attestations'),
+    bondState: bondState as BondState,
+    weight: int(source, 'weight', 'get_attestations'),
+  }
+}
+
+export async function getAttestations(
+  offset = 0,
+  limit = PAGE_SIZE,
+): Promise<ChainAttestationSummary[]> {
+  const raw = await call('get_attestations', [offset, limit])
+  if (!Array.isArray(raw)) {
+    throw new Error(`get_attestations: expected a list, received ${JSON.stringify(raw)}`)
+  }
+  return raw.map(decodeSummary)
+}
+
+/** Every attestation, walking the pages. One request per `PAGE_SIZE` records. */
+export async function getAllAttestations(total: number): Promise<ChainAttestationSummary[]> {
+  const out: ChainAttestationSummary[] = []
+  while (out.length < total) {
+    const page = await getAttestations(out.length, PAGE_SIZE)
+    if (page.length === 0) break
+    out.push(...page)
+  }
+  return out
+}
+
+/** One page of attestations about a single subject, with scopes attached. */
+export async function getSubjectPage(
+  subject: string,
+  offset = 0,
+  limit = PAGE_SIZE,
+): Promise<ChainAttestationSummary[]> {
+  const raw = await call('get_subject_page', [
+    addressArg(subject, 'get_subject_page.subject'),
+    offset,
+    limit,
+  ])
+  if (!Array.isArray(raw)) {
+    throw new Error(`get_subject_page: expected a list, received ${JSON.stringify(raw)}`)
+  }
+  return raw.map(decodeSummary)
+}
+
+/** Every attestation about one subject, walking the pages. */
+export async function getAllSubjectPage(subject: string): Promise<ChainAttestationSummary[]> {
+  const out: ChainAttestationSummary[] = []
+  for (;;) {
+    const page = await getSubjectPage(subject, out.length, PAGE_SIZE)
+    out.push(...page)
+    if (page.length < PAGE_SIZE) return out
+  }
+}
+
+/** Standing for several agents in one call, keyed back to the subject it is for. */
+export async function getReports(subjects: readonly string[]): Promise<Map<string, Report>> {
+  if (subjects.length === 0) return new Map()
+
+  const out = new Map<string, Report>()
+  for (let start = 0; start < subjects.length; start += PAGE_SIZE) {
+    const page = subjects.slice(start, start + PAGE_SIZE)
+    const raw = await call('get_reports', [
+      page.map((subject, index) => addressArg(subject, `get_reports.subjects[${index}]`)),
+    ])
+    if (!Array.isArray(raw)) {
+      throw new Error(`get_reports: expected a list, received ${JSON.stringify(raw)}`)
+    }
+    for (const entry of raw) {
+      const source = asDict(entry, 'get_reports')
+      out.set(address(source, 'subject', 'get_reports'), {
+        scoreBp: int(source, 'score_bp', 'get_reports'),
+        totalWeight: int(source, 'total_weight', 'get_reports'),
+        nAttestations: int(source, 'n_attestations', 'get_reports'),
+        nDistinctAttesters: int(source, 'n_distinct_attesters', 'get_reports'),
+        nCounted: int(source, 'n_counted', 'get_reports'),
+      })
+    }
+  }
+  return out
+}
+
 export async function getEngagement(id: string): Promise<ChainEngagement> {
   const source = asDict(await call('get_engagement', [id]), 'get_engagement')
+
+  const state = str(source, 'state', 'get_engagement')
+  if (!(ENGAGEMENT_STATES as readonly string[]).includes(state)) {
+    throw new Error(`get_engagement.state: unknown state "${state}"`)
+  }
+
   return {
     id: str(source, 'id', 'get_engagement'),
     client: address(source, 'client', 'get_engagement'),
     provider: address(source, 'provider', 'get_engagement'),
     scope: str(source, 'scope', 'get_engagement'),
     scopeDigest: str(source, 'scope_digest', 'get_engagement'),
+    state: state as EngagementState,
     closed: bool(source, 'closed', 'get_engagement'),
   }
 }
@@ -273,7 +502,5 @@ export async function bondForNext(attester: string, subject: string): Promise<bi
     addressArg(attester, 'bond_for_next.attester'),
     addressArg(subject, 'bond_for_next.subject'),
   ])
-  if (typeof raw === 'bigint') return raw
-  if (typeof raw === 'number') return BigInt(raw)
-  throw new Error(`bond_for_next: expected an integer, received ${JSON.stringify(raw)}`)
+  return scalar(raw, 'bond_for_next')
 }

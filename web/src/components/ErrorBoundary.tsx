@@ -30,12 +30,23 @@ interface Props {
 
 interface State {
   message: string | null
+  /**
+   * How many times "Try again" has been pressed for this boundary.
+   *
+   * Retrying re-renders the same children, so a deterministic fault throws
+   * straight back and the button becomes a loop that looks like a broken page.
+   * After a couple of attempts it stops offering, because the honest answer at
+   * that point is that retrying is not the remedy.
+   */
+  attempts: number
 }
 
-export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { message: null }
+const MAX_ATTEMPTS = 2
 
-  static getDerivedStateFromError(cause: unknown): State {
+export default class ErrorBoundary extends Component<Props, State> {
+  state: State = { message: null, attempts: 0 }
+
+  static getDerivedStateFromError(cause: unknown): Partial<State> {
     return { message: readableError(cause) }
   }
 
@@ -47,11 +58,11 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   private reset = () => {
-    this.setState({ message: null })
+    this.setState((current) => ({ message: null, attempts: current.attempts + 1 }))
   }
 
   render(): ReactNode {
-    const { message } = this.state
+    const { message, attempts } = this.state
     if (message === null) return this.props.children
 
     return (
@@ -65,9 +76,16 @@ export default class ErrorBoundary extends Component<Props, State> {
             This is a bug in the site rather than a problem with the chain. The scores themselves
             are on-chain and unaffected.
           </p>
-          <button type="button" className="btn" onClick={this.reset}>
-            Try again
-          </button>
+          {attempts < MAX_ATTEMPTS ? (
+            <button type="button" className="btn" onClick={this.reset}>
+              Try again
+            </button>
+          ) : (
+            <p className="muted">
+              Retrying has not helped, so this is reproducible rather than transient. Reload the
+              page, or try a different section of the site.
+            </p>
+          )}
         </div>
       </div>
     )

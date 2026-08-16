@@ -228,7 +228,16 @@ interface Outcome {
  */
 function outcomeOf(receipt: GenLayerTransaction): Outcome {
   const entries = receipt.consensus_data?.leader_receipt
-  const leader = Array.isArray(entries) ? entries[0] : undefined
+  const list = Array.isArray(entries) ? entries : []
+
+  // By `mode`, not by position. The array can carry more than one entry when a
+  // round rotates, and the leader is whichever entry says it is - reading
+  // `[0]` happened to be right on every receipt observed but is an assumption
+  // about ordering that nothing documents. Falling back to the first entry
+  // keeps the previous behaviour for a node that omits `mode` rather than
+  // treating a missing field as a failure.
+  const leader =
+    list.find((entry) => (entry as { mode?: unknown })?.mode === 'leader') ?? list[0]
 
   const executed = (leader as { execution_result?: unknown })?.execution_result
   const result = (leader as { result?: unknown })?.result
@@ -327,6 +336,17 @@ export function openEngagement(
     addressArg(input.provider, 'open_engagement.provider'),
     input.scope,
   ])
+}
+
+/**
+ * Agree to be graded on a scope someone proposed for you. Provider only.
+ *
+ * The consent step. An engagement names a provider who never asked to be named,
+ * so until they accept it is a proposal and nothing about it can reach a score -
+ * which is what stops attestation being usable against a stranger.
+ */
+export function acceptEngagement(account: string, engagementId: string): Promise<WriteResult> {
+  return submit(account, 'accept_engagement', [engagementId])
 }
 
 /** Mark the work finished, which is what opens attestation. Either counterparty. */

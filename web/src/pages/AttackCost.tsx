@@ -4,27 +4,39 @@ import { Link } from 'react-router-dom'
 import LineChart, { type Series } from '../components/LineChart'
 import StatTile from '../components/StatTile'
 import { rangeFill } from '../components/rangeFill'
-import { CREDENT_POLICY } from '../core/policy'
+import { useEffectivePolicy } from '../chain/useOracle'
 import { costCurve, repeatPath, repeatPenalty, sybilFleetPath } from '../core/simulate'
-import { bpToScore, formatBond, formatCount, formatUnits } from '../core/format'
-
-const policy = CREDENT_POLICY
-const penalty = repeatPenalty(policy)
+import {
+  NATIVE_DECIMALS,
+  NATIVE_SYMBOL,
+  bpToScore,
+  formatBond,
+  formatCount,
+  formatUnits,
+} from '../core/format'
 
 export default function AttackCost() {
   const [targetScore, setTargetScore] = useState(85)
   const [gradeScore, setGradeScore] = useState(100)
+
+  // Every figure on this page is a cost, and a cost quoted from a constant is a
+  // claim about a deployment nobody checked. The page previously computed its
+  // entire argument from `CREDENT_POLICY` while the live contract carried
+  // `min_bond = 0` - which makes all of it free, not expensive.
+  const { policy, live } = useEffectivePolicy()
+  const penalty = repeatPenalty(policy)
+  const free = policy.minBond === 0n
 
   const targetBp = targetScore * 100
   const gradeBp = gradeScore * 100
 
   const fleet = sybilFleetPath(targetBp, gradeBp, policy)
   const repeat = repeatPath(targetBp, gradeBp, policy)
-  const curve = useMemo(() => costCurve(gradeBp, policy), [gradeBp])
+  const curve = useMemo(() => costCurve(gradeBp, policy), [gradeBp, policy])
 
   /**
    * Two series - the two shapes an attack can take - so a legend is required and
-   * both get direct comparison in the table below. One y-axis in USDC for both:
+   * both get direct comparison in the table below. One y-axis in GEN for both:
    * they are the same measure, which is exactly why they belong on one plot.
    */
   const series: Series[] = useMemo(
@@ -63,6 +75,31 @@ export default function AttackCost() {
           <Link to="/docs#volume-is-not-standing">Why the curves oppose →</Link>
         </p>
       </div>
+
+      {/* A cost page has one way to mislead badly, and this is it: quoting a
+          price the deployment does not charge. Both states are stated plainly
+          rather than left to the reader to infer from a zero. */}
+      {free ? (
+        <div className="notice notice--critical">
+          <h2 className="notice__title">This deployment charges no bond</h2>
+          <p>
+            The contract this build reads runs with <code className="mono">min_bond = 0</code>, so
+            every attestation is free and the costs below are <strong>not</strong> being enforced.
+            They describe the defence as designed, not as deployed. Treat scores here as
+            unprotected against sybil attestation.
+          </p>
+        </div>
+      ) : null}
+
+      {!live && !free ? (
+        <div className="notice notice--warning">
+          <h2 className="notice__title">Costs shown from intended parameters</h2>
+          <p>
+            The deployed policy could not be read, so these figures use this repository's intended
+            configuration rather than the live contract's.
+          </p>
+        </div>
+      ) : null}
 
       <div className="filter-row">
         <div className="field">
@@ -141,18 +178,18 @@ export default function AttackCost() {
           <p className="eyebrow">Cost curve</p>
           <h2>Bond required, by target score</h2>
           <p className="muted">
-            Both series are USDC posted, so they share one axis. The repeat path climbs away because
-            each attestation buys half as much weight as the one before while costing twice as
-            much.
+            Both series are {NATIVE_SYMBOL} posted, so they share one axis. The repeat path climbs
+            away because each attestation buys half as much weight as the one before while costing
+            twice as much.
           </p>
         </div>
 
         <LineChart
           series={series}
           xLabel="Target score"
-          yLabel="Total bond in USDC"
+          yLabel={`Total bond in ${NATIVE_SYMBOL}`}
           formatX={(value) => bpToScore(value, 0)}
-          formatY={(value) => compactUsd(value)}
+          formatY={(value) => compactUnits(value)}
           height={320}
         />
 
@@ -200,12 +237,18 @@ export default function AttackCost() {
   )
 }
 
-/** Bond base units as a plain number of whole USDC, for plotting. */
+/**
+ * Bond base units as a plain number of whole tokens, for plotting.
+ *
+ * The scale comes from `NATIVE_DECIMALS` rather than a literal, because the
+ * literal here was `1_000_000n` - six decimals, for a token the contract never
+ * charged - and every point on this chart inherited the error.
+ */
 function formatRaw(value: bigint): string {
-  return (value / 1_000_000n).toString()
+  return (value / 10n ** NATIVE_DECIMALS).toString()
 }
 
-function compactUsd(value: number): string {
+function compactUnits(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(0)}K`
   return value.toFixed(0)

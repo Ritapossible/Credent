@@ -15,6 +15,8 @@
 import { localnet, studionet, testnetAsimov, testnetBradbury } from 'genlayer-js/chains'
 import type { GenLayerChain } from 'genlayer-js/types'
 
+import { NATIVE_DECIMALS, NATIVE_SYMBOL } from '../core/format'
+
 /** The networks a build may target, by the alias the GenLayer CLI uses. */
 const CHAINS = {
   localnet,
@@ -56,6 +58,28 @@ function readNetwork(): { network: NetworkAlias; error: string | null } {
 
 const resolved = readNetwork()
 
+/**
+ * The chain still denominates bonds the way `core/format` assumes.
+ *
+ * `core/` holds the token's decimals and symbol as constants so it stays
+ * independent of this module and keeps running under plain Node for the parity
+ * script. That independence is only safe while the two agree, and the cost of
+ * them disagreeing is every bond figure on the site being wrong by a power of
+ * ten - which is exactly the defect this replaced. So it is checked once, here,
+ * against the chain definition the client is built from.
+ */
+function checkDenomination(chain: GenLayerChain): string | null {
+  const native = chain.nativeCurrency
+  if (native.decimals === Number(NATIVE_DECIMALS) && native.symbol === NATIVE_SYMBOL) {
+    return null
+  }
+  return (
+    `${chain.name} denominates value in ${native.symbol} at ${native.decimals} decimals, ` +
+    `but this build formats bonds as ${NATIVE_SYMBOL} at ${NATIVE_DECIMALS}. ` +
+    `Every bond figure would be wrong, so nothing is read.`
+  )
+}
+
 export const NETWORK: NetworkAlias = resolved.network
 
 /**
@@ -63,7 +87,8 @@ export const NETWORK: NetworkAlias = resolved.network
  * Rendered by `ChainState` and by a banner in the layout; nothing reads the
  * chain while it is set.
  */
-export const CONFIG_ERROR: string | null = resolved.error
+export const CONFIG_ERROR: string | null =
+  resolved.error ?? checkDenomination(CHAINS[resolved.network])
 
 export const CHAIN: GenLayerChain = CHAINS[NETWORK]
 

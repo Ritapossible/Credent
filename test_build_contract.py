@@ -39,12 +39,16 @@ CONTRACT_CLASS = "ReputationOracle"
 EXPECTED_PUBLIC_METHODS = frozenset(
     {
         "open_engagement",
+        "accept_engagement",
         "close_engagement",
         "attest",
         "reclaim_bond",
         "get_report",
         "get_attestation",
+        "get_attestations",
+        "get_reports",
         "get_subject_attestations",
+        "get_subject_page",
         "get_engagement",
         "get_policy",
         "attestation_count",

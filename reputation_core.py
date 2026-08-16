@@ -121,6 +121,15 @@ REASON_ALREADY_ATTESTED = "already_attested"
 REASON_BOND_TOO_SMALL = "bond_below_required"
 REASON_GRADED = "graded"
 
+# Consent. An engagement names a provider who never asked to be named, so it
+# starts as a proposal and becomes real only when that provider accepts it.
+# Without this an attacker could name any address as their counterparty, close
+# the engagement alone, and attest about a victim who never participated - the
+# bond is a price on that, not a bar to it.
+REASON_NOT_ACCEPTED = "engagement_not_accepted"
+REASON_NOT_PROVIDER = "sender_not_provider"
+REASON_ALREADY_ACCEPTED = "engagement_already_accepted"
+
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
     REASON_NOT_CLOSED,
@@ -128,6 +137,9 @@ REASONS = frozenset({
     REASON_ALREADY_ATTESTED,
     REASON_BOND_TOO_SMALL,
     REASON_GRADED,
+    REASON_NOT_ACCEPTED,
+    REASON_NOT_PROVIDER,
+    REASON_ALREADY_ACCEPTED,
 })
 
 

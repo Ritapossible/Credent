@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { attestationSalt, normalizeAddress, scopeDigest } from '../core/digest'
-import { CREDENT_POLICY } from '../core/policy'
+import { useEffectivePolicy } from '../chain/useOracle'
 import { formatBond, formatDuration, shortAddress } from '../core/format'
 
 const EXAMPLE = {
@@ -14,6 +14,9 @@ const EXAMPLE = {
 }
 
 export default function ScopeBuilder() {
+  // "What posting this costs" has to be what it actually costs on the contract
+  // this build reads, not what the repository would like it to cost.
+  const { policy } = useEffectivePolicy()
   const [scope, setScope] = useState(EXAMPLE.scope)
   const [attester, setAttester] = useState(EXAMPLE.attester)
   const [subject, setSubject] = useState(EXAMPLE.subject)
@@ -115,19 +118,19 @@ export default function ScopeBuilder() {
             <dl className="mini-facts">
               <div>
                 <dt>First attestation bond</dt>
-                <dd>{formatBond(CREDENT_POLICY.minBond)}</dd>
+                <dd>{formatBond(policy.minBond)}</dd>
               </div>
               <div>
                 <dt>Lock before reclaim</dt>
-                <dd>{formatDuration(CREDENT_POLICY.bondLockSeconds)}</dd>
+                <dd>{formatDuration(policy.bondLockSeconds)}</dd>
               </div>
               <div>
                 <dt>Slashed below</dt>
-                <dd>{CREDENT_POLICY.slashFloor} substantiated</dd>
+                <dd>{policy.slashFloor} substantiated</dd>
               </div>
               <div>
                 <dt>Released at or above</dt>
-                <dd>{CREDENT_POLICY.releaseFloor} substantiated</dd>
+                <dd>{policy.releaseFloor} substantiated</dd>
               </div>
             </dl>
           </div>

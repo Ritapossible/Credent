@@ -17,7 +17,28 @@ export function bpToScore(bp: number, digits = 1): string {
   return (bp / (BP / 100)).toFixed(digits)
 }
 
-const USDC_DECIMALS = 6n
+/**
+ * What a bond is actually denominated in.
+ *
+ * The chain's native token, because that is what the contract charges: `attest`
+ * compares `min_bond` against `gl.message.value` and `reclaim_bond` returns it
+ * with `emit_transfer(value=...)`. There is no ERC-20 anywhere in the contract,
+ * no allowance and no `transfer_from`, so a bond cannot be denominated in a
+ * stablecoin however much the surrounding prose might prefer one.
+ *
+ * These were `USDC` at 6 decimals, which was wrong twice over: it named a token
+ * the contract never touches, and it read every amount at a scale twelve orders
+ * of magnitude off, so a bond the site quoted as "25 USDC" was 0.000000000025
+ * GEN on chain - economically nothing.
+ *
+ * Held as constants rather than read from the chain definition so that `core/`
+ * stays independent of `chain/` and the parity script keeps running under plain
+ * Node. All four GenLayer networks use GEN at 18 decimals; `chain/config.ts`
+ * asserts the live chain still agrees and refuses to read anything if it ever
+ * does not, so the constant cannot drift silently.
+ */
+export const NATIVE_DECIMALS = 18n
+export const NATIVE_SYMBOL = 'GEN'
 
 /**
  * Token base units as a decimal string.
@@ -26,7 +47,7 @@ const USDC_DECIMALS = 6n
  * `Number.MAX_SAFE_INTEGER`, so converting to a float to format it would misquote
  * what an attester has to post.
  */
-export function formatUnits(value: bigint, decimals = USDC_DECIMALS): string {
+export function formatUnits(value: bigint, decimals = NATIVE_DECIMALS): string {
   const negative = value < 0n
   const magnitude = negative ? -value : value
   const scale = 10n ** decimals
@@ -40,9 +61,19 @@ export function formatUnits(value: bigint, decimals = USDC_DECIMALS): string {
   return `${negative ? '-' : ''}${groupedWhole}.${fractionText}`
 }
 
-/** A bond amount with its unit, for prose and labels. */
+/**
+ * A bond amount with its unit, for prose and labels.
+ *
+ * Trimmed to four decimal places. A bond is a round number of GEN in practice
+ * and the full eighteen would print a wall of zeroes beside every figure, but
+ * the trim is display-only - `formatUnits` keeps the exact value for anything
+ * that has to agree with the chain.
+ */
 export function formatBond(value: bigint): string {
-  return `${formatUnits(value)} USDC`
+  const text = formatUnits(value)
+  const [whole, fraction = ''] = text.split('.')
+  const trimmed = fraction.slice(0, 4).replace(/0+$/, '')
+  return `${trimmed ? `${whole}.${trimmed}` : whole} ${NATIVE_SYMBOL}`
 }
 
 /** Whole seconds as the coarsest unit that stays honest. */

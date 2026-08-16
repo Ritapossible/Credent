@@ -9,7 +9,7 @@ outcomes into a score. The score decides how much collateral the agent has to
 post up front. Nobody is asked to trust a self-report, and nobody has to trust a
 single model call either.
 
-Deployed on GenLayer Studio at `0x7D72e67bdCCb542a669f3C18055e04D295Dbf6f7`,
+Deployed on GenLayer Studio at `0xc89c70FA0A04A1461582D17B856CC6f68A212C04`,
 inspectable through the [GenLayer explorer](https://genlayer-explorer.vercel.app/).
 
 ---
@@ -51,6 +51,7 @@ npm ci
 cp .env.example .env.local       # then set the contract address
 npm run dev
 npm run parity                   # the TS port still agrees with the Python engine
+npm run units                    # formatting, error text, calldata encoding
 npm run build
 ```
 
@@ -64,7 +65,11 @@ remembering to.
 ```bash
 genlayer account import --name studio --private-key 0x...
 genlayer network set studionet
-genlayer deploy --contract reputation_oracle.py
+
+# The ten policy parameters, in constructor order. Deploying without them takes
+# the contract defaults, and the seventh of those is `min_bond = 0` - which
+# switches the economic layer off entirely and makes every attestation free.
+genlayer deploy --contract reputation_oracle.py \n  --args 7776000 30000 25 50 20 8 1000000000000000000 20 50 1209600
 ```
 
 Then set the address in `web/.env.local`, or in the hosting environment:
@@ -79,9 +84,9 @@ into the client bundle, so **nothing secret can go here** — and nothing needs 
 The site never holds a key: every view it reads is unsigned, and every write is
 signed by the visitor's own wallet.
 
-### Two things that will waste your afternoon
+### Three things that will waste your afternoon
 
-Both cost a day to find, so they are written down.
+Each cost a day to find, so they are written down.
 
 **The runner directive must be alone in the leading comment block.** GenVM parses
 the contiguous run of `#` comments at the top of the file as its runner
@@ -98,30 +103,54 @@ contract rejected the call. Always read `consensus_data.leader_receipt`, where
 studio receipts put `execution_result` and the contract's own reason. Checking
 the transaction status alone reports rejected writes as successes.
 
-A corollary for clients: an address argument is its own calldata type. Passing
-the hex string encodes a `str`, the contract refuses it while unpacking
-arguments, and the node answers with `execution failed` naming nothing. See
-`addressArg` in `web/src/chain/oracle.ts`.
+**Integers are typed, and large ones arrive as strings.** An address argument is
+its own calldata type: passing the hex string encodes a `str`, the contract
+refuses it while unpacking arguments, and the node answers with `execution
+failed` naming nothing — see `addressArg` in `web/src/chain/oracle.ts`. In the
+other direction, a `u256` past 2^53 comes back as a decimal *string* rather than
+a `bigint`, so a decoder that accepts only numbers works until a value gets
+large. Bonds are denominated in wei, so that happens on the first real bond.
+
+## The lifecycle
+
+```
+open_engagement    client proposes a scope and names a provider   → proposed
+accept_engagement  the named provider agrees to be graded         → open
+close_engagement   either party marks the work finished           → closed
+attest             a counterparty grades the other, posting a bond
+reclaim_bond       the attester takes the bond back after the lock
+```
+
+The acceptance step is load-bearing. Without it anyone could name a victim as
+their provider, close the engagement alone, and have them graded on work they
+never agreed to — the bond is a price on that, not a bar to it. Only the named
+provider can accept, and they accept a scope whose digest is already committed.
 
 ## Status
 
-Working and verified end to end: the contract deploys and executes, all seven
-views read, the full `open → close → attest → reclaim` lifecycle runs, and the
-site renders every route, reads the live contract, and submits correctly formed
-transactions from a connected wallet.
+Verified end to end against a live deployment: the consent gate refuses an
+unaccepted engagement (`engagement_not_accepted`) and refuses acceptance by
+anyone but the provider (`sender_not_provider`); the bond gate refuses an
+underfunded attestation (`bond_below_required`) before the model is paid to read
+anything, and doubles on repeat; the batch views return the registry in a
+handful of calls; and the site renders every route, reads the deployed policy,
+and submits correctly formed transactions from a connected wallet.
 
 It is **not** production infrastructure, for reasons mostly outside this
 repository:
 
 - **GenLayer has no mainnet.** The SDK ships localnet, studionet and two
   testnets; `connect()` answers `mainnet is not available yet`. Nothing built
-  here can hold real value today.
+  here can hold real value today, which is also why `min_bond` is set to one
+  whole token rather than a figure with teeth — GEN has no market to price an
+  attack in.
 - **Studio is a shared sandbox.** Its state can be reset, and its public RPC
-  allows 30 requests per minute.
-- **The registry does not scale on that budget.** Loading it costs
-  `2 + N + E + S` calls — policy, count, one per attestation, one per
-  engagement, one per subject — so it starts failing at roughly a dozen
-  attestations. Past that it wants an indexer, which is the natural next piece
-  of work.
+  allows 30 requests per minute. Reads retry on that limit with backoff.
+- **The registry needs an indexer eventually.** Loading it now costs one request
+  per page of fifty attestations plus one per page of reports, rather than one
+  per attestation; that holds to a few thousand, past which grouping by subject
+  client-side stops being the right shape.
 - The write path has not yet been signed by a real browser wallet; it has been
   driven end to end through an EIP-1193 provider backed by a local key.
+- `get_report` recomputes an agent's score by walking every attestation about
+  them on each read. Bounded in practice by the bond, unbounded in principle.
