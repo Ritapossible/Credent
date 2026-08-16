@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react'
 
 import { type Policy } from '../core/policy'
+import { readableError } from '../core/errors'
 import { IS_CONFIGURED } from './config'
 import { loadAgent, loadRegistry, type AgentReport } from './registry'
 import { getPolicy } from './oracle'
@@ -26,11 +27,6 @@ export interface Async<T> {
   error: string | null
   /** True when no contract address was configured at build time. */
   unconfigured: boolean
-}
-
-function messageOf(cause: unknown): string {
-  if (cause instanceof Error) return cause.message
-  return String(cause)
 }
 
 function useAsync<T>(run: () => Promise<T>, deps: readonly unknown[]): Async<T> {
@@ -56,7 +52,12 @@ function useAsync<T>(run: () => Promise<T>, deps: readonly unknown[]): Async<T> 
       },
       (cause) => {
         if (live) {
-          setState({ data: null, loading: false, error: messageOf(cause), unconfigured: false })
+          setState({
+            data: null,
+            loading: false,
+            error: readableError(cause),
+            unconfigured: false,
+          })
         }
       },
     )

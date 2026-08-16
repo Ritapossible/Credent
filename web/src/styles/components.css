@@ -1556,3 +1556,18 @@
   margin-top: var(--space-6);
   font-size: var(--step--1);
 }
+
+/* --- misconfiguration banner -------------------------------------------- */
+
+/**
+ * Sits under the masthead, above every page. Deliberately the loudest surface
+ * on the site: it only appears when the build is pointed somewhere it cannot
+ * read, which is a deployment mistake rather than a visitor's problem.
+ */
+.config-banner {
+  background: color-mix(in srgb, var(--critical) 12%, var(--plane));
+  border-bottom: 1px solid color-mix(in srgb, var(--critical) 45%, transparent);
+  padding: var(--space-3) 0;
+  color: var(--ink-primary);
+  font-size: var(--step--1);
+}

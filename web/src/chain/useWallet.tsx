@@ -21,6 +21,7 @@ import {
   type ReactNode,
 } from 'react'
 
+import { readableError } from '../core/errors'
 import {
   connectWallet,
   currentAccount,
@@ -49,11 +50,6 @@ export interface WalletState {
 }
 
 const WalletContext = createContext<WalletState | null>(null)
-
-function messageOf(cause: unknown): string {
-  if (cause instanceof Error) return cause.message
-  return String(cause)
-}
 
 /**
  * User rejections are not errors worth reporting.
@@ -111,7 +107,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setAddress(await connectWallet())
       setRightChain(await onExpectedChain())
     } catch (cause) {
-      if (!isUserRejection(cause)) setError(messageOf(cause))
+      if (!isUserRejection(cause)) setError(readableError(cause))
     } finally {
       setConnecting(false)
     }

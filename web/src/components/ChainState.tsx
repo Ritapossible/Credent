@@ -9,7 +9,7 @@
 
 import type { ReactNode } from 'react'
 
-import { CONTRACT_ADDRESS, NETWORK } from '../chain/config'
+import { CONFIG_ERROR, CONTRACT_ADDRESS, NETWORK } from '../chain/config'
 import type { Async } from '../chain/useOracle'
 
 interface Props<T> {
@@ -20,6 +20,21 @@ interface Props<T> {
 }
 
 export default function ChainState<T>({ state, what, children }: Props<T>) {
+  // Ahead of `unconfigured`, which would otherwise report a missing address for
+  // a build that has one and cannot be trusted to point it anywhere.
+  if (CONFIG_ERROR !== null) {
+    return (
+      <div className="notice notice--critical">
+        <h3 className="notice__title">Misconfigured network</h3>
+        <p>{CONFIG_ERROR}</p>
+        <p className="muted">
+          Nothing is read until this is corrected, because the address in this build belongs to a
+          different network than the one requested.
+        </p>
+      </div>
+    )
+  }
+
   if (state.unconfigured) {
     return (
       <div className="notice">

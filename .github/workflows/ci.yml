@@ -1,0 +1,89 @@
+# The checks that were only ever run by hand.
+#
+# Both failures this project has hit in deployment were of the same shape: green
+# locally, broken on chain. Neither is caught here - only a real deployment
+# catches those, and CI cannot deploy - but everything that *can* be checked
+# without a network now is, on every push, instead of whenever someone
+# remembers.
+#
+# The two jobs are independent and run in parallel: the contract is Python with
+# no dependencies but a test runner, and the site is a Vite build. Nothing here
+# needs a wallet, a key, or an RPC endpoint, so there are no secrets and a fork's
+# pull request runs the identical pipeline.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A second push supersedes the first; nobody needs the older run's result.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Contract and engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the interpreter the suite is developed and verified against.
+      # The sources are plain enough to run on older versions, but this is the
+      # one that has actually been run, so it is the one CI asserts.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install the test runner
+        run: pip install -r requirements-dev.txt
+
+      # Ahead of the suite so a stale artifact reads as its own failure rather
+      # than as a confusing assertion inside `test_artifact_matches_its_sources`.
+      - name: The generated contract matches its sources
+        run: |
+          python build_contract.py
+          git diff --exit-code -- reputation_oracle.py \
+            || { echo "::error file=reputation_oracle.py::Stale artifact. Run 'python build_contract.py' and commit the result."; exit 1; }
+
+      - name: Engine, prompt, contract and parity-vector tests
+        run: python -m pytest -q
+
+  web:
+    name: Site
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # The check that matters most here. The TypeScript port recomputes the
+      # weight breakdown the UI shows beside every score, and a port that drifts
+      # from the engine would explain a number nobody on chain agrees with.
+      - name: The TypeScript port agrees with the Python engine
+        run: npm run parity
+
+      # Built without VITE_CONTRACT_ADDRESS on purpose: an unconfigured build is
+      # a state the site is required to render rather than crash on, and this is
+      # the only place that path is exercised automatically.
+      - name: Build
+        run: npm run build

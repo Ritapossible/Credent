@@ -27,20 +27,43 @@ export type NetworkAlias = keyof typeof CHAINS
 
 const DEFAULT_NETWORK: NetworkAlias = 'studionet'
 
-function readNetwork(): NetworkAlias {
+/**
+ * Resolve the target network, reporting a bad value instead of throwing.
+ *
+ * A typo must not be allowed to silently fall back to studionet and read an
+ * address that does not exist there, which would surface as an empty registry
+ * rather than as a misconfiguration - so an unknown alias still stops the site
+ * from reading anything, through `IS_CONFIGURED` below.
+ *
+ * What it must not do is throw. This runs while the module is being evaluated,
+ * before React exists, so an exception here takes the whole bundle down and
+ * leaves a blank document that no error boundary can catch - the one failure
+ * mode indistinguishable from a broken deployment. A typo in a Vercel
+ * environment variable is a routine mistake and deserves a rendered message,
+ * not a white screen.
+ */
+function readNetwork(): { network: NetworkAlias; error: string | null } {
   const raw = import.meta.env.VITE_GENLAYER_NETWORK?.trim()
-  if (!raw) return DEFAULT_NETWORK
-  if (raw in CHAINS) return raw as NetworkAlias
-  // A typo here would otherwise fall back to studionet and read an address that
-  // does not exist on it, which surfaces as an empty registry rather than a
-  // misconfiguration. Fail where the mistake is.
-  throw new Error(
-    `VITE_GENLAYER_NETWORK="${raw}" is not a known network. ` +
+  if (!raw) return { network: DEFAULT_NETWORK, error: null }
+  if (raw in CHAINS) return { network: raw as NetworkAlias, error: null }
+  return {
+    network: DEFAULT_NETWORK,
+    error:
+      `VITE_GENLAYER_NETWORK="${raw}" is not a known network. ` +
       `Expected one of: ${Object.keys(CHAINS).join(', ')}.`,
-  )
+  }
 }
 
-export const NETWORK: NetworkAlias = readNetwork()
+const resolved = readNetwork()
+
+export const NETWORK: NetworkAlias = resolved.network
+
+/**
+ * Why the build's configuration cannot be used, if it cannot be. Null normally.
+ * Rendered by `ChainState` and by a banner in the layout; nothing reads the
+ * chain while it is set.
+ */
+export const CONFIG_ERROR: string | null = resolved.error
 
 export const CHAIN: GenLayerChain = CHAINS[NETWORK]
 
@@ -61,7 +84,14 @@ export function isDeployed(
   return /^0x[0-9a-fA-F]{40}$/.test(address)
 }
 
-export const IS_CONFIGURED = isDeployed(CONTRACT_ADDRESS)
+/**
+ * Whether this build can read the chain at all.
+ *
+ * False when the network alias was rejected, not only when the address is
+ * missing: reading a studionet address because the alias was misspelled is the
+ * silent wrong answer this is here to prevent.
+ */
+export const IS_CONFIGURED = CONFIG_ERROR === null && isDeployed(CONTRACT_ADDRESS)
 
 /** Where a transaction or address can be inspected, for links in the UI. */
 export const EXPLORER_URL = CHAIN.blockExplorers?.default?.url ?? ''

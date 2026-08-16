@@ -1,0 +1,9 @@
+# The engine and its tests are pure standard library. This is the test runner and
+# nothing else, so that CI installs the same thing a contributor does.
+#
+# `genvm-linter` is deliberately absent. `test_build_contract.py` skips its
+# checks when the linter is missing rather than failing, because a linter that
+# cannot be resolved is no evidence either way - but it is worth installing
+# locally, since it is the only tool that validates the deployable artifact
+# without spending a deployment.
+pytest>=8,<10

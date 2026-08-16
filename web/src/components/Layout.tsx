@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import ConnectButton from './ConnectButton'
+import ErrorBoundary from './ErrorBoundary'
+import { CONFIG_ERROR } from '../chain/config'
 
 const NAV = [
   { to: '/', label: 'Overview', end: true },
@@ -178,8 +180,22 @@ export default function Layout() {
         </div>
       </header>
 
+      {/* Site-wide, because a bad network alias breaks every page that reads
+          the chain and the visitor should not have to find one to be told. */}
+      {CONFIG_ERROR !== null ? (
+        <div className="config-banner" role="alert">
+          <div className="shell">
+            <strong>Misconfigured build.</strong> {CONFIG_ERROR}
+          </div>
+        </div>
+      ) : null}
+
       <main id="main">
-        <Outlet />
+        {/* Keyed by path so a page that threw does not keep its failed state
+            after the visitor navigates somewhere else. */}
+        <ErrorBoundary key={location.pathname} scope="page">
+          <Outlet />
+        </ErrorBoundary>
       </main>
 
       <footer className="footer">

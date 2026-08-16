@@ -27,6 +27,7 @@ import {
 } from '../chain/wallet'
 import { formatBond, shortAddress } from '../core/format'
 import { normalizeAddress } from '../core/digest'
+import { readableError } from '../core/errors'
 
 // --- one pending write ----------------------------------------------------
 
@@ -53,10 +54,9 @@ function useAction() {
     try {
       setState({ pending: false, result: await write(), error: null })
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause)
       // 4001 is the visitor closing their own wallet dialog, not a failure.
       const rejected = (cause as { code?: number })?.code === 4001
-      setState({ pending: false, result: null, error: rejected ? null : message })
+      setState({ pending: false, result: null, error: rejected ? null : readableError(cause) })
     }
   }, [])
 
