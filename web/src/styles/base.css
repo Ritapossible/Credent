@@ -238,6 +238,23 @@ a {
   box-shadow: var(--shadow-2);
 }
 
+/**
+ * Disabled buttons stay put. The write forms disable their submit until a wallet
+ * is connected and the fields are filled, and a control that still lifted and
+ * glowed under the cursor would read as an unresponsive button rather than an
+ * unavailable one.
+ */
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: var(--shadow-1);
+}
+
+.btn:disabled:hover {
+  transform: none;
+  box-shadow: var(--shadow-1);
+}
+
 .field {
   display: flex;
   flex-direction: column;

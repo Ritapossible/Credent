@@ -125,15 +125,19 @@ function address(source: Dict, key: string, what: string): string {
  * contract rejects while unpacking its arguments - the node answers the whole
  * call with `execution failed` and no indication of which argument was wrong.
  *
- * Only the three views taking an `Address` need this (`get_report`,
- * `get_subject_attestations`, `bond_for_next`). The rest take strings and
- * integers, which encode as themselves.
+ * Three views take an `Address` (`get_report`, `get_subject_attestations`,
+ * `bond_for_next`) and so does one write (`open_engagement`); the rest take
+ * strings and integers, which encode as themselves.
+ *
+ * Exported for `wallet.ts` rather than reimplemented there. The writes hit the
+ * same encoding, and a second copy of this is how the bug comes back on the
+ * side nobody re-tested.
  *
  * The parse is strict because the alternative is that failure again, one layer
  * further away: a malformed address here would encode 20 bytes of `NaN`, and the
  * call would fail identically to a missing contract.
  */
-function addressArg(hex: string, what: string): CalldataAddress {
+export function addressArg(hex: string, what: string): CalldataAddress {
   if (!/^0x[0-9a-fA-F]{40}$/.test(hex)) {
     throw new Error(`${what}: expected a 20-byte hex address, received ${JSON.stringify(hex)}`)
   }

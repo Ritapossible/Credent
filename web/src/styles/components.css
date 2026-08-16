@@ -1448,3 +1448,111 @@
     gap: var(--space-2) var(--space-4);
   }
 }
+
+/* --- wallet ------------------------------------------------------------- */
+
+.wallet-button {
+  flex: none;
+  white-space: nowrap;
+}
+
+/**
+ * Connected is a status, not a control. There is nothing to press - wallets
+ * expose no disconnect a site can call - so it renders as a chip rather than a
+ * button that would do nothing.
+ */
+.wallet-button--connected {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-1);
+  color: var(--ink-secondary);
+  font-size: var(--step--1);
+  box-shadow: var(--shadow-1);
+}
+
+.wallet-button__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+}
+
+.wallet-button--warn {
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+  color: var(--ink-primary);
+}
+
+/* The masthead already reorders at this width; the wallet control joins the
+   first row beside the brand rather than the collapsed menu. */
+@media (max-width: 1040px) {
+  .wallet-button {
+    order: 1;
+    margin-left: auto;
+  }
+}
+
+/* --- write surface ------------------------------------------------------ */
+
+.lifecycle {
+  display: grid;
+  gap: var(--space-5);
+  margin-top: var(--space-6);
+}
+
+.lifecycle__step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.lifecycle__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.lifecycle__head .card__title {
+  margin-bottom: var(--space-1);
+}
+
+.lifecycle__step .btn {
+  align-self: flex-start;
+}
+
+/**
+ * Transaction outcomes sit under the button that produced them, and both states
+ * are ruled on the left rather than filled: a green wash for a routine success
+ * would carry more weight than the event deserves, and these appear one per
+ * card.
+ */
+.form-status {
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: var(--step--1);
+  color: var(--ink-secondary);
+}
+
+.form-status--ok {
+  border-left-color: var(--good);
+}
+
+.form-status--error {
+  border-left-color: var(--critical);
+  color: var(--ink-primary);
+}
+
+.bond-note {
+  margin-top: calc(var(--space-2) * -1);
+}
+
+.contract-note {
+  margin-top: var(--space-6);
+  font-size: var(--step--1);
+}

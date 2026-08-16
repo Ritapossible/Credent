@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
+import ConnectButton from './ConnectButton'
+
 const NAV = [
   { to: '/', label: 'Overview', end: true },
   { to: '/agents', label: 'Registry', end: false },
   { to: '/lab', label: 'Weight lab', end: false },
   { to: '/attack', label: 'Attack cost', end: false },
   { to: '/scope', label: 'Scope builder', end: false },
+  { to: '/attest', label: 'Attest', end: false },
   { to: '/policy', label: 'Policy', end: false },
 ]
 
@@ -31,6 +34,7 @@ const FOOTER_NAV = [
       { to: '/lab', label: 'Weight lab' },
       { to: '/attack', label: 'Attack cost' },
       { to: '/scope', label: 'Scope builder' },
+      { to: '/attest', label: 'Attest' },
     ],
   },
   {
@@ -159,6 +163,8 @@ export default function Layout() {
               Docs
             </NavLink>
           </nav>
+
+          <ConnectButton />
 
           <button
             type="button"
