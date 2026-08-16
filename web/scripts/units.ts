@@ -17,6 +17,8 @@
 import { NATIVE_SYMBOL, formatBond, formatUnits } from '../src/core/format'
 import { isRateLimit, readableError } from '../src/core/errors'
 import { addressArg } from '../src/chain/oracle'
+import { outcomeOf } from '../src/chain/wallet'
+import type { GenLayerTransaction } from 'genlayer-js/types'
 import { CREDENT_POLICY, DEFAULT_POLICY } from '../src/core/policy'
 
 let failures = 0
@@ -142,10 +144,76 @@ eq(
   'formatUnits: exact at the u256 ceiling, with no float rounding',
 )
 
+// --- receipt outcomes -----------------------------------------------------
+//
+// Whether a write succeeded is read out of `consensus_data.leader_receipt`, and
+// getting it wrong is not a cosmetic failure: it reports a rejected attestation
+// to the visitor as a success, or a successful one as rejected.
+//
+// The shapes below are taken from a real studionet receipt - the `attest` call
+// that put the first record on the deployed contract. Two details of that
+// receipt are the reason this is pinned. Its `leader_receipt` carried *two*
+// entries, a leader that succeeded beside a validator that errored; and its
+// top-level `txExecutionResultName` was `undefined`, so the check that once
+// tested only that field saw nothing to object to and passed everything.
+
+const leaderEntry = {
+  mode: 'leader',
+  execution_result: 'SUCCESS',
+  result: { status: 'return', payload: { readable: '0' } },
+}
+const validatorEntry = {
+  mode: 'validator',
+  execution_result: 'ERROR',
+  result: { status: 'contract_error', payload: 'validator disagreed' },
+}
+
+// Cast because these are the fields `outcomeOf` reads, not a whole transaction;
+// filling in the rest would assert nothing and hide which fields matter.
+const receipt = (leader_receipt: unknown[]) =>
+  ({ consensus_data: { leader_receipt } }) as unknown as GenLayerTransaction
+
+eq(
+  outcomeOf(receipt([leaderEntry, validatorEntry])),
+  { ok: true, reason: null, returned: '0' },
+  'outcomeOf: the leader decides, and its return value is carried out',
+)
+// The same receipt with the entries swapped. Reading `[0]` would call this
+// successful attestation a rejection; selecting by `mode` is what prevents it.
+eq(
+  outcomeOf(receipt([validatorEntry, leaderEntry])),
+  { ok: true, reason: null, returned: '0' },
+  'outcomeOf: a validator listed before the leader does not decide the outcome',
+)
+eq(
+  outcomeOf(
+    receipt([
+      {
+        mode: 'leader',
+        execution_result: 'ERROR',
+        result: { status: 'contract_error', payload: '[EXPECTED] already_attested' },
+      },
+    ]),
+  ),
+  { ok: false, reason: '[EXPECTED] already_attested', returned: null },
+  "outcomeOf: a rejection carries the contract's own reason",
+)
+// No `mode` anywhere is a node that does not label its entries, not a failure.
+eq(
+  outcomeOf(receipt([{ execution_result: 'SUCCESS', result: { status: 'return', payload: {} } }]))
+    .ok,
+  true,
+  'outcomeOf: an unlabelled single entry falls back to the first',
+)
+// An empty or unrecognised receipt must not invent a failure that did not happen.
+eq(outcomeOf(receipt([])).ok, true, 'outcomeOf: an empty leader_receipt is not a failure')
+
 // --- report ---------------------------------------------------------------
 
 if (failures > 0) {
   console.error(`\nunits failed: ${failures} of ${checks} checks`)
   process.exit(1)
 }
-console.log(`units ok - ${checks} checks across formatting, error text and address encoding`)
+console.log(
+  `units ok - ${checks} checks across formatting, error text, address encoding and receipt outcomes`,
+)

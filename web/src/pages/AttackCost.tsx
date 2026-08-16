@@ -21,8 +21,10 @@ export default function AttackCost() {
 
   // Every figure on this page is a cost, and a cost quoted from a constant is a
   // claim about a deployment nobody checked. The page previously computed its
-  // entire argument from `CREDENT_POLICY` while the live contract carried
-  // `min_bond = 0` - which makes all of it free, not expensive.
+  // entire argument from `CREDENT_POLICY` while the deployment of the day
+  // carried `min_bond = 0` - which makes all of it free, not expensive. The
+  // current studionet deployment charges 1 GEN, which is exactly why this is
+  // read rather than assumed: both numbers have been live at some point.
   const { policy, live } = useEffectivePolicy()
   const penalty = repeatPenalty(policy)
   const free = policy.minBond === 0n
