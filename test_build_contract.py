@@ -15,6 +15,7 @@ arithmetic `test_reputation_core.py` exercises.
 from __future__ import annotations
 
 import ast
+import itertools
 import json
 import shutil
 import subprocess
@@ -99,6 +100,37 @@ def test_runner_pin_is_the_first_line(artifact_source: str) -> None:
     first = artifact_source.splitlines()[0]
     assert first.startswith('# { "Depends": "py-genlayer:')
     assert build_contract.RUNNER in first
+
+
+def test_runner_directive_is_alone_in_the_leading_comment_block(
+    artifact_source: str,
+) -> None:
+    """Nothing may share the comment block the runner directive sits in.
+
+    GenVM parses the contiguous run of comment lines at the top of the file as
+    its runner configuration, as JSON, line by line. The `Depends` directive is
+    the only JSON the contract has, so a banner line touching it makes the block
+    unparseable and the node rejects the deployment with
+    `contract_error: invalid_contract`.
+
+    Nothing else in this suite sees that. `genvm-lint` does not model the header
+    block, so the artifact validates and extracts a full schema with the banner
+    in either position, and the CLI prints "Contract deployed successfully"
+    because consensus accepted the *transaction* - the execution error is inside
+    the receipt, and every read of the address afterwards returns
+    `Contract ... not found`.
+
+    Verified against studionet in both directions: a banner on line 2 is
+    rejected, the same file with a blank line on line 2 deploys and reads back.
+    """
+    lines = artifact_source.splitlines()
+    block = list(itertools.takewhile(lambda line: line.startswith("#"), lines))
+    assert len(block) == 1, (
+        "the runner directive must be the only line in the leading comment "
+        f"block; found {len(block)} comment lines before the first break: "
+        f"{block[1:]}. Put a blank line under the directive - the banner reads "
+        "the same and GenVM stops parsing at the break."
+    )
 
 
 def test_runner_pin_is_a_version_hash_not_an_alias() -> None:

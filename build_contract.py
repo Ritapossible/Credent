@@ -72,7 +72,26 @@ FUTURE_IMPORT = "from __future__ import annotations"
 # runner the linter can actually find.
 RUNNER = "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6"
 
+# The blank line on the second line is load-bearing, and it is the second thing
+# on this file's list of ways to write a contract that lints clean and cannot
+# deploy. GenVM reads the *contiguous* comment block at the top of the file as
+# its runner configuration and parses every line in it as JSON. The `Depends`
+# line is the only JSON here, so any ordinary comment touching it - even one -
+# makes the whole block unparseable and the node rejects the contract with
+# `contract_error: invalid_contract` at deploy time.
+#
+# A blank line ends that block. Everything below it is an ordinary comment that
+# GenVM never reads, which is where the human-facing banner belongs.
+#
+# Nothing local catches this. `genvm-lint` does not model the header block, so
+# the artifact validates and extracts a full schema either way, and the CLI
+# reports "Contract deployed successfully" because the *transaction* is accepted
+# by consensus - the execution failure is inside the receipt. Confirmed on
+# studionet: a comment on line 2 is rejected, a blank line on line 2 deploys and
+# reads back. `test_build_contract.py` pins the blank line so it cannot be
+# tidied away.
 BANNER = f'''# {{ "Depends": "{RUNNER}" }}
+
 # ---------------------------------------------------------------------------
 # GENERATED FILE - DO NOT EDIT.
 #

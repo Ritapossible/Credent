@@ -15,6 +15,8 @@
  * accessor that names what was missing.
  */
 
+import { CalldataAddress } from 'genlayer-js/types'
+
 import type { Verdict } from '../core/bonding'
 import type { Policy } from '../core/policy'
 import type { Report } from '../core/scoring'
@@ -113,6 +115,35 @@ function address(source: Dict, key: string, what: string): string {
   return str(source, key, what).toLowerCase()
 }
 
+// --- encoding -------------------------------------------------------------
+
+/**
+ * An argument the contract declares as `Address`.
+ *
+ * Calldata is typed, and an address is its own type rather than a string that
+ * happens to look like one. Passing the hex text encodes a `str`, which the
+ * contract rejects while unpacking its arguments - the node answers the whole
+ * call with `execution failed` and no indication of which argument was wrong.
+ *
+ * Only the three views taking an `Address` need this (`get_report`,
+ * `get_subject_attestations`, `bond_for_next`). The rest take strings and
+ * integers, which encode as themselves.
+ *
+ * The parse is strict because the alternative is that failure again, one layer
+ * further away: a malformed address here would encode 20 bytes of `NaN`, and the
+ * call would fail identically to a missing contract.
+ */
+function addressArg(hex: string, what: string): CalldataAddress {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(hex)) {
+    throw new Error(`${what}: expected a 20-byte hex address, received ${JSON.stringify(hex)}`)
+  }
+  const bytes = new Uint8Array(20)
+  for (let index = 0; index < 20; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(2 + index * 2, 4 + index * 2), 16)
+  }
+  return new CalldataAddress(bytes)
+}
+
 function call(functionName: string, args: unknown[] = []): Promise<unknown> {
   if (!IS_CONFIGURED) {
     throw new Error(
@@ -140,7 +171,10 @@ export async function attestationCount(): Promise<number> {
 }
 
 export async function getReport(subject: string): Promise<Report> {
-  const source = asDict(await call('get_report', [subject]), 'get_report')
+  const source = asDict(
+    await call('get_report', [addressArg(subject, 'get_report.subject')]),
+    'get_report',
+  )
   return {
     scoreBp: int(source, 'score_bp', 'get_report'),
     totalWeight: int(source, 'total_weight', 'get_report'),
@@ -184,7 +218,9 @@ export async function getAttestation(id: number): Promise<ChainAttestation> {
 }
 
 export async function getSubjectAttestations(subject: string): Promise<number[]> {
-  const raw = await call('get_subject_attestations', [subject])
+  const raw = await call('get_subject_attestations', [
+    addressArg(subject, 'get_subject_attestations.subject'),
+  ])
   if (!Array.isArray(raw)) {
     throw new Error(`get_subject_attestations: expected a list, received ${JSON.stringify(raw)}`)
   }
@@ -229,7 +265,10 @@ export async function getPolicy(): Promise<Policy> {
 
 /** What the next attestation from this attester about this subject would cost. */
 export async function bondForNext(attester: string, subject: string): Promise<bigint> {
-  const raw = await call('bond_for_next', [attester, subject])
+  const raw = await call('bond_for_next', [
+    addressArg(attester, 'bond_for_next.attester'),
+    addressArg(subject, 'bond_for_next.subject'),
+  ])
   if (typeof raw === 'bigint') return raw
   if (typeof raw === 'number') return BigInt(raw)
   throw new Error(`bond_for_next: expected an integer, received ${JSON.stringify(raw)}`)
