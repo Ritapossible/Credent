@@ -118,5 +118,19 @@ export function isDeployed(
  */
 export const IS_CONFIGURED = CONFIG_ERROR === null && isDeployed(CONTRACT_ADDRESS)
 
-/** Where a transaction or address can be inspected, for links in the UI. */
-export const EXPLORER_URL = CHAIN.blockExplorers?.default?.url ?? ''
+/**
+ * Where a transaction or address can be inspected, for links in the UI.
+ *
+ * Studionet is overridden. The SDK's chain definition points at
+ * `genlayer-explorer.vercel.app`, which is not where studionet transactions are
+ * actually browsable - the Studio serves its own explorer at
+ * `genlayer-studio.genlayer.com`, and the SDK's value sends every "view
+ * transaction" link on the site to a page that cannot find the hash. The other
+ * networks carry explorers that do resolve, so only this one is corrected.
+ */
+const EXPLORER_OVERRIDE: Partial<Record<NetworkAlias, string>> = {
+  studionet: 'https://genlayer-studio.genlayer.com',
+}
+
+export const EXPLORER_URL =
+  EXPLORER_OVERRIDE[NETWORK] ?? CHAIN.blockExplorers?.default?.url ?? ''

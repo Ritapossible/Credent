@@ -10,7 +10,7 @@ post up front. Nobody is asked to trust a self-report, and nobody has to trust a
 single model call either.
 
 Deployed on GenLayer Studio at `0xc89c70FA0A04A1461582D17B856CC6f68A212C04`,
-inspectable through the [GenLayer explorer](https://genlayer-explorer.vercel.app/).
+inspectable through the [GenLayer Studio explorer](https://genlayer-studio.genlayer.com/).
 
 ---
 

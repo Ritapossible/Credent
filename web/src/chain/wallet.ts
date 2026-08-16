@@ -26,7 +26,7 @@ import { createClient } from 'genlayer-js'
 import { TransactionStatus } from 'genlayer-js/types'
 import type { GenLayerTransaction } from 'genlayer-js/types'
 
-import { CHAIN, CONTRACT_ADDRESS, IS_CONFIGURED } from './config'
+import { CHAIN, CONTRACT_ADDRESS, EXPLORER_URL, IS_CONFIGURED } from './config'
 import { addressArg } from './oracle'
 
 /**
@@ -295,9 +295,11 @@ async function ensureChain(provider: EthereumProvider): Promise<void> {
           chainName: CHAIN.name,
           rpcUrls: [...CHAIN.rpcUrls.default.http],
           nativeCurrency: CHAIN.nativeCurrency,
-          ...(CHAIN.blockExplorers?.default?.url
-            ? { blockExplorerUrls: [CHAIN.blockExplorers.default.url] }
-            : {}),
+          // `EXPLORER_URL`, not the chain definition's own: the wallet keeps
+          // whatever is registered here and links to it from its transaction
+          // list, so handing it the address the site itself does not use would
+          // put a broken link somewhere the site can no longer correct.
+          ...(EXPLORER_URL ? { blockExplorerUrls: [EXPLORER_URL] } : {}),
         },
       ],
     })
