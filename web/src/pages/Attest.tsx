@@ -26,6 +26,7 @@ import {
   reclaimBond,
   type WriteResult,
 } from '../chain/wallet'
+import { useWalletPicker } from '../components/WalletModal'
 import { formatBond, shortAddress } from '../core/format'
 import { normalizeAddress } from '../core/digest'
 import { readableError } from '../core/errors'
@@ -440,32 +441,23 @@ function WalletGate({
   connecting: boolean
   connect: () => Promise<void>
 }) {
-  if (!available) {
-    return (
-      <div className="notice notice--warning">
-        <h2 className="notice__title">No wallet detected</h2>
-        <p>
-          Posting needs a browser wallet to sign with. Reading the registry does not - every page
-          on this site renders without one.{' '}
-          <a href="https://metamask.io/download/" target="_blank" rel="noreferrer noopener">
-            Install MetaMask →
-          </a>
-        </p>
-      </div>
-    )
-  }
+  // The same dialog the masthead opens. It carries the install list itself, so
+  // the no-wallet case does not need a separate notice hard-coding one wallet.
+  const { openPicker, picker } = useWalletPicker()
 
   if (address === null) {
     return (
       <div className="notice">
-        <h2 className="notice__title">Connect to post</h2>
+        <h2 className="notice__title">{available ? 'Connect to post' : 'A wallet is needed to post'}</h2>
         <p>
-          The forms below stay disabled until a wallet is connected. Nothing is sent until you
-          approve it, and the site never sees your key.
+          {available
+            ? 'The forms below stay disabled until a wallet is connected. Nothing is sent until you approve it, and the site never sees your key.'
+            : 'Posting needs a browser wallet to sign with. Reading the registry does not - every page on this site renders without one.'}
         </p>
-        <button type="button" className="btn" onClick={() => void connect()} disabled={connecting}>
-          {connecting ? 'Connecting…' : 'Connect wallet'}
+        <button type="button" className="btn" onClick={openPicker} disabled={connecting}>
+          {connecting ? 'Connecting…' : available ? 'Connect wallet' : 'Choose a wallet'}
         </button>
+        {picker}
       </div>
     )
   }

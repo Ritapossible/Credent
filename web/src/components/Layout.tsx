@@ -164,9 +164,14 @@ export default function Layout() {
             >
               Docs
             </NavLink>
-          </nav>
 
-          <ConnectButton />
+            {/* Inside the nav, so it collapses into the menu on a phone instead
+                of crowding the masthead row. On a wide screen the nav is that
+                row, so this still renders where it always did. */}
+            <div className="nav__wallet">
+              <ConnectButton />
+            </div>
+          </nav>
 
           <button
             type="button"

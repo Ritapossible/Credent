@@ -25,10 +25,15 @@ import { readableError } from '../core/errors'
 import {
   connectWallet,
   currentAccount,
+  disconnectWallet,
+  discoverWallets,
   hasWallet,
+  listWallets,
   onExpectedChain,
+  selectedWallet,
   watchForWallet,
   watchWallet,
+  type WalletInfo,
 } from './wallet'
 
 export interface WalletState {
@@ -45,7 +50,17 @@ export interface WalletState {
   rightChain: boolean | null
   connecting: boolean
   error: string | null
-  connect: () => Promise<void>
+  /**
+   * Connect, optionally naming which announced wallet to use. Called without an
+   * argument it uses the remembered choice, or the only wallet installed.
+   */
+  connect: (rdns?: string) => Promise<void>
+  /** Revoke where the wallet allows it, and stop reconnecting either way. */
+  disconnect: () => Promise<void>
+  /** Every wallet that announced itself, for the picker. Empty on a plain page. */
+  wallets: WalletInfo[]
+  /** Which of them is in use, once one has been chosen. */
+  active: WalletInfo | null
 }
 
 const WalletContext = createContext<WalletState | null>(null)
@@ -67,9 +82,26 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [wallets, setWallets] = useState<WalletInfo[]>(listWallets)
+  const [active, setActive] = useState<WalletInfo | null>(selectedWallet)
+
   // State, not a bare `hasWallet()` call. An extension that injects after this
   // first renders would otherwise never be noticed - see `watchForWallet`.
   const [available, setAvailable] = useState(hasWallet)
+
+  // EIP-6963 discovery. This is what lets the picker name the wallets a visitor
+  // actually has rather than guessing, and what makes a page with MetaMask and
+  // Rabby side by side resolvable at all - both would otherwise be fighting
+  // over the single `window.ethereum` slot.
+  useEffect(
+    () =>
+      discoverWallets((found) => {
+        setWallets(found)
+        setActive(selectedWallet())
+        if (found.length > 0) setAvailable(true)
+      }),
+    [],
+  )
 
   useEffect(() => {
     if (available) return
@@ -113,11 +145,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [available])
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (rdns?: string) => {
     setConnecting(true)
     setError(null)
     try {
-      setAddress(await connectWallet())
+      setAddress(await connectWallet(rdns))
+      setActive(selectedWallet())
       setRightChain(await onExpectedChain())
     } catch (cause) {
       if (!isUserRejection(cause)) setError(readableError(cause))
@@ -126,15 +159,35 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // No `disconnect`. There was one, exposed on the context and called by
-  // nothing: wallets have no disconnect a site can invoke, so it only ever
-  // cleared this component's copy of an address the wallet still considers
-  // authorised, and the next `accountsChanged` or reload would bring it back.
-  // A control that appears to revoke access without revoking it is worse than
-  // its absence.
+  const disconnect = useCallback(async () => {
+    // Cleared first. The revocation request can be slow or refused, and the
+    // control has to read as having worked the moment it is pressed.
+    setAddress(null)
+    setActive(null)
+    setError(null)
+    await disconnectWallet()
+  }, [])
+
+  // There used to be no `disconnect` here, and the note in its place explained
+  // why: the one that had been removed only cleared this component's copy of an
+  // address the wallet still considered authorised, so the next reload brought
+  // it back. That objection was right about the implementation and is answered
+  // rather than ignored by the one in `wallet.ts` - it asks the wallet to revoke
+  // through EIP-2255 and records the intent locally so a wallet that will not
+  // revoke still cannot reconnect the visitor behind their back.
   const value = useMemo(
-    () => ({ address, available, rightChain, connecting, error, connect }),
-    [address, available, rightChain, connecting, error, connect],
+    () => ({
+      address,
+      available,
+      rightChain,
+      connecting,
+      error,
+      connect,
+      disconnect,
+      wallets,
+      active,
+    }),
+    [address, available, rightChain, connecting, error, connect, disconnect, wallets, active],
   )
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>

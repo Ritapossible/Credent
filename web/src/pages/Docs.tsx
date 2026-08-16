@@ -6,6 +6,7 @@ import { repeatPenalty } from '../core/simulate'
 import type { Policy } from '../core/policy'
 import { formatBond, formatCount, formatDuration } from '../core/format'
 import { useEffectivePolicy } from '../chain/useOracle'
+import { CONTRACT_ADDRESS, EXPLORER_URL, NETWORK } from '../chain/config'
 
 /**
  * The long-form explanation, gathered in one place.
@@ -382,9 +383,85 @@ function buildGroups(policy: Policy, penalty: number): Group[] {
           </p>
         ),
       },
+      {
+        id: 'verified-on-chain',
+        title: 'The lifecycle, run against the deployed contract',
+        body: (
+          <>
+            <p>
+              The four calls below are a real engagement, executed end to end on{' '}
+              <strong>{NETWORK}</strong> against{' '}
+              <code className="mono">{CONTRACT_ADDRESS || 'the deployed contract'}</code>. They are
+              recorded here because a protocol description is a claim until someone runs it: these
+              are the transaction ids, and they can be inspected rather than taken on trust.
+            </p>
+            <TransactionTable />
+            <p>
+              The attestation that closed the sequence was graded in consensus and returned
+              attestation id <code className="mono">0</code> - the first record on this deployment.
+              Its subject scored <strong>59.6</strong> from a single counted attestation, which is
+              the neutral prior pulled up by one positive grade rather than the grade itself; the{' '}
+              <Link to="/docs#unknown-is-not-bad">prior</Link> is why a lone attestation does not
+              move an agent to the top of the registry.
+            </p>
+            <p>
+              Two accounts were needed rather than one. The contract rejects an engagement whose
+              client and provider are the same address, which is the same rule that stops an agent
+              attesting about itself.
+            </p>
+          </>
+        ),
+      },
       ],
     },
   ]
+}
+
+/**
+ * The verified lifecycle, as transaction ids.
+ *
+ * Hard-coded on purpose. These are a historical record of one run against one
+ * deployment - reading them from the chain would make them whatever happened
+ * most recently, which is not what a reference is for.
+ */
+const VERIFIED_RUN = [
+  { call: 'open_engagement', hash: '0xeaccefdc75aab38d0dc4607071dc2ec6f3e33e669ce6b23edbf18f35fcea4991' },
+  { call: 'accept_engagement', hash: '0x46f7799d253b3ecef24f7ecfb11df31c612d609bb93f698a2e110933a63b4670' },
+  { call: 'close_engagement', hash: '0x2eb135ea9fb75a7ff6d3ba1f9075198b98e211040db8fe39fbc4bb66136a0827' },
+  { call: 'attest', hash: '0x4a38b3de8b0da61da35d718343b514375e17557a1a0f5c91639bc01479ad4eca' },
+]
+
+function TransactionTable() {
+  return (
+    <div className="table-wrap">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th scope="col">Call</th>
+            <th scope="col">Transaction</th>
+          </tr>
+        </thead>
+        <tbody>
+          {VERIFIED_RUN.map((entry) => (
+            <tr key={entry.call}>
+              <td>
+                <code className="mono">{entry.call}</code>
+              </td>
+              <td className="mono docs__hash">
+                {EXPLORER_URL ? (
+                  <a href={`${EXPLORER_URL}/tx/${entry.hash}`} target="_blank" rel="noreferrer noopener">
+                    {entry.hash}
+                  </a>
+                ) : (
+                  entry.hash
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 export default function Docs() {

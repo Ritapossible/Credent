@@ -48,12 +48,136 @@ declare global {
   }
 }
 
+/**
+ * One wallet the browser has announced, as EIP-6963 describes it.
+ *
+ * `rdns` is the identity - a reverse-DNS name like `io.metamask` - and is what a
+ * remembered choice is stored under. `uuid` is regenerated per page load, so it
+ * is useless for that and is kept only because the standard supplies it.
+ */
+export interface WalletInfo {
+  uuid: string
+  name: string
+  /** A `data:` URI. The site's CSP allows those and no remote image host. */
+  icon: string
+  rdns: string
+}
+
+interface Announced {
+  info: WalletInfo
+  provider: EthereumProvider
+}
+
+/**
+ * Every wallet that answered the discovery request, keyed by `rdns`.
+ *
+ * Module scope rather than component state because discovery is a property of
+ * the page, not of whichever component happened to mount first, and a second
+ * copy would disagree with this one about what is installed.
+ */
+const announced = new Map<string, Announced>()
+
+const SELECTED_KEY = 'credent.wallet.rdns'
+/**
+ * Set when the visitor disconnects.
+ *
+ * Needed because disconnecting cannot be guaranteed on the wallet's side: not
+ * every wallet implements EIP-2255 revocation, and the ones that do not go on
+ * answering `eth_accounts` with the address they still consider authorised. A
+ * reload would then reconnect somebody who had just asked not to be connected,
+ * which is the failure that made the previous disconnect control dishonest.
+ * This flag is what makes the intent survive the reload regardless.
+ */
+const DISCONNECTED_KEY = 'credent.wallet.disconnected'
+
+function store(key: string, value: string | null): void {
+  try {
+    if (value === null) window.localStorage.removeItem(key)
+    else window.localStorage.setItem(key, value)
+  } catch {
+    // Private browsing and blocked storage. Losing the preference across a
+    // reload is acceptable; failing to connect because of it is not.
+  }
+}
+
+function read(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+/** The wallet the visitor picked, when it is one that has announced itself. */
+function selected(): Announced | null {
+  const rdns = read(SELECTED_KEY)
+  return rdns ? (announced.get(rdns) ?? null) : null
+}
+
+/**
+ * The provider to talk to.
+ *
+ * A remembered choice wins. Otherwise a lone announced wallet is unambiguous
+ * enough to use without asking. `window.ethereum` is the last resort, for
+ * wallets predating EIP-6963 - and it is what several wallets fight over, which
+ * is the whole reason the standard exists.
+ */
 export function getProvider(): EthereumProvider | null {
-  return typeof window !== 'undefined' && window.ethereum ? window.ethereum : null
+  if (typeof window === 'undefined') return null
+  const chosen = selected()
+  if (chosen) return chosen.provider
+  if (announced.size === 1) return [...announced.values()][0]!.provider
+  return window.ethereum ?? null
+}
+
+/** Every announced wallet, in a stable order so the picker does not reshuffle. */
+export function listWallets(): WalletInfo[] {
+  return [...announced.values()]
+    .map((entry) => entry.info)
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * Ask the page's wallets to announce themselves, and keep listening.
+ *
+ * Extensions answer `eip6963:requestProvider` synchronously, but they can also
+ * announce unprompted whenever they finish initialising, so the listener stays
+ * attached rather than being torn down after the first round.
+ */
+export function discoverWallets(onChange: (wallets: WalletInfo[]) => void): () => void {
+  if (typeof window === 'undefined') return () => {}
+
+  const handler = (event: Event) => {
+    const detail = (event as CustomEvent<Announced>).detail
+    if (!detail?.info?.rdns || !detail.provider) return
+    const known = announced.get(detail.info.rdns)
+    if (known?.provider === detail.provider) return
+    announced.set(detail.info.rdns, detail)
+    onChange(listWallets())
+  }
+
+  window.addEventListener('eip6963:announceProvider', handler)
+  window.dispatchEvent(new Event('eip6963:requestProvider'))
+
+  return () => window.removeEventListener('eip6963:announceProvider', handler)
+}
+
+/** Remember which wallet to use. Cleared by `forgetWallet`. */
+export function chooseWallet(rdns: string): void {
+  store(SELECTED_KEY, rdns)
+  store(DISCONNECTED_KEY, null)
+}
+
+export function selectedWallet(): WalletInfo | null {
+  return selected()?.info ?? null
+}
+
+export function wasDisconnected(): boolean {
+  return read(DISCONNECTED_KEY) === '1'
 }
 
 export function hasWallet(): boolean {
-  return getProvider() !== null
+  return announced.size > 0 || getProvider() !== null
 }
 
 /** How long to keep waiting for an extension that has not injected itself yet. */
@@ -126,6 +250,9 @@ function asAddresses(raw: unknown): string[] {
  * page that popped MetaMask because someone navigated to it would be a bug.
  */
 export async function currentAccount(): Promise<string | null> {
+  // A visitor who disconnected stays disconnected across the reload, whether or
+  // not their wallet honoured the revocation. See `DISCONNECTED_KEY`.
+  if (wasDisconnected()) return null
   const provider = getProvider()
   if (!provider) return null
   try {
@@ -177,9 +304,17 @@ async function ensureChain(provider: EthereumProvider): Promise<void> {
   }
 }
 
-/** Prompt for access, then put the wallet on the right chain. Returns the address. */
-export async function connectWallet(): Promise<string> {
-  const provider = getProvider()
+/**
+ * Prompt for access, then put the wallet on the right chain. Returns the address.
+ *
+ * `rdns` names which announced wallet to use and is remembered for next time.
+ * Omitting it keeps the previous behaviour - whatever `getProvider` resolves -
+ * which is what a browser with a single legacy wallet needs.
+ */
+export async function connectWallet(rdns?: string): Promise<string> {
+  if (rdns) chooseWallet(rdns)
+
+  const provider = rdns ? (announced.get(rdns)?.provider ?? null) : getProvider()
   if (!provider) {
     throw new Error(
       'No wallet found. Install MetaMask, or another EIP-1193 wallet, to post to the chain.',
@@ -190,8 +325,43 @@ export async function connectWallet(): Promise<string> {
   const address = accounts[0]
   if (!address) throw new Error('The wallet returned no accounts.')
 
+  // Only once the connection succeeded. Clearing it earlier would leave a
+  // visitor who dismissed the wallet dialog looking connected on reload.
+  store(DISCONNECTED_KEY, null)
+
   await ensureChain(provider)
   return address.toLowerCase()
+}
+
+/**
+ * Hand back the authorisation, as far as the wallet allows.
+ *
+ * `wallet_revokePermissions` (EIP-2255) is the only way a site can actually
+ * revoke its own access, and support is uneven - MetaMask implements it, others
+ * reject the method outright. So the request is attempted and its failure
+ * ignored, and the visitor's intent is recorded locally either way: a wallet
+ * that refuses to revoke will keep answering `eth_accounts` with the address,
+ * and `currentAccount` is what declines to believe it.
+ *
+ * This is the honest version of the control that used to be here. That one only
+ * cleared a local copy and let the next reload undo it, which is worse than no
+ * button at all; this one survives the reload and genuinely revokes wherever
+ * the wallet cooperates.
+ */
+export async function disconnectWallet(): Promise<void> {
+  const provider = getProvider()
+  store(DISCONNECTED_KEY, '1')
+  store(SELECTED_KEY, null)
+  if (!provider) return
+
+  try {
+    await provider.request({
+      method: 'wallet_revokePermissions',
+      params: [{ eth_accounts: {} }],
+    })
+  } catch {
+    // Not implemented, or refused. The local flag above is the fallback.
+  }
 }
 
 /**
