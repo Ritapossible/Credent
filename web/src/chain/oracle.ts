@@ -139,9 +139,10 @@ function address(source: Dict, key: string, what: string): string {
  * contract rejects while unpacking its arguments - the node answers the whole
  * call with `execution failed` and no indication of which argument was wrong.
  *
- * Three views take an `Address` (`get_report`, `get_subject_attestations`,
- * `bond_for_next`) and so does one write (`open_engagement`); the rest take
- * strings and integers, which encode as themselves.
+ * The views this client calls with an `Address` are `get_report`,
+ * `get_subject_page`, `get_reports` and `bond_for_next`; one write takes one
+ * too (`open_engagement`). The rest take strings and integers, which encode as
+ * themselves.
  *
  * Exported for `wallet.ts` rather than reimplemented there. The writes hit the
  * same encoding, and a second copy of this is how the bug comes back on the
@@ -254,39 +255,6 @@ export async function getReport(subject: string): Promise<Report> {
   }
 }
 
-export async function getAttestation(id: number): Promise<ChainAttestation> {
-  const source = asDict(await call('get_attestation', [id]), 'get_attestation')
-
-  const verdict = str(source, 'verdict', 'get_attestation')
-  if (!(VERDICTS as readonly string[]).includes(verdict)) {
-    throw new Error(`get_attestation.verdict: unknown verdict "${verdict}"`)
-  }
-
-  const bondState = str(source, 'bond_state', 'get_attestation')
-  if (!(BOND_STATES as readonly string[]).includes(bondState)) {
-    throw new Error(`get_attestation.bond_state: unknown state "${bondState}"`)
-  }
-
-  return {
-    id: int(source, 'id', 'get_attestation'),
-    engagementId: str(source, 'engagement_id', 'get_attestation'),
-    attester: address(source, 'attester', 'get_attestation'),
-    subject: address(source, 'subject', 'get_attestation'),
-    claim: str(source, 'claim', 'get_attestation'),
-    evidence: str(source, 'evidence', 'get_attestation'),
-    createdAt: int(source, 'created_at', 'get_attestation'),
-    ageSeconds: int(source, 'age_seconds', 'get_attestation'),
-    verdict: verdict as Verdict,
-    gradeBp: int(source, 'fulfilled', 'get_attestation'),
-    substantiated: int(source, 'substantiated', 'get_attestation'),
-    confidence: int(source, 'confidence', 'get_attestation'),
-    repeatIndex: int(source, 'repeat_index', 'get_attestation'),
-    bond: big(source, 'bond', 'get_attestation'),
-    bondState: bondState as BondState,
-    weight: int(source, 'weight', 'get_attestation'),
-  }
-}
-
 /**
  * How many records any paged view will return at most.
  *
@@ -296,40 +264,6 @@ export async function getAttestation(id: number): Promise<ChainAttestation> {
  * below walks in these steps and stops on a short page.
  */
 export const PAGE_SIZE = 50
-
-/** One page of attestation ids about a subject. */
-export async function getSubjectAttestations(
-  subject: string,
-  offset = 0,
-  limit = PAGE_SIZE,
-): Promise<number[]> {
-  const raw = await call('get_subject_attestations', [
-    addressArg(subject, 'get_subject_attestations.subject'),
-    offset,
-    limit,
-  ])
-  if (!Array.isArray(raw)) {
-    throw new Error(`get_subject_attestations: expected a list, received ${JSON.stringify(raw)}`)
-  }
-  return raw.map((entry) => (typeof entry === 'bigint' ? Number(entry) : Number(entry)))
-}
-
-/**
- * Every attestation id about a subject, walking the pages.
- *
- * The unpaged view it replaces could not answer at all for a subject with a
- * long enough history, which is the subject whose page matters most.
- */
-export async function getAllSubjectAttestations(subject: string): Promise<number[]> {
-  const ids: number[] = []
-  for (;;) {
-    const page = await getSubjectAttestations(subject, ids.length, PAGE_SIZE)
-    ids.push(...page)
-    // A short page is the end. The contract clamps `limit`, so a full page is
-    // never proof there is nothing after it, and a short one always is.
-    if (page.length < PAGE_SIZE) return ids
-  }
-}
 
 /**
  * A page of attestations, with their engagement's scope, in one call.
