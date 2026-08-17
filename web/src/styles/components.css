@@ -39,10 +39,20 @@
   min-height: 72px;
 }
 
+/**
+ * The brand yields before the row does.
+ *
+ * `min-width: 0` and a clipping wordmark are the safety valve: the bar cannot wrap
+ * any more, so without somewhere for the overflow to go, a control cluster wider
+ * than the space left would push its last item off the screen instead. The
+ * wordmark giving up a few pixels is always the better failure, and below about
+ * 320px it is the only one left.
+ */
 .brand {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
+  min-width: 0;
   color: var(--ink-primary);
   text-decoration: none;
   font-weight: 600;
@@ -58,6 +68,8 @@
 .brand__text {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
   line-height: 1.15;
   letter-spacing: -0.02em;
   font-size: var(--step-1);
@@ -1791,6 +1803,35 @@
 
   .wallet-pill {
     padding: 0 var(--space-3);
+  }
+
+  /**
+   * Connected collapses to the wallet's own mark - a round button the size of the
+   * two beside it.
+   *
+   * Connecting used to swap a 74px "Connect" for a pill carrying an 18px icon, an
+   * 11-character monospace address and a caret: about 158px. On a 390px screen the
+   * row has roughly 342px for a 108px wordmark and three controls, so those extra
+   * 84px pushed the last of them - the menu button - straight off the edge. This
+   * makes the connected state *narrower* than the disconnected one, so connecting
+   * can no longer change what fits.
+   */
+  .wallet-pill--connected {
+    width: var(--control-h);
+    padding: 0;
+    border-radius: 50%;
+  }
+
+  .wallet-pill--connected .wallet-pill__addr,
+  .wallet-pill--connected .wallet-pill__caret {
+    display: none;
+  }
+
+  /* Alone in a 44px circle rather than beside an address, so it needs the size to
+     read as a status light. Only reached by a wallet that announced no icon. */
+  .wallet-pill__dot {
+    width: 10px;
+    height: 10px;
   }
 }
 

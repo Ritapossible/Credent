@@ -121,7 +121,9 @@ export default function ConnectButton() {
         ) : (
           <span className="wallet-pill__dot" aria-hidden="true" />
         )}
-        <span className="mono">{shortAddress(address)}</span>
+        {/* Hidden on a phone, where the pill collapses to the wallet's mark. The
+            full address is a tap away in the menu below. */}
+        <span className="mono wallet-pill__addr">{shortAddress(address)}</span>
         <svg
           className="wallet-pill__caret"
           viewBox="0 0 24 24"
