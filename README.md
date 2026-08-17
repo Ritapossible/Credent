@@ -10,7 +10,7 @@ post up front. Nobody is asked to trust a self-report, and nobody has to trust a
 single model call either.
 
 Deployed on GenLayer Studio at `0xc89c70FA0A04A1461582D17B856CC6f68A212C04`,
-inspectable through the [GenLayer Studio explorer](https://genlayer-studio.genlayer.com/).
+inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/).
 
 ---
 
@@ -125,6 +125,11 @@ The acceptance step is load-bearing. Without it anyone could name a victim as
 their provider, close the engagement alone, and have them graded on work they
 never agreed to — the bond is a price on that, not a bar to it. Only the named
 provider can accept, and they accept a scope whose digest is already committed.
+
+To run that sequence through the site rather than read about it,
+[WALKTHROUGH.md](WALKTHROUGH.md) has copy-paste values for every field, which
+account signs each step, and what each refusal means. It needs two accounts —
+the client cannot name itself as the provider, and only the provider can accept.
 
 ## Status
 

@@ -123,13 +123,19 @@ export const IS_CONFIGURED = CONFIG_ERROR === null && isDeployed(CONTRACT_ADDRES
  *
  * Studionet is overridden. The SDK's chain definition points at
  * `genlayer-explorer.vercel.app`, which is not where studionet transactions are
- * actually browsable - the Studio serves its own explorer at
- * `genlayer-studio.genlayer.com`, and the SDK's value sends every "view
- * transaction" link on the site to a page that cannot find the hash. The other
- * networks carry explorers that do resolve, so only this one is corrected.
+ * browsable, so every "view transaction" link on the site went to a page that
+ * could not find the hash. The other networks carry explorers that do resolve, so
+ * only this one is corrected.
+ *
+ * The host is `explorer-studio.genlayer.com`. This previously read
+ * `genlayer-studio.genlayer.com`, which does not resolve at all - it fails at
+ * DNS, so the override replaced a page that could not find the hash with a page
+ * that could not be reached. `explorer-studio.genlayer.com` serves the GenLayer
+ * Studio Explorer and answers `/tx/<hash>` and `/address/<address>`, which are
+ * the two shapes linked from here, `Docs.tsx` and `ConnectButton.tsx`.
  */
 const EXPLORER_OVERRIDE: Partial<Record<NetworkAlias, string>> = {
-  studionet: 'https://genlayer-studio.genlayer.com',
+  studionet: 'https://explorer-studio.genlayer.com',
 }
 
 export const EXPLORER_URL =
