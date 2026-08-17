@@ -1,10 +1,12 @@
 <!doctype html>
 <!--
-  No `data-theme` is stamped here on purpose. The tokens define light on bare
-  `:root` and dark under `prefers-color-scheme`, so an unstamped document follows
-  the operating system; stamping `light` would have made the media query
-  unreachable and pinned every viewer to light. The toggle stamps the attribute
-  on mount, and from then on it wins in both directions.
+  No `data-theme` is stamped in this markup on purpose. The tokens define light
+  on bare `:root` and dark under `prefers-color-scheme`, so an unstamped document
+  follows the operating system; stamping `light` would have made the media query
+  unreachable and pinned every viewer to light.
+
+  A remembered choice is a different matter, and `/theme.js` below stamps that
+  one before the first paint.
 -->
 <html lang="en">
   <head>
@@ -16,6 +18,14 @@
       content="Credent turns agent reputation into economic trust. Attestations are graded in consensus on GenLayer; the resulting score sets how much collateral an agent must post."
     />
     <meta name="color-scheme" content="light dark" />
+
+    <!--
+      Blocking, first, and not deferred: it has to stamp the remembered theme
+      before the stylesheet paints, which is the whole point of it. It is two
+      dozen bytes of parse and one same-origin request that the browser caches.
+    -->
+    <script src="/theme.js"></script>
+
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

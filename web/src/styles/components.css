@@ -64,8 +64,16 @@
   flex-wrap: wrap;
 }
 
+/* Inline-flex at the shared control height so the active link's pill lines up
+   with the Docs pill beside it rather than sitting 8px shorter. The horizontal
+   padding is `space-3`: at `space-4` the seven links plus the brand and the
+   actions cluster came to ~1014px, which overflowed the row and wrapped it in the
+   band between the 1040px collapse and about 1062px. */
 .nav__link {
-  padding: var(--space-2) var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
   border-radius: var(--radius-pill);
   color: var(--ink-secondary);
   text-decoration: none;
@@ -90,8 +98,11 @@
 }
 
 .nav__docs {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h);
   margin-left: var(--space-3);
-  padding: var(--space-2) var(--space-4);
+  padding: 0 var(--space-4);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-pill);
   background: var(--surface-1);
@@ -112,63 +123,57 @@
   box-shadow: var(--shadow-1), 0 0 0 3px var(--accent-wash);
 }
 
-.theme-toggle {
+/* The right-hand cluster: connect, theme, menu. Held together with a tighter gap
+   than the masthead's own so it reads as one group of controls rather than three
+   things that happen to be near each other, and ruled off from the nav by the
+   larger gap on its left. */
+.masthead__actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  margin-left: var(--space-3);
+}
+
+/* Square, icon-only, and the same height as everything else on the row: the
+   theme toggle and the menu button. */
+.icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
+  width: var(--control-h);
+  height: var(--control-h);
+  flex: none;
   border: 1px solid var(--rule-strong);
   border-radius: 50%;
   background: var(--surface-1);
   color: var(--ink-secondary);
   cursor: pointer;
-  flex: none;
   box-shadow: var(--shadow-1);
   transition:
     color 0.15s ease,
     border-color 0.15s ease;
 }
 
-.theme-toggle:hover {
+.icon-button:hover {
   border-color: var(--accent);
   color: var(--ink-primary);
 }
 
+/* Only exists once the nav has collapsed. */
 .masthead__toggle {
   display: none;
-  min-height: 42px;
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-pill);
-  background: var(--surface-1);
-  font-size: var(--step--1);
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: var(--shadow-1);
 }
 
-/* The wallet control rides at the end of the nav. On a wide screen the nav is
-   the masthead row, so this is the far right where it has always been; the
-   margin is what separates it from the Docs pill so the two do not read as a
-   pair of buttons. */
-.nav__wallet {
-  display: flex;
-  margin-left: var(--space-3);
-}
-
-/* Seven destinations plus the brand and the toggle stop fitting well before the
+/* Seven destinations plus the brand and the controls stop fitting well before the
    old 860px cut, where they silently wrapped onto a second row. */
 @media (max-width: 1040px) {
   .masthead__toggle {
     display: inline-flex;
-    order: 2;
   }
 
-  .theme-toggle {
-    order: 3;
-  }
-
+  /* Second row, below the brand and the controls, which keep the first. */
   .nav {
     order: 4;
     display: none;
@@ -183,64 +188,32 @@
     display: flex;
   }
 
+  /* Full-width rows in the drawer, rather than pills the width of their text. */
+  .nav__link,
+  .nav__docs {
+    display: flex;
+  }
+
   .nav__docs {
     margin-left: 0;
-    text-align: center;
-  }
-
-  /* Collapsed with the destinations rather than crowding the masthead row.
-     Ruled off because it is an action, not a seventh place to go. */
-  .nav__wallet {
-    margin: var(--space-2) 0 0;
-    padding-top: var(--space-3);
-    border-top: 1px solid var(--rule);
-  }
-
-  .nav__wallet .wallet-control,
-  .nav__wallet .wallet-button {
-    width: 100%;
-  }
-
-  .nav__wallet .wallet-button--connected {
     justify-content: center;
-  }
-
-  /* Anchored to the right edge of a full-width control, the menu would be as
-     wide as the drawer; letting it fill that width keeps the address readable. */
-  .nav__wallet .wallet-menu {
-    position: static;
-    width: 100%;
-    min-width: 0;
-    margin-top: var(--space-2);
-    box-shadow: none;
   }
 }
 
 /* On a phone the "reputation as collateral" line is ~160px wide, which pushed
    the theme toggle onto a second masthead row on its own. The tagline is the
-   expendable part - the wordmark and both controls are not. */
+   expendable part - the wordmark and the controls are not. */
 @media (max-width: 560px) {
   .masthead__inner {
-    gap: var(--space-3);
+    gap: var(--space-2);
   }
 
   .brand__sub {
     display: none;
   }
-}
 
-/* Touch targets. The masthead controls were sized for a cursor, and 38-42px is
-   under the 44px both platforms ask for. */
-@media (pointer: coarse) {
-  .masthead__toggle,
-  .theme-toggle,
-  .wallet-button--connected,
-  .nav__wallet .btn {
-    min-height: 44px;
-  }
-
-  .theme-toggle {
-    width: 44px;
+  .masthead__actions {
+    margin-left: var(--space-2);
   }
 }
 
@@ -1509,20 +1482,52 @@
 
 /* --- wallet ------------------------------------------------------------- */
 
-/* Anchors the account menu, which is positioned against this rather than the
-   masthead so it stays under the control at every width. */
 .wallet-control {
-  position: relative;
   flex: none;
-}
-
-.wallet-button {
-  flex: none;
-  white-space: nowrap;
 }
 
 /**
- * Connected is a control now, not a status chip.
+ * One pill, three states.
+ *
+ * Disconnected, connected and wrong-network are the same control in sequence, so
+ * they share their geometry here and differ only in skin below. They used to be
+ * built separately: the connect state borrowed `.btn--sm` at 36px, connected
+ * defined its own 38px, and wrong-network stacked a warning border on top of
+ * `.btn`'s solid accent fill - an amber-edged blue button captioned in dark ink,
+ * which is not a state anybody designed.
+ */
+.wallet-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  flex: none;
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font: inherit;
+  font-size: var(--step--1);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+/* Inherits `.btn`'s accent fill for the primary action; only the sizing and the
+   hover lift are overridden. A control in a sticky masthead should not rise off
+   the row under the cursor - it is fixed furniture, unlike a button in a page. */
+.wallet-pill--connect:hover {
+  transform: none;
+  box-shadow: var(--shadow-1), var(--glow);
+}
+
+/**
+ * Connected is a control, not a status chip.
  *
  * It used to be a bare `<span>`, on the reasoning that wallets expose no
  * disconnect a site can call and a button that did nothing would be a lie.
@@ -1530,30 +1535,20 @@
  * a button - and it also holds the address, the explorer link, and which of
  * several installed wallets is actually in use.
  */
-.wallet-button--connected {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 38px;
+.wallet-pill--connected {
   padding: 0 var(--space-3);
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-pill);
+  border-color: var(--rule-strong);
   background: var(--surface-1);
   color: var(--ink-secondary);
-  font-size: var(--step--1);
-  box-shadow: var(--shadow-1);
-  cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    color 0.15s ease;
+  font-weight: 500;
 }
 
-.wallet-button--connected:hover {
+.wallet-pill--connected:hover {
   border-color: var(--accent);
   color: var(--ink-primary);
 }
 
-.wallet-button__dot {
+.wallet-pill__dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -1561,36 +1556,91 @@
   flex: none;
 }
 
-.wallet-button__icon {
+.wallet-pill__icon {
   width: 18px;
   height: 18px;
   border-radius: 5px;
   flex: none;
 }
 
-.wallet-button__caret {
+.wallet-pill__caret {
   color: var(--ink-muted);
   flex: none;
 }
 
-.wallet-button--warn {
-  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+/* Amber, and readable in both modes: the tint is mixed into the surface rather
+   than laid over it, so the label keeps `--ink-primary` contrast. */
+.wallet-pill--warn {
+  border-color: color-mix(in srgb, var(--warning) 60%, var(--rule-strong));
+  background: color-mix(in srgb, var(--warning) 14%, var(--surface-1));
   color: var(--ink-primary);
+}
+
+.wallet-pill--warn:hover {
+  border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 22%, var(--surface-1));
+}
+
+/* The two labels each pill carries. The short one is for the phone masthead,
+   where the full phrase would push the row into wrapping. */
+.wallet-pill__short {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .wallet-pill__full {
+    display: none;
+  }
+
+  .wallet-pill__short {
+    display: inline;
+  }
+
+  .wallet-pill {
+    padding: 0 var(--space-3);
+  }
+}
+
+/* Shown while a wallet dialog is open and there is nothing to do but wait. */
+.spinner {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* --- account menu -------------------------------------------------------- */
 
+/**
+ * Anchored to the right edge of the actions cluster, not to the pill.
+ *
+ * Hung off the pill it was inset from the masthead's right edge by the width of
+ * the two icon buttons beside it, which on a 375px screen put its left edge a few
+ * pixels past the left of the screen. Aligning it with the row's own right edge
+ * is both where a dropdown belongs and the only version that cannot run off.
+ */
 .wallet-menu {
   position: absolute;
   top: calc(100% + var(--space-2));
   right: 0;
   z-index: 40;
   min-width: 260px;
+  max-width: calc(100vw - var(--space-6));
   padding: var(--space-2);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-lg);
   background: var(--surface-1);
   box-shadow: var(--shadow-2);
+  animation: wallet-panel-in 0.14s ease-out;
 }
 
 .wallet-menu__head {
@@ -1648,27 +1698,49 @@
 
 /* --- wallet picker ------------------------------------------------------- */
 
+/* Above the skip link, which also sits at 100 and would otherwise depend on
+   document order to lose. The panel is portalled into `<body>` - see the note in
+   `WalletModal.tsx` about the masthead's `backdrop-filter`, which was sizing this
+   `inset: 0` to the header strip. */
 .wallet-modal {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 200;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-4);
   background: rgb(0 0 0 / 0.55);
   backdrop-filter: blur(3px);
+  animation: wallet-modal-in 0.16s ease-out;
 }
 
 .wallet-modal__panel {
-  width: min(420px, 100%);
+  width: min(400px, 100%);
   max-height: min(80vh, 640px);
   overflow-y: auto;
   padding: var(--space-5);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-lg);
   background: var(--surface-1);
-  box-shadow: 0 24px 60px rgb(0 0 0 / 0.35);
+  box-shadow: var(--shadow-3);
+  animation: wallet-panel-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* A dialog that appears between two frames reads as a glitch; 200ms of settle is
+   the difference. The global `prefers-reduced-motion` rule in base.css already
+   collapses both of these to nothing. */
+@keyframes wallet-modal-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes wallet-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
 }
 
 .wallet-modal__head {
@@ -1727,9 +1799,10 @@
   align-items: center;
   gap: var(--space-3);
   width: 100%;
-  padding: var(--space-3);
+  min-height: 60px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--ink-primary);
   font: inherit;
@@ -1746,9 +1819,14 @@
   background: var(--surface-1);
 }
 
+/* Only the row being waited on stays lit. The others recede, which is how a
+   picker says "this one" without moving anything. */
 .wallet-option:disabled {
-  opacity: 0.6;
   cursor: progress;
+}
+
+.wallet-option:disabled:not(:has(.spinner)) {
+  opacity: 0.5;
 }
 
 .wallet-option__icon {
@@ -1773,6 +1851,8 @@
   font-weight: 700;
 }
 
+/* Two lines, for the install rows - the only ones with something to say beyond
+   the name. A detected wallet is one line: icon, name, badge. */
 .wallet-option__text {
   display: flex;
   flex-direction: column;
@@ -1784,6 +1864,15 @@
 .wallet-option__name {
   font-weight: 600;
   font-size: var(--step-0);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Pushes the badge to the right edge on the single-line rows, where the name is
+   not wrapped in `__text`. */
+.wallet-option > .wallet-option__name {
+  margin-right: auto;
 }
 
 .wallet-option__note {
@@ -1795,10 +1884,34 @@
 }
 
 .wallet-option__action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   flex: none;
   font-size: var(--step--1);
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
+}
+
+/**
+ * "Installed", not "Connect".
+ *
+ * Every row used to end in the word Connect, which is what the whole dialog is
+ * for and so told nobody anything - and the reverse-DNS id printed under each
+ * name, `io.metamask`, is a developer's tiebreaker rather than a caption. What a
+ * visitor needs from a row is that this wallet is one they already have; the id
+ * moved to the row's `title`.
+ */
+.wallet-option__badge {
+  flex: none;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .wallet-modal__foot {
@@ -1817,11 +1930,23 @@
   .wallet-modal__panel {
     width: 100%;
     max-height: 88vh;
-    border-radius: var(--radius-2) var(--radius-2) 0 0;
+    /* Was `--radius-2`, which is not a token this palette defines - the whole
+       declaration was invalid, so the sheet kept all four of its rounded corners
+       and squared none of the two that meet the bottom of the screen. */
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     border-bottom: 0;
     padding: var(--space-4);
     /* Clears the home indicator on iOS, where the sheet reaches the edge. */
     padding-bottom: calc(var(--space-5) + env(safe-area-inset-bottom));
+    /* A sheet rises from the edge it is attached to rather than scaling up from
+       the middle of the screen. */
+    animation: wallet-sheet-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  @keyframes wallet-sheet-in {
+    from {
+      transform: translateY(100%);
+    }
   }
 }
 

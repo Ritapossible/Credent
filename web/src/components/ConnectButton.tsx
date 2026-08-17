@@ -58,13 +58,29 @@ export default function ConnectButton() {
   if (address === null) {
     return (
       <div className="wallet-control" ref={wrap}>
+        {/* The site's primary call to action, so it wears the primary button -
+            at the shared control height rather than `btn--sm`'s 36px, which left
+            it visibly short of the two icon buttons beside it. */}
         <button
           type="button"
-          className="btn btn--sm wallet-button wallet-button--connect"
+          className="btn wallet-pill wallet-pill--connect"
           onClick={openPicker}
           disabled={connecting}
         >
-          {connecting ? 'Connecting…' : 'Connect wallet'}
+          {connecting ? (
+            <>
+              <span className="spinner" aria-hidden="true" />
+              Connecting…
+            </>
+          ) : (
+            <>
+              {/* Two labels, one shown at a time. On a phone the full phrase is
+                  a third of the masthead row; swapping it in CSS keeps the
+                  control on that row instead of in the menu. */}
+              <span className="wallet-pill__full">Connect wallet</span>
+              <span className="wallet-pill__short">Connect</span>
+            </>
+          )}
         </button>
         {picker}
       </div>
@@ -78,11 +94,13 @@ export default function ConnectButton() {
       <div className="wallet-control" ref={wrap}>
         <button
           type="button"
-          className="btn btn--sm wallet-button wallet-button--warn"
+          className="wallet-pill wallet-pill--warn"
           onClick={() => void connect()}
           title={`Your wallet is on another network. This build reads ${NETWORK}.`}
         >
-          Switch to {NETWORK}
+          <WarnIcon />
+          <span className="wallet-pill__full">Switch to {NETWORK}</span>
+          <span className="wallet-pill__short">Switch</span>
         </button>
       </div>
     )
@@ -92,20 +110,20 @@ export default function ConnectButton() {
     <div className="wallet-control" ref={wrap}>
       <button
         type="button"
-        className="wallet-button wallet-button--connected"
+        className="wallet-pill wallet-pill--connected"
         onClick={() => setMenuOpen((open) => !open)}
         aria-expanded={menuOpen}
         aria-haspopup="menu"
         title={address}
       >
         {active ? (
-          <img className="wallet-button__icon" src={active.icon} alt="" aria-hidden />
+          <img className="wallet-pill__icon" src={active.icon} alt="" aria-hidden />
         ) : (
-          <span className="wallet-button__dot" aria-hidden="true" />
+          <span className="wallet-pill__dot" aria-hidden="true" />
         )}
         <span className="mono">{shortAddress(address)}</span>
         <svg
-          className="wallet-button__caret"
+          className="wallet-pill__caret"
           viewBox="0 0 24 24"
           width="14"
           height="14"
@@ -155,5 +173,22 @@ export default function ConnectButton() {
         </div>
       ) : null}
     </div>
+  )
+}
+
+/** Marks the wrong-network pill as a warning rather than a second CTA. */
+function WarnIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">
+      <path
+        d="M12 4.5l8 14.5H4l8-14.5z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path d="M12 10v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="12" cy="16.6" r="1" fill="currentColor" />
+    </svg>
   )
 }

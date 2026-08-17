@@ -53,10 +53,27 @@ const FOOTER_NAV = [
 type Theme = 'dark' | 'light'
 
 /**
+ * Where the chosen theme is remembered. Spelled the same way in
+ * `public/theme.js`, which is what applies it before the first paint and cannot
+ * import from here. Changing one means changing both.
+ */
+const THEME_KEY = 'credent.theme'
+
+function storedTheme(): Theme | null {
+  try {
+    const choice = window.localStorage.getItem(THEME_KEY)
+    return choice === 'dark' || choice === 'light' ? choice : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Theme starts from whatever already painted, so the toggle agrees with the page
- * rather than flipping on mount. The document ships unstamped, in which case the
- * paint came from `prefers-color-scheme` and that is what has to be read back -
- * defaulting to light here would show a dark page behind a sun icon.
+ * rather than flipping on mount. `theme.js` has already stamped a remembered
+ * choice by now; an unstamped document means there is none and the paint came
+ * from `prefers-color-scheme`, which is what has to be read back - defaulting to
+ * light here would show a dark page behind a sun icon.
  */
 function initialTheme(): Theme {
   const stamped = document.documentElement.getAttribute('data-theme')
@@ -66,12 +83,42 @@ function initialTheme(): Theme {
 
 export default function Layout() {
   const [theme, setTheme] = useState<Theme>(initialTheme)
+  /**
+   * Whether the theme is the visitor's own choice or just the OS showing
+   * through. Only a choice is persisted: writing the resolved value on mount
+   * would silently pin every first-time viewer to whatever their OS said at that
+   * moment, and they would stop following it afterwards.
+   */
+  const [chosen, setChosen] = useState(() => storedTheme() !== null)
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
+
+  // Keep following the OS until the visitor overrides it, which is what an
+  // unstamped document already does in CSS - this only keeps the icon and the
+  // React state in step when the setting changes while the tab is open.
+  useEffect(() => {
+    if (chosen) return
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const sync = () => setTheme(media.matches ? 'dark' : 'light')
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  }, [chosen])
+
+  const toggleTheme = () => {
+    const next: Theme = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    setChosen(true)
+    try {
+      window.localStorage.setItem(THEME_KEY, next)
+    } catch {
+      // Storage blocked. The page still switches; it just will not survive a
+      // reload, which is not worth failing the toggle over.
+    }
+  }
 
   useEffect(() => {
     setMenuOpen(false)
@@ -130,16 +177,6 @@ export default function Layout() {
             </span>
           </NavLink>
 
-          <button
-            type="button"
-            className="masthead__toggle"
-            aria-expanded={menuOpen}
-            aria-controls="primary-nav"
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            {menuOpen ? 'Close' : 'Menu'}
-          </button>
-
           <nav
             id="primary-nav"
             className={`nav${menuOpen ? ' nav--open' : ''}`}
@@ -164,24 +201,43 @@ export default function Layout() {
             >
               Docs
             </NavLink>
-
-            {/* Inside the nav, so it collapses into the menu on a phone instead
-                of crowding the masthead row. On a wide screen the nav is that
-                row, so this still renders where it always did. */}
-            <div className="nav__wallet">
-              <ConnectButton />
-            </div>
           </nav>
 
-          <button
-            type="button"
-            className="theme-toggle"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-          >
-            {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-          </button>
+          {/**
+           * Actions, not destinations - and grouped as such.
+           *
+           * The wallet control used to sit at the end of the nav, which put the
+           * one button on the page that spends money in the same flex row as
+           * seven links, at a different height from both of its neighbours. Every
+           * wallet-bearing site puts connect in a right-hand cluster with the
+           * other chrome controls, and this group is that cluster: it holds its
+           * place at every width, so the wallet no longer disappears into a
+           * hamburger menu on a phone.
+           */}
+          <div className="masthead__actions">
+            <ConnectButton />
+
+            <button
+              type="button"
+              className="icon-button"
+              onClick={toggleTheme}
+              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            >
+              {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+            </button>
+
+            <button
+              type="button"
+              className="icon-button masthead__toggle"
+              aria-expanded={menuOpen}
+              aria-controls="primary-nav"
+              aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+              onClick={() => setMenuOpen((open) => !open)}
+            >
+              {menuOpen ? <CloseIcon /> : <MenuIcon />}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -298,6 +354,29 @@ function MoonIcon() {
         fill="currentColor"
         stroke="none"
       />
+    </svg>
+  )
+}
+
+/**
+ * The menu button is an icon now rather than the words "Menu" and "Close".
+ *
+ * Squaring it off is what let the wallet control stay on the masthead row on a
+ * phone: the two words were ~80px of the ~330px available, and the pill they
+ * sat in was a third distinct control height beside the theme toggle.
+ */
+function MenuIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+      <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   )
 }

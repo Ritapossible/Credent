@@ -89,6 +89,11 @@
   --radius-lg: 20px;
   --radius-pill: 999px;
 
+  /* One height for every control in the masthead row. They were 36px, 38px and
+     42px, which is the kind of misalignment that reads as sloppiness long before
+     anyone can say what is wrong with it. */
+  --control-h: 40px;
+
   /* Elevation is carried by soft, wide, low-opacity shadows rather than borders. */
   --shadow-1: 0 4px 6px rgba(16, 24, 40, 0.04);
   --shadow-2: 0 2px 4px rgba(16, 24, 40, 0.04), 0 16px 32px -12px rgba(16, 24, 40, 0.14);
@@ -96,6 +101,15 @@
   --glow: 0 0 24px rgba(0, 139, 255, 0.3);
 
   --shell: 1140px;
+}
+
+/* Touch targets. 40px is sized for a cursor and under the 44px both mobile
+   platforms ask for. Raising the token raises the whole masthead row together,
+   which is the point of there being one. */
+@media (pointer: coarse) {
+  :root {
+    --control-h: 44px;
+  }
 }
 
 @media (prefers-color-scheme: dark) {
