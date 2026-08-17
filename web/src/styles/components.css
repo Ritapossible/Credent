@@ -17,12 +17,26 @@
   border-bottom: 1px solid var(--rule);
 }
 
+/**
+ * One row, always, and it never changes height.
+ *
+ * This used to be `flex-wrap: wrap` with the mobile drawer as a second flex line.
+ * A wrapping flex container distributes its cross-axis space by `align-content`,
+ * which defaults to `stretch`: with one line, that line was stretched to the full
+ * 72px and its contents centred in it; the moment the drawer opened and made a
+ * second line, the first line collapsed to its own 44px and everything on it -
+ * brand, connect, theme, menu - jumped 14px up the screen. Pressing the menu
+ * button visibly knocked the row out of alignment.
+ *
+ * So the bar does not wrap at all, and the drawer hangs below it as a panel
+ * instead of joining the flow.
+ */
 .masthead__inner {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-4);
   min-height: 72px;
-  flex-wrap: wrap;
 }
 
 .brand {
@@ -57,18 +71,20 @@
   text-transform: uppercase;
 }
 
+/* No `flex-wrap` here either: a wrapped nav would grow the bar's height and put
+   the row back out of alignment for the same reason the bar itself no longer
+   wraps. The breakpoint below is what keeps it from ever needing to. */
 .nav {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  flex-wrap: wrap;
 }
 
 /* Inline-flex at the shared control height so the active link's pill lines up
    with the Docs pill beside it rather than sitting 8px shorter. The horizontal
    padding is `space-3`: at `space-4` the seven links plus the brand and the
-   actions cluster came to ~1014px, which overflowed the row and wrapped it in the
-   band between the 1040px collapse and about 1062px. */
+   actions cluster came to ~1014px, which is wider than the row has at the
+   narrowest width that still shows them. */
 .nav__link {
   display: inline-flex;
   align-items: center;
@@ -166,22 +182,42 @@
   display: none;
 }
 
-/* Seven destinations plus the brand and the controls stop fitting well before the
-   old 860px cut, where they silently wrapped onto a second row. */
-@media (max-width: 1040px) {
+/* Seven destinations plus the brand and the controls come to about 960px. The cut
+   is at 1080 rather than hard against that number so the row keeps ~75px of slack
+   at its narrowest - with the bar no longer allowed to wrap, running out of width
+   would mean overflow rather than a second line. */
+@media (max-width: 1080px) {
   .masthead__toggle {
     display: inline-flex;
   }
 
-  /* Second row, below the brand and the controls, which keep the first. */
+  /**
+   * A panel hanging under the bar, not a row inside it.
+   *
+   * Absolute, so the bar above keeps its height and nothing on it moves when this
+   * opens. Opaque, because it hangs over the page rather than pushing it down -
+   * the masthead's own background is semi-transparent and would show the content
+   * scrolling behind the links.
+   */
   .nav {
-    order: 4;
+    position: absolute;
+    top: calc(100% + var(--space-2));
+    left: var(--space-5);
+    right: var(--space-5);
+    z-index: 30;
     display: none;
-    width: 100%;
     flex-direction: column;
     align-items: stretch;
-    gap: var(--space-2);
-    padding-bottom: var(--space-4);
+    gap: var(--space-1);
+    /* Tall enough to overflow a landscape phone at seven links plus the pill. */
+    max-height: calc(100dvh - 96px);
+    overflow-y: auto;
+    padding: var(--space-3);
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-lg);
+    background: var(--surface-1);
+    box-shadow: var(--shadow-3);
+    animation: panel-in 0.16s ease-out;
   }
 
   .nav--open {
@@ -195,8 +231,20 @@
   }
 
   .nav__docs {
+    margin-top: var(--space-2);
     margin-left: 0;
     justify-content: center;
+  }
+}
+
+/* Between a phone and the desktop row, the drawer is a panel under the menu
+   button rather than a full-width sheet - seven links stacked across 950px of
+   tablet would be a strange shape. It goes edge to edge only where edge to edge
+   is narrow. */
+@media (min-width: 561px) and (max-width: 1080px) {
+  .nav {
+    left: auto;
+    width: 20rem;
   }
 }
 
@@ -243,11 +291,26 @@
   pointer-events: none;
 }
 
+/**
+ * Two columns: the claim, and the thing the claim is about.
+ *
+ * The copy used to be a single left-ranged column, which left the whole right
+ * half of the fold as bare plane - the widest, most-looked-at space on the site
+ * holding nothing. The figure fills it with one agent's actual standing, so the
+ * headline is read next to the number it is describing.
+ */
+.hero__inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
+  gap: var(--space-7);
+  align-items: center;
+  padding-block: var(--space-8);
+}
+
 /* Left-aligned, because the pill above the headline is gone and a centred block
    with nothing over it floats. Ranged left, the headline, the lede and the
    buttons share one edge with every section below the fold. */
-.hero__inner {
-  padding-block: var(--space-8) var(--space-8);
+.hero__copy {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -257,13 +320,14 @@
 
 .hero__title {
   font-size: var(--step-hero);
-  max-width: 20ch;
   letter-spacing: -0.035em;
   text-wrap: balance;
 }
 
 .hero .lede {
-  max-width: 54ch;
+  /* The column is the measure now; 54ch was set when it spanned the page and
+     would no longer bind. */
+  max-width: 46ch;
 }
 
 .hero__actions {
@@ -271,6 +335,135 @@
   gap: var(--space-3);
   flex-wrap: wrap;
   margin-top: var(--space-3);
+}
+
+/* --- the hero figure ----------------------------------------------------- */
+
+.hero__figure {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.standing {
+  width: 100%;
+  /* Wide enough that the gutter between the copy and the card reads as a column
+     gap rather than as more empty plane, which is the problem being fixed. */
+  max-width: 30rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  /* The deepest elevation on the site: it is the one object sitting over the
+     hero's wash rather than on the page plane. */
+  box-shadow: var(--shadow-3);
+}
+
+.standing__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/* Says which of the two states this is - a real record or the neutral prior -
+   because the panel is honest about not having data rather than inventing some. */
+.standing__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.standing__chip::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: var(--glow);
+}
+
+.standing__addr {
+  color: var(--ink-secondary);
+  text-decoration: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.standing__addr:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.standing__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--rule);
+}
+
+.standing__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+}
+
+.standing__row + .standing__row {
+  border-top: 1px solid var(--rule);
+}
+
+.standing__row dt {
+  font-size: var(--step--1);
+  color: var(--ink-secondary);
+}
+
+.standing__row dd {
+  margin: 0;
+  color: var(--ink-primary);
+  font-weight: 600;
+}
+
+.standing__foot {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+/* One column below the point where 26rem of card and a readable measure of text
+   stop fitting side by side. The figure stays - it is the product, not decoration
+   - and follows the buttons. */
+@media (max-width: 900px) {
+  .hero__inner {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-6);
+    padding-block: var(--space-7);
+  }
+
+  .hero__figure {
+    justify-content: flex-start;
+  }
+
+  .standing {
+    max-width: none;
+  }
 }
 
 /* --- structure ---------------------------------------------------------- */
@@ -1640,7 +1833,7 @@
   border-radius: var(--radius-lg);
   background: var(--surface-1);
   box-shadow: var(--shadow-2);
-  animation: wallet-panel-in 0.14s ease-out;
+  animation: panel-in 0.14s ease-out;
 }
 
 .wallet-menu__head {
@@ -1724,7 +1917,7 @@
   border-radius: var(--radius-lg);
   background: var(--surface-1);
   box-shadow: var(--shadow-3);
-  animation: wallet-panel-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: panel-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 /* A dialog that appears between two frames reads as a glitch; 200ms of settle is
@@ -1736,7 +1929,7 @@
   }
 }
 
-@keyframes wallet-panel-in {
+@keyframes panel-in {
   from {
     opacity: 0;
     transform: translateY(8px) scale(0.98);
@@ -1829,26 +2022,14 @@
   opacity: 0.5;
 }
 
+/* Carries both an installed wallet's own `data:` icon and the inline marks in the
+   install list. An inline SVG keeps its aspect ratio inside this box rather than
+   stretching to it, so a mark like MetaMask's 35x33 fox is not squashed square. */
 .wallet-option__icon {
   width: 32px;
   height: 32px;
   border-radius: 8px;
   flex: none;
-}
-
-/* Stands in for an icon in the install list, where shipping third-party marks
-   is not an option. The initial is enough to anchor the row visually. */
-.wallet-option__glyph {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex: none;
-  border-radius: 8px;
-  background: var(--accent-wash);
-  color: var(--accent);
-  font-weight: 700;
 }
 
 /* Two lines, for the install rows - the only ones with something to say beyond

@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom'
 
+import ScoreMeter from '../components/ScoreMeter'
 import StatTile from '../components/StatTile'
 import { useDeployedPolicy, useRegistry } from '../chain/useOracle'
-import { CREDENT_POLICY } from '../core/policy'
+import type { AgentReport } from '../chain/registry'
+import { CREDENT_POLICY, NEUTRAL_BP, type Policy } from '../core/policy'
 import { repeatPenalty } from '../core/simulate'
 import { bpToScore, formatBond, formatCount, formatDuration, shortAddress } from '../core/format'
 
@@ -51,21 +53,28 @@ export default function Overview() {
     <>
       <section className="hero">
         <div className="shell hero__inner">
-          <h1 className="hero__title">
-            An agent's history should decide what it has to put up front.
-          </h1>
-          <p className="lede">
-            Credent grades counterparty attestations in consensus on GenLayer and turns the result
-            into a collateral requirement. Nobody is asked to trust a self-report.
-          </p>
-          <div className="hero__actions">
-            <Link className="btn" to="/agents">
-              Browse the registry
-            </Link>
-            <Link className="btn btn--ghost" to="/docs">
-              Read the docs
-            </Link>
+          <div className="hero__copy">
+            <h1 className="hero__title">
+              An agent's history should decide what it has to put up front.
+            </h1>
+            <p className="lede">
+              Credent grades counterparty attestations in consensus on GenLayer and turns the result
+              into a collateral requirement. Nobody is asked to trust a self-report.
+            </p>
+            <div className="hero__actions">
+              <Link className="btn" to="/agents">
+                Browse the registry
+              </Link>
+              <Link className="btn btn--ghost" to="/docs">
+                Read the docs
+              </Link>
+            </div>
           </div>
+
+          {/* The right half of the fold used to be empty plane. It carries the
+              thing the sentence on the left is about instead - and it is the real
+              record, read from the deployed contract, rather than a mock. */}
+          <StandingPreview agent={strongest} policy={policy} />
         </div>
       </section>
 
@@ -169,5 +178,65 @@ export default function Overview() {
         ) : null}
       </div>
     </>
+  )
+}
+
+/**
+ * The hero's figure: one agent's standing, as the contract computes it.
+ *
+ * Real or nothing. When the registry read has landed it is the top agent's own
+ * record; until then - and on a deployment with an empty registry, or a chain the
+ * browser cannot reach - it is the neutral prior, which is a true statement about
+ * an agent with no history rather than a placeholder dressed up as data. That is
+ * why the chip says which of the two you are looking at, and why there are no
+ * invented numbers in either case: `ScoreMeter` already explains a score of 50
+ * with nothing behind it in its own words.
+ */
+function StandingPreview({ agent, policy }: { agent: AgentReport | null; policy: Policy }) {
+  const report = agent?.report ?? null
+
+  return (
+    <aside className="hero__figure" aria-label="A reputation score as the contract computes it">
+      <div className="standing">
+        <div className="standing__head">
+          <span className="standing__chip">
+            {agent ? 'Live from the contract' : 'No history yet'}
+          </span>
+          {agent ? (
+            <Link className="standing__addr mono" to={`/agents/${agent.address}`}>
+              {shortAddress(agent.address)}
+            </Link>
+          ) : null}
+        </div>
+
+        <ScoreMeter
+          scoreBp={report?.scoreBp ?? NEUTRAL_BP}
+          counted={report?.nCounted ?? 0}
+          size="hero"
+          label="Reputation score"
+        />
+
+        <dl className="standing__rows">
+          <div className="standing__row">
+            <dt>Attestations counted</dt>
+            <dd className="mono">{report ? formatCount(report.nCounted) : '—'}</dd>
+          </div>
+          <div className="standing__row">
+            <dt>Distinct counterparties</dt>
+            <dd className="mono">{report ? formatCount(report.nDistinctAttesters) : '—'}</dd>
+          </div>
+          <div className="standing__row">
+            <dt>Weight half-life</dt>
+            <dd className="mono">{formatDuration(policy.halfLifeSeconds)}</dd>
+          </div>
+        </dl>
+
+        <p className="standing__foot">
+          {agent
+            ? 'Read from the deployed contract and recomputed in your browser by a port pinned to the same engine.'
+            : 'Nothing on this deployment carries weight yet. Fifty is the prior, not a verdict.'}
+        </p>
+      </div>
+    </aside>
   )
 }

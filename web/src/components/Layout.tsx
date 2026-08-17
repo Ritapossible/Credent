@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import ConnectButton from './ConnectButton'
@@ -92,6 +92,8 @@ export default function Layout() {
   const [chosen, setChosen] = useState(() => storedTheme() !== null)
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
+  /** The bar and its drawer. A press anywhere outside this closes the drawer. */
+  const bar = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -123,6 +125,29 @@ export default function Layout() {
   useEffect(() => {
     setMenuOpen(false)
   }, [location.pathname])
+
+  /**
+   * Close the drawer on an outside press or Escape.
+   *
+   * It hangs over the page now instead of pushing it down, so a visitor who opens
+   * it and then reaches for the content underneath needs the panel to get out of
+   * the way - and a press that lands on the page behind is that request.
+   */
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (event: MouseEvent) => {
+      if (!bar.current?.contains(event.target as Node)) setMenuOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
 
   /**
    * Scroll-to-top on navigation, except when the link carried a hash - the docs
@@ -168,7 +193,7 @@ export default function Layout() {
       </a>
 
       <header className="masthead">
-        <div className="shell masthead__inner">
+        <div className="shell masthead__inner" ref={bar}>
           <NavLink to="/" className="brand" aria-label="Credent home">
             <Mark />
             <span className="brand__text">

@@ -17,19 +17,27 @@ import { createPortal } from 'react-dom'
 
 import { useWallet } from '../chain/useWallet'
 import type { WalletInfo } from '../chain/wallet'
+import { MetaMaskLogo, OkxLogo, RabbyLogo } from './WalletLogos'
 
 /**
  * Where to get a wallet, when none is installed.
  *
- * No logos: the icons in the connected case arrive as `data:` URIs from the
- * wallets themselves, which the site's CSP allows, while bundling third-party
- * marks here would mean either remote images the CSP blocks or copies of
- * trademarks this repo has no licence to ship.
+ * Each row carries the wallet's own mark - see `WalletLogos.tsx`. It used to
+ * carry the first letter of the name in a circle, on the reasoning that a remote
+ * logo would be blocked by the CSP and a bundled one was a trademark this repo
+ * has no licence to redistribute. The first half was right and is why these are
+ * inline SVG; the second confused redistributing a mark with using it to name the
+ * thing it belongs to, which is the one use that needs no licence.
  */
 const INSTALL = [
-  { name: 'MetaMask', href: 'https://metamask.io/download/', note: 'The most widely supported' },
-  { name: 'Rabby', href: 'https://rabby.io/', note: 'Built for multiple chains' },
-  { name: 'OKX Wallet', href: 'https://www.okx.com/web3', note: 'Extension and mobile' },
+  {
+    name: 'MetaMask',
+    href: 'https://metamask.io/download/',
+    note: 'The most widely supported',
+    Logo: MetaMaskLogo,
+  },
+  { name: 'Rabby', href: 'https://rabby.io/', note: 'Built for multiple chains', Logo: RabbyLogo },
+  { name: 'OKX Wallet', href: 'https://www.okx.com/web3', note: 'Extension and mobile', Logo: OkxLogo },
 ]
 
 /**
@@ -145,13 +153,23 @@ export default function WalletModal({ wallets, connecting, error, onPick, onClos
     }
   }, [])
 
-  // The page behind must not scroll under the dialog on a phone, where the
-  // dialog is a sheet and the page would otherwise slide around beneath it.
+  /**
+   * The page behind must not scroll under the dialog on a phone, where the dialog
+   * is a sheet and the page would otherwise slide around beneath it.
+   *
+   * Locked on `<html>` rather than `<body>`: hiding the body's overflow while the
+   * document is scrolled makes some browsers snap the page back to the top, so
+   * opening the picker halfway down a page threw the content behind it upward.
+   * `<html>` keeps the scroll offset. `scrollbar-gutter: stable` in base.css is
+   * the other half - it stops the desktop layout from shifting sideways as the
+   * scrollbar goes away.
+   */
   useEffect(() => {
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const root = document.documentElement
+    const previous = root.style.overflow
+    root.style.overflow = 'hidden'
     return () => {
-      document.body.style.overflow = previous
+      root.style.overflow = previous
     }
   }, [])
 
@@ -223,9 +241,7 @@ export default function WalletModal({ wallets, connecting, error, onPick, onClos
                     target="_blank"
                     rel="noreferrer noopener"
                   >
-                    <span className="wallet-option__glyph" aria-hidden="true">
-                      {item.name.slice(0, 1)}
-                    </span>
+                    <item.Logo />
                     <span className="wallet-option__text">
                       <span className="wallet-option__name">{item.name}</span>
                       <span className="wallet-option__note">{item.note}</span>
