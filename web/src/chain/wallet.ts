@@ -553,24 +553,43 @@ async function submit(
  */
 export function openEngagement(
   account: string,
-  input: { engagementId: string; provider: string; scope: string },
+  input: { engagementId: string; provider: string; scope: string; stake?: bigint },
 ): Promise<WriteResult> {
   return submit(account, 'open_engagement', [
     input.engagementId,
     addressArg(input.provider, 'open_engagement.provider'),
     input.scope,
+    // The declared value of the work, in wei, and what the provider's collateral
+    // will be priced against when they accept. Committed here for the same
+    // reason the scope digest is: a stake the client could raise afterwards
+    // would be a bill the provider never agreed to. Omitted means zero, which is
+    // an engagement with the collateral layer switched off.
+    input.stake ?? 0n,
   ])
 }
 
 /**
- * Agree to be graded on a scope someone proposed for you. Provider only.
+ * Take on the work, posting collateral priced by your own reputation. Provider
+ * only.
  *
- * The consent step. An engagement names a provider who never asked to be named,
- * so until they accept it is a proposal and nothing about it can reach a score -
- * which is what stops attestation being usable against a stranger.
+ * Still the consent step - an engagement names a provider who never asked to be
+ * named, so until they accept it is a proposal and nothing about it can reach a
+ * score - and now also the step where the score costs money. `collateral` is the
+ * transaction's value, and the contract checks it against what
+ * `collateral_quote` says this provider owes for this engagement's stake before
+ * the engagement opens. Anything above the requirement comes straight back, so
+ * over-sending is safe and under-sending is `collateral_below_required`.
+ *
+ * Callers should take the figure from `collateralQuote` at submit time rather
+ * than from a constant: it falls as the provider's score rises, so a hard-coded
+ * amount is wrong for every agent but one.
  */
-export function acceptEngagement(account: string, engagementId: string): Promise<WriteResult> {
-  return submit(account, 'accept_engagement', [engagementId])
+export function acceptEngagement(
+  account: string,
+  engagementId: string,
+  collateral = 0n,
+): Promise<WriteResult> {
+  return submit(account, 'accept_engagement', [engagementId], collateral)
 }
 
 /** Mark the work finished, which is what opens attestation. Either counterparty. */
@@ -602,4 +621,27 @@ export function attest(
 /** Return a releasable bond once its lock has elapsed. Attester only. */
 export function reclaimBond(account: string, attestationId: number): Promise<WriteResult> {
   return submit(account, 'reclaim_bond', [attestationId])
+}
+
+/**
+ * Take back work collateral. Provider only.
+ *
+ * Two ways to reach it: the client attested and the grade did not forfeit, or
+ * nobody attested at all and the engagement has been closed for the dispute
+ * window. The second is what stops a counterparty who declines to grade from
+ * holding an agent's working capital indefinitely.
+ */
+export function releaseCollateral(account: string, engagementId: string): Promise<WriteResult> {
+  return submit(account, 'release_collateral', [engagementId])
+}
+
+/**
+ * Take forfeited collateral. Client only.
+ *
+ * Only claimable once an attestation actually forfeited it, and only an
+ * attestation substantiated enough to carry weight in the score can: accusation
+ * alone moves no money.
+ */
+export function claimCollateral(account: string, engagementId: string): Promise<WriteResult> {
+  return submit(account, 'claim_collateral', [engagementId])
 }

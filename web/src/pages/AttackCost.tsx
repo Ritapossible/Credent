@@ -6,6 +6,8 @@ import StatTile from '../components/StatTile'
 import { rangeFill } from '../components/rangeFill'
 import { useEffectivePolicy } from '../chain/useOracle'
 import { costCurve, repeatPath, repeatPenalty, sybilFleetPath } from '../core/simulate'
+import { collateralRequired } from '../core/collateral'
+import { NEUTRAL_BP } from '../core/policy'
 import {
   NATIVE_DECIMALS,
   NATIVE_SYMBOL,
@@ -14,6 +16,15 @@ import {
   formatCount,
   formatUnits,
 } from '../core/format'
+
+/**
+ * The engagement the payoff is measured against.
+ *
+ * A hundred whole tokens. The *ratio* between what a score saves and what it
+ * costs to manufacture is the same at any stake; a concrete figure is only here
+ * so the comparison reads as money on both sides.
+ */
+const EXAMPLE_STAKE = 100n * 10n ** 18n
 
 export default function AttackCost() {
   const [targetScore, setTargetScore] = useState(85)
@@ -34,6 +45,18 @@ export default function AttackCost() {
 
   const fleet = sybilFleetPath(targetBp, gradeBp, policy)
   const repeat = repeatPath(targetBp, gradeBp, policy)
+
+  // What the manufactured score would actually be worth. Cost is only half an
+  // economic argument: the collateral discount is the prize, and it is bounded
+  // by the policy floor however good the bought record looks.
+  const savedPerJob =
+    collateralRequired(NEUTRAL_BP, EXAMPLE_STAKE, policy) -
+    collateralRequired(targetBp, EXAMPLE_STAKE, policy)
+  const cheapestAttack = fleet.count === null ? null : fleet.totalBond
+  const jobsToBreakEven =
+    cheapestAttack === null || savedPerJob <= 0n
+      ? null
+      : (cheapestAttack + savedPerJob - 1n) / savedPerJob
   const curve = useMemo(() => costCurve(gradeBp, policy), [gradeBp, policy])
 
   /**
@@ -221,6 +244,29 @@ export default function AttackCost() {
               ))}
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section className="band">
+        <div className="notice">
+          <h3 className="notice__title">What the bought score would be worth</h3>
+          <p>
+            Cost is half the argument. A score of {targetScore} saves{' '}
+            <strong>{formatBond(savedPerJob)}</strong> of collateral on every{' '}
+            {formatBond(EXAMPLE_STAKE)} engagement it takes on, against{' '}
+            {formatBond(collateralRequired(NEUTRAL_BP, EXAMPLE_STAKE, policy))} for an agent with no
+            history.{' '}
+            {jobsToBreakEven === null
+              ? 'At this target the attack does not reach the score at all, so there is nothing to earn back.'
+              : cheapestAttack === 0n
+                ? 'On this deployment the bond is zero, so the discount costs nothing to manufacture - which is precisely what the bond exists to prevent.'
+                : `The cheapest way to manufacture it costs ${formatBond(
+                    cheapestAttack as bigint,
+                  )}, so it pays for itself only after ${formatCount(
+                    Number(jobsToBreakEven),
+                  )} such engagements - each of which someone has to actually hand over, and each of which is graded when it closes.`}{' '}
+            <Link to="/docs#work-collateral">How collateral is priced →</Link>
+          </p>
         </div>
       </section>
 

@@ -14,7 +14,9 @@
  * runs everything else.
  */
 
-import { NATIVE_SYMBOL, formatBond, formatUnits } from '../src/core/format'
+import { NATIVE_SYMBOL, formatBond, formatUnits, parseTokens } from '../src/core/format'
+import { collateralRateBp, collateralRequired, maxStake } from '../src/core/collateral'
+import { BP } from '../src/core/policy'
 import { isRateLimit, readableError } from '../src/core/errors'
 import { addressArg } from '../src/chain/oracle'
 import { outcomeOf } from '../src/chain/wallet'
@@ -144,6 +146,65 @@ eq(
   'formatUnits: exact at the u256 ceiling, with no float rounding',
 )
 
+// --- stakes typed by a human ----------------------------------------------
+//
+// A stake is entered as "2.5", stored as wei, and priced against by the
+// contract. The parse has to be exact in both directions and refuse anything it
+// cannot represent - a stake that silently rounded would price collateral for
+// work worth a different amount than the one being opened.
+
+eq(parseTokens(''), 0n, 'parseTokens: an empty field is an engagement with no stake')
+eq(parseTokens('1'), GEN, 'parseTokens: one whole token')
+eq(parseTokens('2.5'), GEN * 5n / 2n, 'parseTokens: a fraction')
+eq(parseTokens('0.000000000000000001'), 1n, 'parseTokens: one wei')
+eq(parseTokens('1,500'), 1_500n * GEN, 'parseTokens: grouped digits, as formatUnits writes them')
+eq(parseTokens(formatUnits(12_345n * GEN)), 12_345n * GEN, 'parseTokens: round trips formatUnits')
+eq(parseTokens('0.0000000000000000001'), null, 'parseTokens: refuses more decimals than the token has')
+eq(parseTokens('-1'), null, 'parseTokens: refuses a negative stake')
+eq(parseTokens('abc'), null, 'parseTokens: refuses text')
+eq(parseTokens('1.2.3'), null, 'parseTokens: refuses two points')
+
+// --- work collateral ------------------------------------------------------
+//
+// `npm run parity` pins these against the Python engine across the whole grid.
+// What is asserted here is the shape the *interface* depends on: that the
+// deployed policy actually discounts, that the discount is bounded, and that the
+// numbers the accept card quotes are the ones the contract will charge.
+
+eq(
+  collateralRateBp(0, CREDENT_POLICY),
+  CREDENT_POLICY.collateralCeilingBp,
+  'collateralRateBp: no record pays the ceiling',
+)
+eq(
+  collateralRateBp(BP, CREDENT_POLICY),
+  CREDENT_POLICY.collateralFloorBp,
+  'collateralRateBp: a perfect record pays the floor',
+)
+eq(collateralRateBp(5000, CREDENT_POLICY), 8750, 'collateralRateBp: an unknown agent sits between')
+eq(
+  collateralRequired(5000, 100n * GEN, CREDENT_POLICY),
+  875n * GEN / 10n,
+  'collateralRequired: 87.5 GEN against a 100 GEN stake at the neutral score',
+)
+eq(
+  collateralRequired(8500, 100n * GEN, CREDENT_POLICY) < collateralRequired(5000, 100n * GEN, CREDENT_POLICY),
+  true,
+  'collateralRequired: a better score frees working capital',
+)
+eq(
+  collateralRequired(BP, 100n * GEN, CREDENT_POLICY),
+  25n * GEN,
+  'collateralRequired: the discount stops at the floor - nobody works for free',
+)
+eq(collateralRequired(5000, 0n, CREDENT_POLICY), 0n, 'collateralRequired: no stake, no collateral')
+eq(
+  collateralRequired(0, maxStake(CREDENT_POLICY), CREDENT_POLICY) <=
+    (1n << 256n) - 1n,
+  true,
+  'maxStake: the largest admissible stake still fits in a u256',
+)
+
 // --- receipt outcomes -----------------------------------------------------
 //
 // Whether a write succeeded is read out of `consensus_data.leader_receipt`, and
@@ -215,5 +276,6 @@ if (failures > 0) {
   process.exit(1)
 }
 console.log(
-  `units ok - ${checks} checks across formatting, error text, address encoding and receipt outcomes`,
+  `units ok - ${checks} checks across formatting, stake parsing, collateral pricing, error text, ` +
+    `address encoding and receipt outcomes`,
 )

@@ -190,6 +190,11 @@ class TestPolicyValidation:
             ("slash_floor", 101),
             ("release_floor", 101),
             ("bond_lock_seconds", -1),
+            ("collateral_ceiling_bp", -1),
+            ("collateral_ceiling_bp", core.MAX_COLLATERAL_BP + 1),
+            ("collateral_floor_bp", -1),
+            ("collateral_forfeit_bp", -1),
+            ("collateral_forfeit_bp", core.BP + 1),
         ],
     )
     def test_out_of_range_rejected(self, field, value):
@@ -206,6 +211,19 @@ class TestPolicyValidation:
     def test_equal_bond_floors_allowed(self):
         """A hard cutoff with no middle band is a legitimate configuration."""
         core.Policy(slash_floor=50, release_floor=50).validate()
+
+    def test_inverted_collateral_band_rejected(self):
+        """Inverted, the collateral curve rises with reputation: the protocol
+        would charge its best-reviewed agents the most to work, which is the
+        mechanism running backwards rather than a tuning choice."""
+        with pytest.raises(ValueError):
+            core.Policy(collateral_floor_bp=9000, collateral_ceiling_bp=1000).validate()
+
+    def test_flat_collateral_band_allowed(self):
+        """One rate for everyone is a legitimate configuration -- it is the
+        collateral layer with the reputation discount switched off, which is what
+        a deployment that does not yet trust its own scores would run."""
+        core.Policy(collateral_floor_bp=5000, collateral_ceiling_bp=5000).validate()
 
     def test_policy_is_frozen(self):
         with pytest.raises(Exception):
@@ -535,6 +553,226 @@ class TestBondOutcome:
         their bond back alongside an attestation of exactly zero weight, which is
         what they already had by not attesting at all."""
         assert core.bond_outcome(dict(core.UNGRADED), POLICY) == core.BOND_RELEASABLE
+
+
+# --- work collateral ------------------------------------------------------
+#
+# The mechanism the score is for. `bond_required` above prices *attesting*;
+# everything here prices *working*, off the agent's own standing, and it is the
+# only path in the protocol where `score_bp` decides an amount of money.
+
+
+class TestCollateralRate:
+    def test_no_history_pays_the_ceiling(self):
+        assert core.collateral_rate_bp(0, POLICY) == POLICY.collateral_ceiling_bp
+
+    def test_a_perfect_record_pays_the_floor(self):
+        assert core.collateral_rate_bp(BP, POLICY) == POLICY.collateral_floor_bp
+
+    def test_an_unknown_agent_sits_between_them(self):
+        """The neutral score is the midpoint, so an agent with no attestations
+        posts the midpoint rate -- 87.5% of the stake at the defaults."""
+        assert core.collateral_rate_bp(core.NEUTRAL_BP, POLICY) == 8750
+
+    def test_never_rises_with_reputation(self):
+        rates = [core.collateral_rate_bp(score, POLICY) for score in range(0, BP + 1, 250)]
+        assert rates == sorted(rates, reverse=True)
+
+    def test_a_better_score_is_strictly_cheaper(self):
+        """Not merely non-increasing: the discount has to be visible at the
+        resolution a real score moves at, or reputation buys nothing."""
+        assert core.collateral_rate_bp(8000, POLICY) < core.collateral_rate_bp(5000, POLICY)
+        assert core.collateral_rate_bp(5000, POLICY) < core.collateral_rate_bp(2000, POLICY)
+
+    @pytest.mark.parametrize("score", [-1, -100000, BP + 1, 10 * BP])
+    def test_scores_outside_the_range_are_clamped(self, score):
+        """`aggregate` cannot return one, but this is also called with a score a
+        caller supplied, and an out-of-range one must not price collateral
+        outside the policy's own band."""
+        rate = core.collateral_rate_bp(score, POLICY)
+        assert POLICY.collateral_floor_bp <= rate <= POLICY.collateral_ceiling_bp
+
+    @pytest.mark.parametrize("junk", [None, "5000", 5000.0, True, [], {}])
+    def test_unreadable_standing_is_priced_as_no_standing(self, junk):
+        assert core.collateral_rate_bp(junk, POLICY) == POLICY.collateral_ceiling_bp
+
+    def test_a_flat_band_charges_everyone_the_same(self):
+        flat = core.Policy(collateral_floor_bp=5000, collateral_ceiling_bp=5000)
+        assert {core.collateral_rate_bp(score, flat) for score in (0, 4000, BP)} == {5000}
+
+
+class TestCollateralRequired:
+    def test_no_stake_means_no_collateral(self):
+        """An engagement that declares no value is the lifecycle as it was before
+        it had a collateral layer, exactly as `min_bond = 0` switches the bond
+        off."""
+        assert core.collateral_required(0, 0, POLICY) == 0
+        assert core.collateral_required(BP, 0, POLICY) == 0
+
+    def test_an_unknown_agent_posts_most_of_the_stake(self):
+        assert core.collateral_required(core.NEUTRAL_BP, 1000, POLICY) == 875
+
+    def test_reputation_frees_working_capital(self):
+        """The claim the protocol makes, in one assertion: the same job costs a
+        well-reviewed agent a fraction of what it costs an unknown one."""
+        stake = 100 * 10**18
+        unknown = core.collateral_required(core.NEUTRAL_BP, stake, POLICY)
+        strong = core.collateral_required(8500, stake, POLICY)
+        assert strong < unknown
+        assert unknown - strong == 4375 * 10**16  # 43.75 GEN freed per 100 staked
+
+    def test_the_discount_is_capped_by_the_floor(self):
+        """No record, however good, works for free. The floor is what stops a
+        bought reputation from converting into unlimited leverage."""
+        stake = 10**18
+        assert core.collateral_required(BP, stake, POLICY) == stake * POLICY.collateral_floor_bp // BP
+        assert core.collateral_required(BP, stake, POLICY) > 0
+
+    def test_rounds_down(self):
+        """Down, so a caller who sends exactly what they were quoted is never
+        rejected for a unit of rounding."""
+        assert core.collateral_required(BP, 3, POLICY) == 0  # 3 * 2500 // 10000
+        assert core.collateral_required(0, 3, POLICY) == 4  # 3 * 15000 // 10000
+
+    @pytest.mark.parametrize("stake", [-1, -10**18, None, "1000", 1000.0, True])
+    def test_unusable_stakes_price_at_zero(self, stake):
+        assert core.collateral_required(core.NEUTRAL_BP, stake, POLICY) == 0
+
+    def test_result_is_a_plain_int(self):
+        value = core.collateral_required(core.NEUTRAL_BP, 10**18, POLICY)
+        assert type(value) is int
+
+
+class TestMaxStake:
+    def test_a_rate_at_or_below_par_admits_any_stake(self):
+        """Below `BP` the collateral is smaller than the stake, so anything that
+        fits in storage fits after the multiplication."""
+        cheap = core.Policy(collateral_ceiling_bp=BP, collateral_floor_bp=0)
+        assert core.max_stake(cheap) == core.U256_MAX
+
+    def test_the_largest_admissible_stake_still_fits_in_storage(self):
+        largest = core.max_stake(POLICY)
+        assert core.collateral_required(0, largest, POLICY) <= core.U256_MAX
+
+    def test_one_more_would_not(self):
+        """The bound is tight, which is what makes rejecting at open time
+        equivalent to never faulting at accept time."""
+        largest = core.max_stake(POLICY)
+        assert core.collateral_required(0, largest + 1, POLICY) > core.U256_MAX
+
+
+class TestCollateralOutcome:
+    def test_delivered_work_is_released(self):
+        g = core.canonicalize_grade(grade(fulfilled=90, substantiated=80), POLICY)
+        assert core.collateral_outcome(g, POLICY) == core.COLLATERAL_RELEASABLE
+
+    def test_evidenced_failure_forfeits(self):
+        g = core.canonicalize_grade(
+            grade(verdict=core.VERDICT_UNFULFILLED, fulfilled=5, substantiated=90, confidence=90),
+            POLICY,
+        )
+        assert core.collateral_outcome(g, POLICY) == core.COLLATERAL_FORFEIT
+
+    def test_an_unevidenced_accusation_takes_nothing(self):
+        """The attack this gate exists to close. Without it the cheapest way to
+        take an agent's collateral is to assert that they failed and post no
+        evidence -- an attestation worth exactly zero to the score."""
+        accusation = core.canonicalize_grade(
+            grade(verdict=core.VERDICT_UNFULFILLED, fulfilled=0, substantiated=0, confidence=90),
+            POLICY,
+        )
+        assert core.collateral_outcome(accusation, POLICY) == core.COLLATERAL_RELEASABLE
+
+    def test_a_hesitant_reading_takes_nothing(self):
+        unsure = core.canonicalize_grade(
+            grade(verdict=core.VERDICT_UNFULFILLED, fulfilled=0, substantiated=90, confidence=10),
+            POLICY,
+        )
+        assert core.collateral_outcome(unsure, POLICY) == core.COLLATERAL_RELEASABLE
+
+    def test_ungraded_takes_nothing(self):
+        """A response this contract could not read is evidence about the model,
+        not about the provider."""
+        assert core.collateral_outcome(dict(core.UNGRADED), POLICY) == core.COLLATERAL_RELEASABLE
+
+    @pytest.mark.parametrize("junk", [None, "forfeit", 42, [], {"verdict": "unfulfilled"}])
+    def test_total_and_lenient_on_junk(self, junk):
+        assert core.collateral_outcome(junk, POLICY) == core.COLLATERAL_RELEASABLE
+
+    def test_the_forfeit_boundary_is_exclusive(self):
+        at = core.canonicalize_grade(
+            grade(fulfilled=25, substantiated=90, confidence=90), POLICY
+        )
+        below = core.canonicalize_grade(
+            grade(fulfilled=24, substantiated=90, confidence=90), POLICY
+        )
+        assert at["fulfilled"] == POLICY.collateral_forfeit_bp
+        assert core.collateral_outcome(at, POLICY) == core.COLLATERAL_RELEASABLE
+        assert core.collateral_outcome(below, POLICY) == core.COLLATERAL_FORFEIT
+
+    @pytest.mark.parametrize("substantiated", [0, 10, 24, 25, 49])
+    def test_nothing_that_carries_no_weight_can_forfeit(self, substantiated):
+        """The invariant tying the two halves of the protocol together: an
+        attestation that cannot move the score cannot move the money either.
+
+        Below the release floor the grade is either weightless outright or
+        already damped hard, and taking a provider's collateral on it would let
+        an attacker buy a forfeit for the price of one bond.
+        """
+        weak = core.canonicalize_grade(
+            grade(
+                verdict=core.VERDICT_UNFULFILLED,
+                fulfilled=0,
+                substantiated=substantiated,
+                confidence=100,
+            ),
+            POLICY,
+        )
+        assert core.collateral_outcome(weak, POLICY) == core.COLLATERAL_RELEASABLE
+
+    def test_forfeiting_and_slashing_are_independent(self):
+        """The two economic outcomes answer different questions about the same
+        attestation, so one grade can trigger either, both, or neither.
+
+        A well-evidenced report of undelivered work forfeits the provider's
+        collateral and returns the attester's bond -- the attester did their job
+        precisely by writing it.
+        """
+        g = core.canonicalize_grade(
+            grade(verdict=core.VERDICT_UNFULFILLED, fulfilled=0, substantiated=95, confidence=95),
+            POLICY,
+        )
+        assert core.collateral_outcome(g, POLICY) == core.COLLATERAL_FORFEIT
+        assert core.bond_outcome(g, POLICY) == core.BOND_RELEASABLE
+
+
+class TestReputationIsCollateral:
+    def test_the_score_is_the_only_input_that_moves_the_price(self):
+        """Two agents, one stake, one policy: the difference in what they have to
+        find before they can work is their reputation, expressed in money."""
+        stake = 10**18
+        priced = {
+            score: core.collateral_required(score, stake, POLICY)
+            for score in (0, 2500, core.NEUTRAL_BP, 7500, BP)
+        }
+        assert list(priced.values()) == sorted(priced.values(), reverse=True)
+        assert priced[0] > stake  # no record: more than the work is worth
+        assert priced[BP] < stake // 3  # a full record: a fraction of it
+
+    def test_a_bought_score_pays_the_rising_curve_for_a_bounded_discount(self):
+        """Why the floor exists. The bond an attacker pays to manufacture a score
+        doubles per repeat, while the most that score can ever save them is the
+        distance between the ceiling and the floor -- a bounded prize against an
+        unbounded price.
+        """
+        policy = core.Policy(min_bond=10**18)
+        stake = 10**18
+        best_case_saving = core.collateral_required(0, stake, policy) - core.collateral_required(
+            BP, stake, policy
+        )
+        cost_of_four_fake_attestations = sum(core.bond_required(k, policy) for k in range(4))
+        assert best_case_saving == stake * 12500 // BP
+        assert cost_of_four_fake_attestations > best_case_saving
 
 
 # --- verdict coercion -----------------------------------------------------

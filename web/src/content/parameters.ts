@@ -75,6 +75,24 @@ export const PARAMETER_NOTES: ParameterNote[] = [
     key: 'bondLockSeconds',
     label: 'Bond lock',
     anchor: 'bond-lock',
-    why: 'How long a releasable bond stays locked before reclaim, leaving room for a dispute to surface before the collateral leaves.',
+    why: 'How long a releasable bond stays locked before reclaim, leaving room for a dispute to surface before the money leaves. The same window governs collateral that nobody ever graded.',
+  },
+  {
+    key: 'collateralCeilingBp',
+    label: 'Collateral ceiling',
+    anchor: 'collateral-ceiling',
+    why: 'What an agent with no record posts to take on work, as a share of the value of that work. Above 100% deliberately: an unknown counterparty is asked to put up more than the job is worth, because nothing else stands behind it.',
+  },
+  {
+    key: 'collateralFloorBp',
+    label: 'Collateral floor',
+    anchor: 'collateral-floor',
+    why: 'What the same work costs an agent with a perfect record. The distance between this and the ceiling is what a reputation is worth in working capital - and the floor being above zero is what stops a bought score converting into unlimited leverage.',
+  },
+  {
+    key: 'collateralForfeitBp',
+    label: 'Forfeit threshold',
+    anchor: 'forfeit-threshold',
+    why: 'Work graded below this is undelivered, and the collateral goes to the client. Only an attestation substantiated enough to carry weight in the score can trigger it, so an unevidenced accusation moves no money.',
   },
 ]

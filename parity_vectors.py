@@ -32,13 +32,18 @@ from pathlib import Path
 
 from reputation_core import (
     BP,
+    NEUTRAL_BP,
     Policy,
     aggregate,
     attestation_salt,
     attestation_weight,
     bond_outcome,
     bond_required,
+    collateral_outcome,
+    collateral_rate_bp,
+    collateral_required,
     decay_bp,
+    max_stake,
     normalize_address,
     repeat_shift,
     scope_digest,
@@ -53,6 +58,9 @@ DAY = 86400
 # from the contract defaults in `min_bond` alone, which is the one parameter that
 # switches the economic layer on - so a bond curve compared only against the
 # defaults would compare `0` to `0` forever and prove nothing.
+#
+# The collateral curve needs no such second policy: it is on at the contract
+# defaults, because a stake of zero already switches it off per engagement.
 DEFAULT_POLICY = Policy()
 CREDENT_POLICY = replace(DEFAULT_POLICY, min_bond=25_000_000)  # mirrors the port's
 
@@ -77,6 +85,9 @@ def _policy_as_dict(policy: Policy) -> dict:
         "slashFloor": policy.slash_floor,
         "releaseFloor": policy.release_floor,
         "bondLockSeconds": policy.bond_lock_seconds,
+        "collateralCeilingBp": policy.collateral_ceiling_bp,
+        "collateralFloorBp": policy.collateral_floor_bp,
+        "collateralForfeitBp": policy.collateral_forfeit_bp,
     }
 
 
@@ -258,6 +269,95 @@ ADDRESSES = [
 ]
 
 
+# Scores where the collateral curve has to be exact: both ends, the neutral
+# midpoint an agent with no history sits on, either side of it, and interior
+# points that are not multiples of the span so a wrong divisor shows up. The
+# out-of-range pair is there because the rate is also quoted for scores a caller
+# supplied rather than the engine derived.
+SCORES = [-1, 0, 1, 1234, 2500, 4999, NEUTRAL_BP, 5001, 7500, 8137, 9999, BP, BP + 1]
+
+# Stakes spanning the range a real engagement declares, in wei. The large ones
+# are the point: they exceed `Number.MAX_SAFE_INTEGER`, which is why the port
+# holds collateral as a `bigint` and why these cross the boundary as strings.
+STAKES = [
+    0,
+    1,
+    3,
+    999,
+    10**18,  # one whole token
+    25 * 10**18,
+    7 * 10**17,  # not a round multiple: catches a truncation the other way
+    10**24,
+]
+
+
+def _collateral_rate_vectors() -> list[dict]:
+    return [
+        {
+            "scoreBp": score,
+            "policy": name,
+            "expected": collateral_rate_bp(score, policy),
+        }
+        for name, policy in POLICIES.items()
+        for score in SCORES
+    ]
+
+
+def _collateral_required_vectors() -> list[dict]:
+    return [
+        {
+            "scoreBp": score,
+            # Stringified in both directions: a stake in wei and the collateral
+            # derived from it are `bigint` on the other side, and a JSON number
+            # would round both into agreement.
+            "stake": str(stake),
+            "policy": name,
+            "expected": str(collateral_required(score, stake, policy)),
+        }
+        for name, policy in POLICIES.items()
+        for score in SCORES
+        for stake in STAKES
+    ]
+
+
+def _max_stake_vectors() -> list[dict]:
+    return [
+        {"policy": name, "expected": str(max_stake(policy))}
+        for name, policy in POLICIES.items()
+    ]
+
+
+# Grades as `canonicalize_grade` leaves them: `fulfilled` widened to basis
+# points, the other two on the model's 0-100 scale. Chosen to sit on both gates
+# the outcome reads and on the forfeit boundary itself, plus the malformed shapes
+# the function promises to absorb rather than raise on.
+COLLATERAL_GRADES: list[object] = [
+    {"verdict": "fulfilled", "fulfilled": 9000, "substantiated": 90, "confidence": 90},
+    {"verdict": "partial", "fulfilled": 5000, "substantiated": 90, "confidence": 90},
+    {"verdict": "unfulfilled", "fulfilled": 2500, "substantiated": 90, "confidence": 90},
+    {"verdict": "unfulfilled", "fulfilled": 2499, "substantiated": 90, "confidence": 90},
+    {"verdict": "unfulfilled", "fulfilled": 0, "substantiated": 90, "confidence": 90},
+    {"verdict": "unfulfilled", "fulfilled": 0, "substantiated": 50, "confidence": 50},
+    {"verdict": "unfulfilled", "fulfilled": 0, "substantiated": 49, "confidence": 100},
+    {"verdict": "unfulfilled", "fulfilled": 0, "substantiated": 100, "confidence": 49},
+    {"verdict": "unfulfilled", "fulfilled": 0, "substantiated": 0, "confidence": 0},
+    {"verdict": "ungraded", "fulfilled": 5000, "substantiated": 0, "confidence": 0},
+    {"verdict": "ungraded", "fulfilled": 0, "substantiated": 100, "confidence": 100},
+    {"verdict": "unfulfilled", "substantiated": 90, "confidence": 90},
+    {"verdict": "unfulfilled", "fulfilled": 0, "confidence": 90},
+    {"verdict": "unfulfilled", "fulfilled": 0, "substantiated": 90},
+    {},
+]
+
+
+def _collateral_outcome_vectors() -> list[dict]:
+    return [
+        {"grade": grade, "policy": name, "expected": collateral_outcome(grade, policy)}
+        for name, policy in POLICIES.items()
+        for grade in COLLATERAL_GRADES
+    ]
+
+
 def _scope_digest_vectors() -> list[dict]:
     return [{"scope": scope, "expected": scope_digest(scope)} for scope in SCOPES]
 
@@ -305,6 +405,10 @@ def render() -> str:
         "aggregate": _aggregate_vectors(),
         "bondRequired": _bond_required_vectors(),
         "bondOutcome": _bond_outcome_vectors(),
+        "collateralRate": _collateral_rate_vectors(),
+        "collateralRequired": _collateral_required_vectors(),
+        "maxStake": _max_stake_vectors(),
+        "collateralOutcome": _collateral_outcome_vectors(),
         "normalizeAddress": _normalize_address_vectors(),
         "scopeDigest": _scope_digest_vectors(),
         "attestationSalt": _salt_vectors(),

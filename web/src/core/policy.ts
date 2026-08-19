@@ -18,6 +18,12 @@ export const NEUTRAL_BP = 5000
 /** Past this many half-lives, weight has underflowed to zero anyway. */
 export const MAX_HALVINGS = 63
 
+/** Widest collateral rate a policy may charge: a hundred times the stake. */
+export const MAX_COLLATERAL_BP = 100 * BP
+
+/** Widest value the contract's `u256` storage fields hold. */
+export const U256_MAX = (1n << 256n) - 1n
+
 export interface Policy {
   /** Age at which an attestation's weight halves. */
   halfLifeSeconds: number
@@ -39,6 +45,12 @@ export interface Policy {
   releaseFloor: number
   /** How long a releasable bond stays locked before reclaim. */
   bondLockSeconds: number
+  /** Collateral an agent scoring 0 posts, in basis points of the stake. */
+  collateralCeilingBp: number
+  /** What the same stake costs an agent scoring 10000. */
+  collateralFloorBp: number
+  /** `fulfilled` below this forfeits the collateral to the client. */
+  collateralForfeitBp: number
 }
 
 export const DEFAULT_POLICY: Policy = {
@@ -52,6 +64,9 @@ export const DEFAULT_POLICY: Policy = {
   slashFloor: 20,
   releaseFloor: 50,
   bondLockSeconds: 1_209_600, // 14 days
+  collateralCeilingBp: 15_000, // 150% of the stake at score 0
+  collateralFloorBp: 2_500, // 25% of it at a perfect score
+  collateralForfeitBp: 2_500, // fulfilled below 25% forfeits
 }
 
 /**
@@ -81,6 +96,15 @@ export const CREDENT_POLICY: Policy = {
   minBond: 1_000_000_000_000_000_000n, // 1 GEN, 18dp
 }
 
+/**
+ * The collateral parameters are *not* among the departures above, deliberately.
+ *
+ * `minBond` has to be raised because the contract defaults to zero and zero
+ * switches the bond off. The collateral layer has no such switch: it is on at
+ * the contract defaults, and an engagement turns it off for itself by declaring
+ * a stake of zero. There is nothing to override, so nothing is.
+ */
+
 export function validatePolicy(policy: Policy): void {
   if (policy.halfLifeSeconds < 1) throw new Error('halfLifeSeconds must be >= 1')
   if (policy.priorWeight < 0) throw new Error('priorWeight must be >= 0')
@@ -93,6 +117,14 @@ export function validatePolicy(policy: Policy): void {
   if (!inRange(policy.releaseFloor, 0, 100)) throw new Error('releaseFloor out of range')
   if (policy.slashFloor > policy.releaseFloor) throw new Error('slashFloor must be <= releaseFloor')
   if (policy.bondLockSeconds < 0) throw new Error('bondLockSeconds must be >= 0')
+  if (!inRange(policy.collateralCeilingBp, 0, MAX_COLLATERAL_BP))
+    throw new Error('collateralCeilingBp out of range')
+  if (!inRange(policy.collateralFloorBp, 0, MAX_COLLATERAL_BP))
+    throw new Error('collateralFloorBp out of range')
+  if (policy.collateralFloorBp > policy.collateralCeilingBp)
+    throw new Error('collateralFloorBp must be <= collateralCeilingBp')
+  if (!inRange(policy.collateralForfeitBp, 0, BP))
+    throw new Error('collateralForfeitBp out of range')
 }
 
 function inRange(value: number, lo: number, hi: number): boolean {

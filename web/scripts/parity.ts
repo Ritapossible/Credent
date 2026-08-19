@@ -20,6 +20,12 @@ import { dirname, join } from 'node:path'
 
 import { aggregate, attestationWeight, decayBp, repeatShift } from '../src/core/scoring'
 import { bondOutcome, bondRequired } from '../src/core/bonding'
+import {
+  collateralOutcome,
+  collateralRateBp,
+  collateralRequired,
+  maxStake,
+} from '../src/core/collateral'
 import { attestationSalt, normalizeAddress, scopeDigest } from '../src/core/digest'
 import type { Policy } from '../src/core/policy'
 
@@ -46,6 +52,10 @@ interface VectorFile {
   }[]
   bondRequired: { repeatIndex: number; policy: string; expected: string }[]
   bondOutcome: { grade: Record<string, unknown>; policy: string; expected: string }[]
+  collateralRate: { scoreBp: number; policy: string; expected: number }[]
+  collateralRequired: { scoreBp: number; stake: string; policy: string; expected: string }[]
+  maxStake: { policy: string; expected: string }[]
+  collateralOutcome: { grade: Record<string, unknown>; policy: string; expected: string }[]
   normalizeAddress: { text: string; expected: string }[]
   scopeDigest: { scope: string; expected: string }[]
   attestationSalt: {
@@ -78,6 +88,9 @@ function toPolicy(raw: Record<string, number | string>): Policy {
     slashFloor: Number(raw.slashFloor),
     releaseFloor: Number(raw.releaseFloor),
     bondLockSeconds: Number(raw.bondLockSeconds),
+    collateralCeilingBp: Number(raw.collateralCeilingBp),
+    collateralFloorBp: Number(raw.collateralFloorBp),
+    collateralForfeitBp: Number(raw.collateralForfeitBp),
   }
 }
 
@@ -150,6 +163,23 @@ check('bondRequired', file.bondRequired, (v) =>
 
 check('bondOutcome', file.bondOutcome, (v) => bondOutcome(v.grade, policyNamed(v.policy)))
 
+check('collateralRate', file.collateralRate, (v) =>
+  collateralRateBp(v.scoreBp, policyNamed(v.policy)),
+)
+
+// Stakes and collateral cross as decimal strings for the same reason bonds do:
+// both are wei-denominated and past `Number.MAX_SAFE_INTEGER` at any realistic
+// engagement, and a JSON number would round the two sides into agreeing.
+check('collateralRequired', file.collateralRequired, (v) =>
+  collateralRequired(v.scoreBp, BigInt(v.stake), policyNamed(v.policy)).toString(),
+)
+
+check('maxStake', file.maxStake, (v) => maxStake(policyNamed(v.policy)).toString())
+
+check('collateralOutcome', file.collateralOutcome, (v) =>
+  collateralOutcome(v.grade, policyNamed(v.policy)),
+)
+
 check('normalizeAddress', file.normalizeAddress, (v) => normalizeAddress(v.text))
 
 check('scopeDigest', file.scopeDigest, (v) => scopeDigest(v.scope))
@@ -164,7 +194,7 @@ check('attestationSalt', file.attestationSalt, (v) =>
 )
 
 if (failures.length === 0) {
-  console.log(`parity ok - ${checked} vectors across 9 families agree with the engine`)
+  console.log(`parity ok - ${checked} vectors across 13 families agree with the engine`)
   process.exit(0)
 }
 

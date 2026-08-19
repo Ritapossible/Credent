@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "parity": "esbuild scripts/parity.ts --bundle --format=esm --platform=node --outfile=.tmp/parity.mjs && node .tmp/parity.mjs",
-    "units": "esbuild scripts/units.ts --bundle --format=esm --platform=node --define:import.meta.env={} --outfile=.tmp/units.mjs && node .tmp/units.mjs"
+    "units": "esbuild scripts/units.ts --bundle --format=esm --platform=node --define:import.meta.env={} --outfile=.tmp/units.mjs && node .tmp/units.mjs",
+    "livecheck": "esbuild scripts/livecheck.ts --bundle --format=esm --platform=node --define:import.meta.env.VITE_CONTRACT_ADDRESS=\"'$VITE_CONTRACT_ADDRESS'\" --define:import.meta.env.VITE_GENLAYER_NETWORK=\"'$VITE_GENLAYER_NETWORK'\" --outfile=.tmp/livecheck.mjs && node .tmp/livecheck.mjs"
   },
   "dependencies": {
     "genlayer-js": "^1.2.0",

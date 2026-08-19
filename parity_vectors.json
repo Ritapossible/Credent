@@ -11,7 +11,10 @@
       "minBond": "0",
       "slashFloor": 20,
       "releaseFloor": 50,
-      "bondLockSeconds": 1209600
+      "bondLockSeconds": 1209600,
+      "collateralCeilingBp": 15000,
+      "collateralFloorBp": 2500,
+      "collateralForfeitBp": 2500
     },
     "credent": {
       "halfLifeSeconds": 7776000,
@@ -23,7 +26,10 @@
       "minBond": "25000000",
       "slashFloor": 20,
       "releaseFloor": 50,
-      "bondLockSeconds": 1209600
+      "bondLockSeconds": 1209600,
+      "collateralCeilingBp": 15000,
+      "collateralFloorBp": 2500,
+      "collateralForfeitBp": 2500
     }
   },
   "decayBp": [
@@ -23802,6 +23808,1684 @@
     {
       "grade": {
         "verdict": "fulfilled"
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {},
+      "policy": "credent",
+      "expected": "releasable"
+    }
+  ],
+  "collateralRate": [
+    {
+      "scoreBp": -1,
+      "policy": "default",
+      "expected": 15000
+    },
+    {
+      "scoreBp": 0,
+      "policy": "default",
+      "expected": 15000
+    },
+    {
+      "scoreBp": 1,
+      "policy": "default",
+      "expected": 14999
+    },
+    {
+      "scoreBp": 1234,
+      "policy": "default",
+      "expected": 13458
+    },
+    {
+      "scoreBp": 2500,
+      "policy": "default",
+      "expected": 11875
+    },
+    {
+      "scoreBp": 4999,
+      "policy": "default",
+      "expected": 8752
+    },
+    {
+      "scoreBp": 5000,
+      "policy": "default",
+      "expected": 8750
+    },
+    {
+      "scoreBp": 5001,
+      "policy": "default",
+      "expected": 8749
+    },
+    {
+      "scoreBp": 7500,
+      "policy": "default",
+      "expected": 5625
+    },
+    {
+      "scoreBp": 8137,
+      "policy": "default",
+      "expected": 4829
+    },
+    {
+      "scoreBp": 9999,
+      "policy": "default",
+      "expected": 2502
+    },
+    {
+      "scoreBp": 10000,
+      "policy": "default",
+      "expected": 2500
+    },
+    {
+      "scoreBp": 10001,
+      "policy": "default",
+      "expected": 2500
+    },
+    {
+      "scoreBp": -1,
+      "policy": "credent",
+      "expected": 15000
+    },
+    {
+      "scoreBp": 0,
+      "policy": "credent",
+      "expected": 15000
+    },
+    {
+      "scoreBp": 1,
+      "policy": "credent",
+      "expected": 14999
+    },
+    {
+      "scoreBp": 1234,
+      "policy": "credent",
+      "expected": 13458
+    },
+    {
+      "scoreBp": 2500,
+      "policy": "credent",
+      "expected": 11875
+    },
+    {
+      "scoreBp": 4999,
+      "policy": "credent",
+      "expected": 8752
+    },
+    {
+      "scoreBp": 5000,
+      "policy": "credent",
+      "expected": 8750
+    },
+    {
+      "scoreBp": 5001,
+      "policy": "credent",
+      "expected": 8749
+    },
+    {
+      "scoreBp": 7500,
+      "policy": "credent",
+      "expected": 5625
+    },
+    {
+      "scoreBp": 8137,
+      "policy": "credent",
+      "expected": 4829
+    },
+    {
+      "scoreBp": 9999,
+      "policy": "credent",
+      "expected": 2502
+    },
+    {
+      "scoreBp": 10000,
+      "policy": "credent",
+      "expected": 2500
+    },
+    {
+      "scoreBp": 10001,
+      "policy": "credent",
+      "expected": 2500
+    }
+  ],
+  "collateralRequired": [
+    {
+      "scoreBp": -1,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "1",
+      "policy": "default",
+      "expected": "1"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "3",
+      "policy": "default",
+      "expected": "4"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "999",
+      "policy": "default",
+      "expected": "1498"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "1500000000000000000"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "37500000000000000000"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "1050000000000000000"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "1500000000000000000000000"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "1",
+      "policy": "default",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "3",
+      "policy": "default",
+      "expected": "4"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "999",
+      "policy": "default",
+      "expected": "1498"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "1500000000000000000"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "37500000000000000000"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "1050000000000000000"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "1500000000000000000000000"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "1",
+      "policy": "default",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "3",
+      "policy": "default",
+      "expected": "4"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "999",
+      "policy": "default",
+      "expected": "1498"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "1499900000000000000"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "37497500000000000000"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "1049930000000000000"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "1499900000000000000000000"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "1",
+      "policy": "default",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "3",
+      "policy": "default",
+      "expected": "4"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "999",
+      "policy": "default",
+      "expected": "1344"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "1345800000000000000"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "33645000000000000000"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "942060000000000000"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "1345800000000000000000000"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "1",
+      "policy": "default",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "3",
+      "policy": "default",
+      "expected": "3"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "999",
+      "policy": "default",
+      "expected": "1186"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "1187500000000000000"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "29687500000000000000"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "831250000000000000"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "1187500000000000000000000"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "1",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "3",
+      "policy": "default",
+      "expected": "2"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "999",
+      "policy": "default",
+      "expected": "874"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "875200000000000000"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "21880000000000000000"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "612640000000000000"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "875200000000000000000000"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "1",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "3",
+      "policy": "default",
+      "expected": "2"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "999",
+      "policy": "default",
+      "expected": "874"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "875000000000000000"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "21875000000000000000"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "612500000000000000"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "875000000000000000000000"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "1",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "3",
+      "policy": "default",
+      "expected": "2"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "999",
+      "policy": "default",
+      "expected": "874"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "874900000000000000"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "21872500000000000000"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "612430000000000000"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "874900000000000000000000"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "1",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "3",
+      "policy": "default",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "999",
+      "policy": "default",
+      "expected": "561"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "562500000000000000"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "14062500000000000000"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "393750000000000000"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "562500000000000000000000"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "1",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "3",
+      "policy": "default",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "999",
+      "policy": "default",
+      "expected": "482"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "482900000000000000"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "12072500000000000000"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "338030000000000000"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "482900000000000000000000"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "1",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "3",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "999",
+      "policy": "default",
+      "expected": "249"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "250200000000000000"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "6255000000000000000"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "175140000000000000"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "250200000000000000000000"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "1",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "3",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "999",
+      "policy": "default",
+      "expected": "249"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "250000000000000000"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "6250000000000000000"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "175000000000000000"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "250000000000000000000000"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "0",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "1",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "3",
+      "policy": "default",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "999",
+      "policy": "default",
+      "expected": "249"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "1000000000000000000",
+      "policy": "default",
+      "expected": "250000000000000000"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "25000000000000000000",
+      "policy": "default",
+      "expected": "6250000000000000000"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "700000000000000000",
+      "policy": "default",
+      "expected": "175000000000000000"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "1000000000000000000000000",
+      "policy": "default",
+      "expected": "250000000000000000000000"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "1"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "4"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "1498"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "1500000000000000000"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "37500000000000000000"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "1050000000000000000"
+    },
+    {
+      "scoreBp": -1,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "1500000000000000000000000"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "4"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "1498"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "1500000000000000000"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "37500000000000000000"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "1050000000000000000"
+    },
+    {
+      "scoreBp": 0,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "1500000000000000000000000"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "4"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "1498"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "1499900000000000000"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "37497500000000000000"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "1049930000000000000"
+    },
+    {
+      "scoreBp": 1,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "1499900000000000000000000"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "4"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "1344"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "1345800000000000000"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "33645000000000000000"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "942060000000000000"
+    },
+    {
+      "scoreBp": 1234,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "1345800000000000000000000"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "3"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "1186"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "1187500000000000000"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "29687500000000000000"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "831250000000000000"
+    },
+    {
+      "scoreBp": 2500,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "1187500000000000000000000"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "2"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "874"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "875200000000000000"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "21880000000000000000"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "612640000000000000"
+    },
+    {
+      "scoreBp": 4999,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "875200000000000000000000"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "2"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "874"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "875000000000000000"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "21875000000000000000"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "612500000000000000"
+    },
+    {
+      "scoreBp": 5000,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "875000000000000000000000"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "2"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "874"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "874900000000000000"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "21872500000000000000"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "612430000000000000"
+    },
+    {
+      "scoreBp": 5001,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "874900000000000000000000"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "561"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "562500000000000000"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "14062500000000000000"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "393750000000000000"
+    },
+    {
+      "scoreBp": 7500,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "562500000000000000000000"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "1"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "482"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "482900000000000000"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "12072500000000000000"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "338030000000000000"
+    },
+    {
+      "scoreBp": 8137,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "482900000000000000000000"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "249"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "250200000000000000"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "6255000000000000000"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "175140000000000000"
+    },
+    {
+      "scoreBp": 9999,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "250200000000000000000000"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "249"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "250000000000000000"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "6250000000000000000"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "175000000000000000"
+    },
+    {
+      "scoreBp": 10000,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "250000000000000000000000"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "0",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "1",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "3",
+      "policy": "credent",
+      "expected": "0"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "999",
+      "policy": "credent",
+      "expected": "249"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "1000000000000000000",
+      "policy": "credent",
+      "expected": "250000000000000000"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "25000000000000000000",
+      "policy": "credent",
+      "expected": "6250000000000000000"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "700000000000000000",
+      "policy": "credent",
+      "expected": "175000000000000000"
+    },
+    {
+      "scoreBp": 10001,
+      "stake": "1000000000000000000000000",
+      "policy": "credent",
+      "expected": "250000000000000000000000"
+    }
+  ],
+  "maxStake": [
+    {
+      "policy": "default",
+      "expected": "77194726158210796949047323339125271902179989777093709359638389338608753093290"
+    },
+    {
+      "policy": "credent",
+      "expected": "77194726158210796949047323339125271902179989777093709359638389338608753093290"
+    }
+  ],
+  "collateralOutcome": [
+    {
+      "grade": {
+        "verdict": "fulfilled",
+        "fulfilled": 9000,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "partial",
+        "fulfilled": 5000,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 2500,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 2499,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "default",
+      "expected": "forfeit"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "default",
+      "expected": "forfeit"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 50,
+        "confidence": 50
+      },
+      "policy": "default",
+      "expected": "forfeit"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 49,
+        "confidence": 100
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 100,
+        "confidence": 49
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 0,
+        "confidence": 0
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "ungraded",
+        "fulfilled": 5000,
+        "substantiated": 0,
+        "confidence": 0
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "ungraded",
+        "fulfilled": 0,
+        "substantiated": 100,
+        "confidence": 100
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "confidence": 90
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 90
+      },
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {},
+      "policy": "default",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "fulfilled",
+        "fulfilled": 9000,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "partial",
+        "fulfilled": 5000,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 2500,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 2499,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "credent",
+      "expected": "forfeit"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "credent",
+      "expected": "forfeit"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 50,
+        "confidence": 50
+      },
+      "policy": "credent",
+      "expected": "forfeit"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 49,
+        "confidence": 100
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 100,
+        "confidence": 49
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 0,
+        "confidence": 0
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "ungraded",
+        "fulfilled": 5000,
+        "substantiated": 0,
+        "confidence": 0
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "ungraded",
+        "fulfilled": 0,
+        "substantiated": 100,
+        "confidence": 100
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "substantiated": 90,
+        "confidence": 90
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "confidence": 90
+      },
+      "policy": "credent",
+      "expected": "releasable"
+    },
+    {
+      "grade": {
+        "verdict": "unfulfilled",
+        "fulfilled": 0,
+        "substantiated": 90
       },
       "policy": "credent",
       "expected": "releasable"

@@ -67,6 +67,25 @@ export type EngagementState = 'proposed' | 'open' | 'closed'
 
 const ENGAGEMENT_STATES: readonly EngagementState[] = ['proposed', 'open', 'closed']
 
+/**
+ * The work-collateral lifecycle (`_COL_*` in the shell).
+ *
+ * `none` covers both an engagement that declared no stake and one nobody has
+ * accepted yet. `held` is capital in flight; `releasable` and `forfeit` are what
+ * the client's attestation settled it to; `returned` and `claimed` are where it
+ * ended up.
+ */
+export type CollateralState = 'none' | 'held' | 'releasable' | 'forfeit' | 'returned' | 'claimed'
+
+const COLLATERAL_STATES: readonly CollateralState[] = [
+  'none',
+  'held',
+  'releasable',
+  'forfeit',
+  'returned',
+  'claimed',
+]
+
 export interface ChainEngagement {
   id: string
   client: string
@@ -75,6 +94,26 @@ export interface ChainEngagement {
   scopeDigest: string
   state: EngagementState
   closed: boolean
+  /** Declared value of the work, in wei. What the collateral is priced against. */
+  stake: bigint
+  /** When the dispute window on the collateral started. Zero until closed. */
+  closedAt: number
+  /** What the provider actually posted to accept. */
+  collateral: bigint
+  collateralState: CollateralState
+  /** The rate that collateral was priced at, and the score that bought it. */
+  collateralRateBp: number
+  scoreBp: number
+}
+
+/** What taking on work of a given stake would cost one agent right now. */
+export interface CollateralQuote {
+  provider: string
+  stake: bigint
+  scoreBp: number
+  rateBp: number
+  required: bigint
+  maxStake: bigint
 }
 
 // --- decoding -------------------------------------------------------------
@@ -103,7 +142,13 @@ function int(source: Dict, key: string, what: string): number {
   throw new Error(`${what}.${key}: expected an integer, received ${JSON.stringify(raw)}`)
 }
 
-/** A field that must stay exact past 2^53 - only `bond` and `minBond` qualify. */
+/**
+ * A field that must stay exact past 2^53.
+ *
+ * Everything denominated in wei: `bond` and `minBond`, and now an engagement's
+ * `stake` and the `collateral` derived from it, which are the largest amounts
+ * the contract holds.
+ */
 function big(source: Dict, key: string, what: string): bigint {
   const raw = source[key]
   if (typeof raw === 'bigint') return raw
@@ -140,9 +185,9 @@ function address(source: Dict, key: string, what: string): string {
  * call with `execution failed` and no indication of which argument was wrong.
  *
  * The views this client calls with an `Address` are `get_report`,
- * `get_subject_page`, `get_reports` and `bond_for_next`; one write takes one
- * too (`open_engagement`). The rest take strings and integers, which encode as
- * themselves.
+ * `get_subject_page`, `get_reports`, `bond_for_next` and `collateral_quote`;
+ * one write takes one too (`open_engagement`). The rest take strings and
+ * integers, which encode as themselves.
  *
  * Exported for `wallet.ts` rather than reimplemented there. The writes hit the
  * same encoding, and a second copy of this is how the bug comes back on the
@@ -395,6 +440,11 @@ export async function getEngagement(id: string): Promise<ChainEngagement> {
     throw new Error(`get_engagement.state: unknown state "${state}"`)
   }
 
+  const collateralState = str(source, 'collateral_state', 'get_engagement')
+  if (!(COLLATERAL_STATES as readonly string[]).includes(collateralState)) {
+    throw new Error(`get_engagement.collateral_state: unknown state "${collateralState}"`)
+  }
+
   return {
     id: str(source, 'id', 'get_engagement'),
     client: address(source, 'client', 'get_engagement'),
@@ -403,6 +453,14 @@ export async function getEngagement(id: string): Promise<ChainEngagement> {
     scopeDigest: str(source, 'scope_digest', 'get_engagement'),
     state: state as EngagementState,
     closed: bool(source, 'closed', 'get_engagement'),
+    // Stake and collateral stay `bigint`: both are wei-denominated and a real
+    // engagement's stake is past 2^53 before it is worth talking about.
+    stake: big(source, 'stake', 'get_engagement'),
+    closedAt: int(source, 'closed_at', 'get_engagement'),
+    collateral: big(source, 'collateral', 'get_engagement'),
+    collateralState: collateralState as CollateralState,
+    collateralRateBp: int(source, 'collateral_rate_bp', 'get_engagement'),
+    scoreBp: int(source, 'score_bp', 'get_engagement'),
   }
 }
 
@@ -427,6 +485,44 @@ export async function getPolicy(): Promise<Policy> {
     slashFloor: int(source, 'slash_floor', 'get_policy'),
     releaseFloor: int(source, 'release_floor', 'get_policy'),
     bondLockSeconds: int(source, 'bond_lock_seconds', 'get_policy'),
+    collateralCeilingBp: int(source, 'collateral_ceiling_bp', 'get_policy'),
+    collateralFloorBp: int(source, 'collateral_floor_bp', 'get_policy'),
+    collateralForfeitBp: int(source, 'collateral_forfeit_bp', 'get_policy'),
+  }
+}
+
+/**
+ * What it would cost this agent to take on work worth `stake`, right now.
+ *
+ * The read-side twin of the gate in `accept_engagement`, so a provider sees the
+ * price before they sign rather than discovering it from a rejection. The
+ * contract computes it from the same stored grades `get_report` walks - asking
+ * the chain rather than deriving it here means the figure is the one the write
+ * path will actually check against, including any policy this build does not
+ * know about.
+ *
+ * A quote goes stale the moment another attestation about this provider lands,
+ * so a caller that is about to send value should re-read it at submit time.
+ */
+export async function collateralQuote(provider: string, stake: bigint): Promise<CollateralQuote> {
+  const source = asDict(
+    await call('collateral_quote', [
+      addressArg(provider, 'collateral_quote.provider'),
+      // Passed as a `bigint`, which the calldata encoder writes as an integer
+      // of arbitrary width. A wei-scale stake is past 2^53, so handing it over
+      // as a `number` would encode a rounded stake and quote collateral for
+      // work worth slightly less than the one being opened.
+      stake,
+    ]),
+    'collateral_quote',
+  )
+  return {
+    provider: address(source, 'provider', 'collateral_quote'),
+    stake: big(source, 'stake', 'collateral_quote'),
+    scoreBp: int(source, 'score_bp', 'collateral_quote'),
+    rateBp: int(source, 'rate_bp', 'collateral_quote'),
+    required: big(source, 'required', 'collateral_quote'),
+    maxStake: big(source, 'max_stake', 'collateral_quote'),
   }
 }
 

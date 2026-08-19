@@ -76,6 +76,28 @@ export function formatBond(value: bigint): string {
   return `${trimmed ? `${whole}.${trimmed}` : whole} ${NATIVE_SYMBOL}`
 }
 
+/**
+ * A typed decimal amount as base units, or `null` if it is not one.
+ *
+ * The inverse of `formatUnits`, and the reason a stake can be typed as "2.5"
+ * rather than as nineteen digits of wei. Rejecting rather than rounding is the
+ * whole point: a stake with more decimal places than the token has would
+ * silently become a different stake, and the stake is what the provider's
+ * collateral is priced against.
+ *
+ * An empty field is zero - an engagement with no declared value, which is a
+ * legitimate engagement with the collateral layer switched off.
+ */
+export function parseTokens(text: string, decimals = NATIVE_DECIMALS): bigint | null {
+  const trimmed = text.trim().replace(/,/g, '')
+  if (trimmed === '') return 0n
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return null
+
+  const [whole, fraction = ''] = trimmed.split('.')
+  if (fraction.length > Number(decimals)) return null
+  return BigInt(whole) * 10n ** decimals + BigInt(fraction.padEnd(Number(decimals), '0'))
+}
+
 /** Whole seconds as the coarsest unit that stays honest. */
 export function formatDuration(seconds: number): string {
   if (seconds < 0) return '-'

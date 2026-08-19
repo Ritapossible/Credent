@@ -34,6 +34,10 @@ FAMILIES = (
     "aggregate",
     "bondRequired",
     "bondOutcome",
+    "collateralRate",
+    "collateralRequired",
+    "maxStake",
+    "collateralOutcome",
     "normalizeAddress",
     "scopeDigest",
     "attestationSalt",
@@ -135,6 +139,55 @@ def test_aggregate_covers_the_empty_case(document: dict) -> None:
     for vector in empty:
         assert vector["expected"]["scoreBp"] == BP // 2
         assert vector["expected"]["totalWeight"] == 0
+
+
+def test_collateral_vectors_reach_both_ends_of_the_band(document: dict) -> None:
+    """The curve is a line between two policy parameters, and a port that dropped
+    the interpolation entirely would still agree at one end.
+
+    Both ends and at least one interior point have to be in the grid for the
+    comparison to say anything about the slope.
+    """
+    default = document["policies"]["default"]
+    rates = {
+        vector["expected"]
+        for vector in document["collateralRate"]
+        if vector["policy"] == "default"
+    }
+    assert default["collateralCeilingBp"] in rates, "no zero-score vector"
+    assert default["collateralFloorBp"] in rates, "no perfect-score vector"
+    assert any(
+        default["collateralFloorBp"] < rate < default["collateralCeilingBp"] for rate in rates
+    ), "the grid never lands between the two ends"
+
+
+def test_collateral_amounts_cross_the_boundary_as_strings(document: dict) -> None:
+    """A stake is denominated in wei, so both it and the collateral derived from
+    it exceed `Number.MAX_SAFE_INTEGER` at any realistic size.
+
+    Passing either as a JSON number would round the two sides into agreeing,
+    which is the same defect the bond curve was pinned against.
+    """
+    safe = 2**53
+    for vector in document["collateralRequired"]:
+        assert isinstance(vector["stake"], str)
+        assert isinstance(vector["expected"], str)
+    assert any(int(vector["stake"]) > safe for vector in document["collateralRequired"]), (
+        "no stake past the safe-integer boundary"
+    )
+    assert any(int(vector["expected"]) > safe for vector in document["collateralRequired"]), (
+        "no collateral past the safe-integer boundary"
+    )
+    for vector in document["maxStake"]:
+        assert isinstance(vector["expected"], str)
+        assert int(vector["expected"]) > safe
+
+
+def test_collateral_outcome_vectors_cover_both_outcomes(document: dict) -> None:
+    """A grid that only released would pass against a port that never forfeits -
+    and a collateral that is never at risk is not collateral."""
+    outcomes = {vector["expected"] for vector in document["collateralOutcome"]}
+    assert outcomes == {"releasable", "forfeit"}
 
 
 def test_digest_vectors_cover_non_ascii_and_astral_characters(document: dict) -> None:

@@ -21,7 +21,7 @@ marker below and writes `reputation_oracle.py`, which is the single file that
 actually deploys. Editing the generated file directly is a mistake - it is
 overwritten, and `test_build_contract.py` fails when it drifts.
 
-The split is deliberate. The engine is 245 tests of pure integer arithmetic that
+The split is deliberate. The engine is 279 tests of pure integer arithmetic that
 runs with no GenLayer runtime present; the shell cannot be unit-tested at all
 without the GenVM, because `from genlayer import *` only resolves inside it.
 Keeping the untestable part small and free of arithmetic is what stops the
@@ -46,9 +46,19 @@ grades are "equivalent" would throw that precision away and put a second
 non-deterministic judgement inside the consensus step.
 
 **Money moves on explicit calls only.** A slashed bond stays with the contract; a
-releasable one is reclaimed by the attester after the lock elapses. Nothing
-transfers implicitly during grading, so a failed nondet round cannot strand or
-duplicate a payment.
+releasable one is reclaimed by the attester after the lock elapses. Work
+collateral settles the same way: `attest` marks it releasable or forfeit and
+moves nothing, and `release_collateral` / `claim_collateral` are what transfer.
+Nothing moves implicitly during grading, so a failed nondet round cannot strand
+or duplicate a payment.
+
+**Two payable paths, two different mechanisms.** `attest` is payable because
+writing a review costs a bond, which doubles per repeat and prices sybil
+attestation. `accept_engagement` is payable because *taking on work* costs
+collateral, which is priced from the provider's own `score_bp` and falls as that
+score rises. Only the second one converts reputation into money at risk, and it
+is the one the whole engine exists to feed - the bond curve would be worth
+building even if no score were ever computed from it.
 
 One warning about the SDK, because it cost a full rewrite to learn. Two
 generations of `py-genlayer` are in circulation and they disagree about most of
@@ -118,6 +128,13 @@ NEUTRAL_BP = 5000
 # `u256()`, which is an unclassified failure validators cannot compare, instead of
 # a classified rejection every node derives identically.
 U256_MAX = (1 << 256) - 1
+
+# Widest collateral rate a policy may charge: a hundred times the stake. A rate
+# is a multiplier on money someone has to find before they can take on work, so
+# it is bounded for the same reason `repeat_shift_cap` is - a parameter that can
+# be set to anything can be set to a number that stops the protocol working, and
+# a deployment discovers that at the first acceptance rather than at deploy time.
+MAX_COLLATERAL_BP = 100 * BP
 
 # Past this many half-lives an attestation's weight has underflowed to zero in
 # integer arithmetic anyway, and `w >> periods` with a large shift is wasted work
@@ -200,6 +217,19 @@ REASON_NOT_ACCEPTED = "engagement_not_accepted"
 REASON_NOT_PROVIDER = "sender_not_provider"
 REASON_ALREADY_ACCEPTED = "engagement_already_accepted"
 
+# Work collateral. Accepting an engagement is the moment an agent puts its
+# reputation behind work, so it is the moment the score is converted into money
+# at risk: `collateral_required` prices it, and the contract refuses an
+# acceptance that arrives underfunded.
+REASON_STAKE_OUT_OF_RANGE = "stake_out_of_range"
+REASON_COLLATERAL_TOO_SMALL = "collateral_below_required"
+REASON_NO_COLLATERAL = "no_collateral_posted"
+REASON_COLLATERAL_HELD = "collateral_still_held"
+REASON_COLLATERAL_FORFEITED = "collateral_forfeited"
+REASON_COLLATERAL_NOT_FORFEITED = "collateral_not_forfeited"
+REASON_COLLATERAL_SETTLED = "collateral_already_settled"
+REASON_NOT_CLIENT = "sender_not_client"
+
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
     REASON_NOT_CLOSED,
@@ -210,6 +240,14 @@ REASONS = frozenset({
     REASON_NOT_ACCEPTED,
     REASON_NOT_PROVIDER,
     REASON_ALREADY_ACCEPTED,
+    REASON_STAKE_OUT_OF_RANGE,
+    REASON_COLLATERAL_TOO_SMALL,
+    REASON_NO_COLLATERAL,
+    REASON_COLLATERAL_HELD,
+    REASON_COLLATERAL_FORFEITED,
+    REASON_COLLATERAL_NOT_FORFEITED,
+    REASON_COLLATERAL_SETTLED,
+    REASON_NOT_CLIENT,
 })
 
 
@@ -292,9 +330,24 @@ class Policy:
     release_floor      - substantiated at or above this releases it in full
     bond_lock_seconds  - how long a releasable bond stays locked before reclaim
 
+    The last three price *work collateral*, which is a different mechanism from
+    the bond above and the one the score actually feeds:
+
+    collateral_ceiling_bp - collateral an agent scoring 0 must post, in basis
+                            points of the engagement's stake
+    collateral_floor_bp   - what the same stake costs an agent scoring 10000.
+                            The distance between the two is what a reputation is
+                            worth in working capital.
+    collateral_forfeit_bp - `fulfilled` below this forfeits the collateral to the
+                            client, provided the attestation that says so is
+                            itself substantiated enough to count in the score.
+
     `slash_floor <= release_floor` is enforced rather than assumed: inverted, the
     two bands would overlap and a single grade could be both slashable and
     releasable, which `bond_outcome` would have to break arbitrarily.
+    `collateral_floor_bp <= collateral_ceiling_bp` is enforced for the same class
+    of reason: inverted, the collateral curve would rise with reputation and the
+    protocol would charge its best agents the most.
     """
 
     half_life_seconds: int = 7776000  # 90 days
@@ -307,6 +360,9 @@ class Policy:
     slash_floor: int = 20
     release_floor: int = 50
     bond_lock_seconds: int = 1209600  # 14 days
+    collateral_ceiling_bp: int = 15000  # 150% of stake at score 0
+    collateral_floor_bp: int = 2500  # 25% of stake at a perfect score
+    collateral_forfeit_bp: int = 2500  # fulfilled below 25% forfeits
 
     def validate(self) -> None:
         if self.half_life_seconds < 1:
@@ -331,6 +387,14 @@ class Policy:
             raise ValueError("slash_floor must be <= release_floor")
         if self.bond_lock_seconds < 0:
             raise ValueError("bond_lock_seconds must be >= 0")
+        if not 0 <= self.collateral_ceiling_bp <= MAX_COLLATERAL_BP:
+            raise ValueError("collateral_ceiling_bp out of range")
+        if not 0 <= self.collateral_floor_bp <= MAX_COLLATERAL_BP:
+            raise ValueError("collateral_floor_bp out of range")
+        if self.collateral_floor_bp > self.collateral_ceiling_bp:
+            raise ValueError("collateral_floor_bp must be <= collateral_ceiling_bp")
+        if not 0 <= self.collateral_forfeit_bp <= BP:
+            raise ValueError("collateral_forfeit_bp out of range")
 
 
 # --- decay ----------------------------------------------------------------
@@ -568,6 +632,150 @@ def bond_outcome(grade: object, policy: Policy) -> str:
     if isinstance(substantiated, bool) or not isinstance(substantiated, int):
         return BOND_RELEASABLE
     return BOND_SLASHED if substantiated < policy.slash_floor else BOND_RELEASABLE
+
+
+# --- work collateral ------------------------------------------------------
+#
+# This is the mechanism the score exists for, and it is not the bond above.
+#
+# The bond prices *attesting*: it is posted by an attester, doubles per repeat
+# about the same subject, and answers "what does it cost to write a review".
+# Collateral prices *working*: it is posted by the agent taking the job, falls as
+# that agent's score rises, and answers "how much of your own money has to sit
+# behind the work before a counterparty will hand it to you". A protocol with
+# only the first has priced its reviews and left reputation decorative --
+# `score_bp` would be a number consumers read rather than a number that decides
+# anything on chain.
+#
+# The two curves also point in opposite directions on purpose. The bond rises
+# with repetition, so buying a reputation gets more expensive per unit of score;
+# the collateral falls with reputation, so *having* one is worth money. An agent
+# who bought their score paid the rising curve to reach a discount on the falling
+# one, and the discount is capped by `collateral_floor_bp` - which is why the
+# floor is a policy parameter rather than zero.
+
+COLLATERAL_RELEASABLE = "releasable"
+COLLATERAL_FORFEIT = "forfeit"
+COLLATERAL_OUTCOMES = (COLLATERAL_RELEASABLE, COLLATERAL_FORFEIT)
+
+
+def collateral_rate_bp(score_bp: int, policy: Policy) -> int:
+    """Collateral rate for an agent at `score_bp`, in basis points of the stake.
+
+    A straight line from `collateral_ceiling_bp` at a score of zero to
+    `collateral_floor_bp` at a perfect one:
+
+        rate = ceiling - (ceiling - floor) * score / BP
+
+    Linear rather than a curve with more opinion in it, because every point on it
+    has to be explainable to the agent being charged: at the defaults an unknown
+    agent scoring the neutral 5000 posts 87.5% of the stake, a strong agent at
+    8000 posts 50%, and the best possible record still posts a quarter. Nobody
+    reaches zero collateral, however good their history - a reputation earns a
+    discount, and a discount is not an exemption.
+
+    Monotonically non-increasing in the score, and integer throughout. The score
+    is clamped rather than trusted: `aggregate` cannot return anything outside
+    [0, BP], but this function is also called with a score a caller supplied, and
+    an out-of-range one must not price collateral outside the policy's own band.
+    """
+    policy.validate()
+
+    if not isinstance(score_bp, int) or isinstance(score_bp, bool):
+        score = 0  # unreadable standing is priced as no standing
+    else:
+        score = max(0, min(BP, score_bp))
+
+    span = policy.collateral_ceiling_bp - policy.collateral_floor_bp
+    return policy.collateral_ceiling_bp - (span * score) // BP
+
+
+def collateral_required(score_bp: int, stake: int, policy: Policy) -> int:
+    """What an agent at `score_bp` must post to take on work worth `stake`.
+
+    The conversion the whole protocol is for: `get_report(...).score_bp` in,
+    money at risk out. `stake` is the engagement's declared value in the chain's
+    base units, committed by the client when the engagement is opened and agreed
+    to by the provider in the act of accepting it - neither side can move it
+    afterwards, so the price of accepting is fixed by the same commitment that
+    fixes the scope.
+
+    Rounds down, like every other ratio here. A rounding direction has to be
+    chosen and down is the one that cannot make a call fail for an amount the
+    caller was quoted exactly.
+
+    Zero stake means zero collateral, which is what makes this backwards
+    compatible with an engagement that never declares one: the collateral layer
+    switches itself off rather than blocking the lifecycle, exactly as
+    `min_bond = 0` switches the bond off.
+    """
+    policy.validate()
+
+    if not isinstance(stake, int) or isinstance(stake, bool) or stake <= 0:
+        return 0
+    return (stake * collateral_rate_bp(score_bp, policy)) // BP
+
+
+def max_stake(policy: Policy) -> int:
+    """Largest stake whose collateral still fits in a `u256`.
+
+    The ceiling rate can exceed BP - collateral above the value of the work is a
+    legitimate policy for an agent with no record - so a stake that fits in
+    storage does not imply that the collateral derived from it does. The contract
+    checks a declared stake against this at open time, where a rejection is
+    classified and cheap, rather than at accept time, where it would fault inside
+    a `u256` conversion and produce a failure validators cannot compare.
+    """
+    policy.validate()
+
+    rate = policy.collateral_ceiling_bp
+    if rate <= BP:
+        return U256_MAX
+    return (U256_MAX * BP) // rate
+
+
+def collateral_outcome(grade: object, policy: Policy) -> str:
+    """Whether the provider's collateral comes back.
+
+    Keyed on `fulfilled` - the opposite of `bond_outcome`, and for the opposite
+    reason. The bond answers "did this attester assert without support", so it
+    reads substantiation and never sentiment. The collateral answers "was the
+    work delivered", which is exactly what `fulfilled` measures, and forfeiting
+    it is the consequence a client is owed when it was not.
+
+    Two gates stand in front of that, and both are the same gate the score
+    applies: the attestation must be substantiated at or above `release_floor`
+    and confident at or above `min_confidence`. An attestation that carries no
+    weight in the score must not be able to take an agent's money either -
+    otherwise the cheapest attack on this contract is an unevidenced accusation,
+    which costs one bond and is worth zero to the score while being worth the
+    whole collateral to the accuser.
+
+    Total, and it fails toward release for the same reason `bond_outcome` does:
+    anything that is not a readable, weighted, unfulfilled grade is a failure to
+    establish that the work was not delivered, and an unproven case does not
+    justify taking someone's money. An `ungraded` response - one this contract
+    could not read - is evidence about the model, not about the provider.
+    """
+    policy.validate()
+
+    if not isinstance(grade, dict):
+        return COLLATERAL_RELEASABLE
+    if grade.get("verdict") == VERDICT_UNGRADED:
+        return COLLATERAL_RELEASABLE
+
+    substantiated = grade.get("substantiated")
+    confidence = grade.get("confidence")
+    fulfilled = grade.get("fulfilled")
+    for value in (substantiated, confidence, fulfilled):
+        if isinstance(value, bool) or not isinstance(value, int):
+            return COLLATERAL_RELEASABLE
+
+    if substantiated < policy.release_floor:
+        return COLLATERAL_RELEASABLE
+    if confidence < policy.min_confidence:
+        return COLLATERAL_RELEASABLE
+    return COLLATERAL_FORFEIT if fulfilled < policy.collateral_forfeit_bp else COLLATERAL_RELEASABLE
 
 
 # --- verdict layer --------------------------------------------------------
@@ -1036,6 +1244,15 @@ _BOND_LOCKED = "locked"  # releasable, still inside the lock window
 _BOND_RELEASED = "released"  # returned to the attester
 _BOND_SLASHED = "slashed"  # kept by the contract, unsubstantiated claim
 
+# Collateral lifecycle for one engagement. The provider posts it to accept the
+# work, priced off their own score, and it settles when the client grades them.
+_COL_NONE = "none"  # nothing was posted (the engagement declared no stake)
+_COL_HELD = "held"  # posted, and the work has not been graded yet
+_COL_RELEASABLE = "releasable"  # graded, and the work stands: the provider may take it back
+_COL_FORFEIT = "forfeit"  # graded unfulfilled by an attestation that counts: the client may claim it
+_COL_RETURNED = "returned"  # back with the provider
+_COL_CLAIMED = "claimed"  # paid to the client
+
 _MAX_ID_CHARS = 128
 
 # Largest page any paged view will return. Bounds the response a single call can
@@ -1131,6 +1348,9 @@ class ReputationOracle(gl.Contract):
     p_slash_floor: u256
     p_release_floor: u256
     p_bond_lock_seconds: u256
+    p_collateral_ceiling_bp: u256
+    p_collateral_floor_bp: u256
+    p_collateral_forfeit_bp: u256
 
     # Engagements, keyed by a caller-supplied id.
     eng_client: TreeMap[str, Address]
@@ -1138,6 +1358,16 @@ class ReputationOracle(gl.Contract):
     eng_scope: TreeMap[str, str]
     eng_digest: TreeMap[str, str]
     eng_state: TreeMap[str, u256]
+    # The declared value of the work, and what accepting it cost the provider.
+    # `eng_score_bp` is the provider's score at the moment they accepted, kept
+    # because the collateral is derived from it and a derivation nobody can see
+    # afterwards is indistinguishable from an arbitrary number.
+    eng_stake: TreeMap[str, u256]
+    eng_closed_at: TreeMap[str, u256]
+    eng_collateral: TreeMap[str, u256]
+    eng_collateral_rate_bp: TreeMap[str, u256]
+    eng_score_bp: TreeMap[str, u256]
+    eng_collateral_state: TreeMap[str, str]
 
     # Attestations. Append-only; the shared index is the attestation id.
     att_engagement: DynArray[str]
@@ -1171,6 +1401,9 @@ class ReputationOracle(gl.Contract):
         slash_floor: u256 = 20,
         release_floor: u256 = 50,
         bond_lock_seconds: u256 = 1209600,
+        collateral_ceiling_bp: u256 = 15000,
+        collateral_floor_bp: u256 = 2500,
+        collateral_forfeit_bp: u256 = 2500,
     ):
         """Deploy with a policy.
 
@@ -1191,6 +1424,9 @@ class ReputationOracle(gl.Contract):
             slash_floor=slash_floor,
             release_floor=release_floor,
             bond_lock_seconds=bond_lock_seconds,
+            collateral_ceiling_bp=collateral_ceiling_bp,
+            collateral_floor_bp=collateral_floor_bp,
+            collateral_forfeit_bp=collateral_forfeit_bp,
         )
         try:
             candidate.validate()
@@ -1208,6 +1444,9 @@ class ReputationOracle(gl.Contract):
         self.p_slash_floor = slash_floor
         self.p_release_floor = release_floor
         self.p_bond_lock_seconds = bond_lock_seconds
+        self.p_collateral_ceiling_bp = collateral_ceiling_bp
+        self.p_collateral_floor_bp = collateral_floor_bp
+        self.p_collateral_forfeit_bp = collateral_forfeit_bp
 
     def _policy(self) -> Policy:
         """Rebuild the in-memory policy from storage."""
@@ -1222,18 +1461,36 @@ class ReputationOracle(gl.Contract):
             slash_floor=int(self.p_slash_floor),
             release_floor=int(self.p_release_floor),
             bond_lock_seconds=int(self.p_bond_lock_seconds),
+            collateral_ceiling_bp=int(self.p_collateral_ceiling_bp),
+            collateral_floor_bp=int(self.p_collateral_floor_bp),
+            collateral_forfeit_bp=int(self.p_collateral_forfeit_bp),
         )
 
     # --- engagements --------------------------------------------------------
 
     @gl.public.write
-    def open_engagement(self, engagement_id: str, provider: Address, scope: str) -> None:
-        """Commit a scope before the work starts.
+    def open_engagement(
+        self, engagement_id: str, provider: Address, scope: str, stake: u256 = 0
+    ) -> None:
+        """Commit a scope, and the value of the work, before the work starts.
 
         The digest is taken here, at open time, which is the whole point: once
         the outcome is known neither party can retrofit the standard being graded
         against. The scope text is stored alongside it so the grading prompt can
         be rebuilt byte-identically by every validator later.
+
+        `stake` is the declared value of the work in the chain's base units, and
+        it is what the provider's collateral is priced against when they accept.
+        It is committed here for the same reason the scope is: the price of
+        taking on the job has to be fixed before anyone knows how the job went,
+        and a stake the client could raise afterwards would be a bill the
+        provider never agreed to. The contract does not custody the client's
+        payment - only the provider's collateral - so an inflated stake is not a
+        way to extract money from a provider, it is a way to be refused: the
+        provider reads it before accepting, and simply does not accept.
+
+        A stake of zero is a legitimate engagement with the collateral layer off,
+        which is what the lifecycle was before it had one.
         """
         if not engagement_id or len(engagement_id) > _MAX_ID_CHARS:
             _fail("bad_engagement_id")
@@ -1241,6 +1498,15 @@ class ReputationOracle(gl.Contract):
             _fail("engagement_exists")
         if not scope.strip():
             _fail("empty_scope")
+
+        # Calldata integers are unbounded, and the collateral derived from this
+        # is `stake * collateral_ceiling_bp // BP` - which can exceed `u256` for
+        # a stake that fits in one. Rejecting here is a classified refusal every
+        # validator derives alike; letting it through would fault inside a `u256`
+        # conversion at accept time, which is not.
+        declared = int(stake)
+        if declared < 0 or declared > max_stake(self._policy()):
+            _fail(REASON_STAKE_OUT_OF_RANGE)
 
         client = gl.message.sender_address
         if provider == client:
@@ -1250,32 +1516,74 @@ class ReputationOracle(gl.Contract):
         self.eng_provider[engagement_id] = provider
         self.eng_scope[engagement_id] = scope
         self.eng_digest[engagement_id] = scope_digest(scope)
+        self.eng_stake[engagement_id] = declared
+        self.eng_collateral_state[engagement_id] = _COL_NONE
         # Proposed, not open. The provider named above has not agreed to anything
         # yet, and until they do nothing about this engagement can reach a score.
         self.eng_state[engagement_id] = _ENG_PROPOSED
 
-    @gl.public.write
-    def accept_engagement(self, engagement_id: str) -> None:
-        """Agree to be graded on a scope someone proposed for you.
+    @gl.public.write.payable
+    def accept_engagement(self, engagement_id: str) -> u256:
+        """Take on the work, posting collateral priced by your own reputation.
 
-        The consent step, and the reason attestation cannot be used to defame a
-        stranger. Only the named provider can call it: the client already
-        consented by opening, and letting either side accept would make the
-        signature meaningless.
+        This is where the score stops being a number to read and starts being a
+        number that costs money. The provider's standing is computed from the
+        same stored grades `get_report` walks, `collateral_required` converts it
+        into a share of the engagement's committed stake, and an acceptance that
+        arrives with less value than that is refused before the engagement opens.
+        A well-reviewed agent unlocks the same work for a fraction of the capital
+        an unknown one needs: at the deployed policy, 25% of the stake at a
+        perfect record against 150% at none, and 87.5% for an agent with no
+        history at all.
 
-        The scope is fixed by now and its digest is committed, so accepting is an
-        agreement to a specific standard rather than an open-ended one - the
-        provider can read exactly what they are agreeing to be measured against.
+        The score is read here and frozen into storage rather than read again
+        later. Collateral is a price agreed at the moment of taking the job;
+        recomputing it afterwards would mean an agent's later reviews
+        retroactively changed what an earlier job cost them.
+
+        It is also still the consent step, and that ordering matters: only the
+        named provider can call it, so the collateral is always posted by the
+        party being graded, out of their own funds, against a scope they read
+        first.
+
+        Returns the collateral actually held, so a caller can show what they
+        posted rather than what they sent.
         """
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
         if state == _ENG_ABSENT:
             _fail(REASON_NO_ENGAGEMENT)
         if state != _ENG_PROPOSED:
             _fail(REASON_ALREADY_ACCEPTED)
-        if gl.message.sender_address != self.eng_provider[engagement_id]:
+        provider = self.eng_provider[engagement_id]
+        if gl.message.sender_address != provider:
             _fail(REASON_NOT_PROVIDER)
 
+        policy = self._policy()
+        stake = int(self.eng_stake.get(engagement_id, 0))
+        score_bp = int(self._report(provider)["score_bp"])
+        required = collateral_required(score_bp, stake, policy)
+
+        # The gate closes before the state changes, so an underfunded acceptance
+        # leaves the engagement a proposal rather than open work backed by
+        # nothing.
+        posted = int(gl.message.value)
+        if posted < required:
+            _fail(REASON_COLLATERAL_TOO_SMALL)
+
+        self.eng_score_bp[engagement_id] = score_bp
+        self.eng_collateral_rate_bp[engagement_id] = collateral_rate_bp(score_bp, policy)
+        self.eng_collateral[engagement_id] = required
+        self.eng_collateral_state[engagement_id] = _COL_HELD if required > 0 else _COL_NONE
         self.eng_state[engagement_id] = _ENG_OPEN
+
+        # Overpayment goes straight back, as it does in `attest`. Holding it
+        # would make the collateral curve a floor rather than a price, and the
+        # curve is the entire argument for having a score at all.
+        excess = posted - required
+        if excess > 0:
+            gl.get_contract_at(provider).emit_transfer(value=excess)
+
+        return required
 
     @gl.public.write
     def close_engagement(self, engagement_id: str) -> None:
@@ -1295,6 +1603,10 @@ class ReputationOracle(gl.Contract):
             _fail(REASON_NOT_COUNTERPARTY)
 
         self.eng_state[engagement_id] = _ENG_CLOSED
+        # Stamped because the collateral's dispute window runs from here. A
+        # client who never attests cannot strand a provider's capital; they can
+        # only delay its return by the length of the lock.
+        self.eng_closed_at[engagement_id] = _now_seconds()
 
     # --- attestation --------------------------------------------------------
 
@@ -1420,6 +1732,20 @@ class ReputationOracle(gl.Contract):
         self.pair_count[pair] = repeat_index + 1
         self.engagement_attested[seen_key] = True
 
+        # Settle the provider's work collateral, if this is the grade that
+        # decides it. Only the client's attestation about the provider can be:
+        # the provider grading the client back says nothing about whether the
+        # work was delivered, and an engagement whose provider posted nothing has
+        # nothing to settle. Nothing is transferred here - the state is marked
+        # and the money moves on `release_collateral` or `claim_collateral`, so a
+        # failed nondet round cannot strand or duplicate a payment.
+        held = self.eng_collateral_state.get(engagement_id, _COL_NONE)
+        if subject == provider and held == _COL_HELD:
+            if collateral_outcome(grade, policy) == COLLATERAL_FORFEIT:
+                self.eng_collateral_state[engagement_id] = _COL_FORFEIT
+            else:
+                self.eng_collateral_state[engagement_id] = _COL_RELEASABLE
+
         # Overpayment is returned immediately. Holding it would make the bond
         # curve a floor rather than a price, and the curve is the argument.
         excess = posted - required
@@ -1468,15 +1794,111 @@ class ReputationOracle(gl.Contract):
         self.att_bond_state[index] = _BOND_RELEASED
         gl.get_contract_at(attester).emit_transfer(value=amount)
 
+    # --- collateral ---------------------------------------------------------
+
+    @gl.public.write
+    def release_collateral(self, engagement_id: str) -> None:
+        """Return work collateral to the provider who posted it.
+
+        Two ways to reach this. The ordinary one is that the client attested and
+        the grade did not forfeit: the outcome is settled, and the capital is
+        free the moment it is known. The other is that nobody ever attested -
+        which a client can always choose - and for that case the collateral
+        leaves once the engagement has been closed for the dispute window. A
+        counterparty who declines to grade must not be able to hold an agent's
+        working capital indefinitely; that would make silence a weapon and
+        collateral a hostage.
+
+        The window is `bond_lock_seconds`, deliberately the same one a bond waits
+        out. It is one dispute window for one protocol rather than two numbers
+        that would drift apart in a policy table.
+        """
+        state = self.eng_state.get(engagement_id, _ENG_ABSENT)
+        if state == _ENG_ABSENT:
+            _fail(REASON_NO_ENGAGEMENT)
+
+        provider = self.eng_provider[engagement_id]
+        if gl.message.sender_address != provider:
+            _fail(REASON_NOT_PROVIDER)
+
+        held = self.eng_collateral_state.get(engagement_id, _COL_NONE)
+        if held == _COL_NONE:
+            _fail(REASON_NO_COLLATERAL)
+        if held == _COL_FORFEIT:
+            _fail(REASON_COLLATERAL_FORFEITED)
+        if held == _COL_RETURNED or held == _COL_CLAIMED:
+            _fail(REASON_COLLATERAL_SETTLED)
+
+        if held == _COL_HELD:
+            if state != _ENG_CLOSED:
+                _fail(REASON_NOT_CLOSED)
+            policy = self._policy()
+            unlock_at = int(self.eng_closed_at.get(engagement_id, 0)) + policy.bond_lock_seconds
+            if _now_seconds() < unlock_at:
+                _fail(REASON_COLLATERAL_HELD)
+
+        amount = int(self.eng_collateral.get(engagement_id, 0))
+        # `emit_transfer` raises a bare `ValueError` on a non-positive amount,
+        # which surfaces as an unclassified VM fault rather than a rejection
+        # every validator derives alike. The `_COL_NONE` branch above should make
+        # this unreachable; classifying it costs one branch.
+        if amount <= 0:
+            _fail(REASON_NO_COLLATERAL)
+
+        self.eng_collateral_state[engagement_id] = _COL_RETURNED
+        gl.get_contract_at(provider).emit_transfer(value=amount)
+
+    @gl.public.write
+    def claim_collateral(self, engagement_id: str) -> None:
+        """Pay forfeited collateral to the client the work was owed to.
+
+        The other half of what makes collateral collateral. A forfeit that stayed
+        with the contract would price undelivered work without compensating
+        anyone for it, and the guarantee a client is buying is precisely that
+        someone is made whole.
+
+        Forfeiture is not the client's decision, which is the part worth being
+        careful about: they can only claim what an attestation already forfeited,
+        and that attestation had to be substantiated enough to carry weight in
+        the score before it could forfeit anything. Accusation alone moves no
+        money.
+        """
+        state = self.eng_state.get(engagement_id, _ENG_ABSENT)
+        if state == _ENG_ABSENT:
+            _fail(REASON_NO_ENGAGEMENT)
+
+        client = self.eng_client[engagement_id]
+        if gl.message.sender_address != client:
+            _fail(REASON_NOT_CLIENT)
+
+        held = self.eng_collateral_state.get(engagement_id, _COL_NONE)
+        if held == _COL_RETURNED or held == _COL_CLAIMED:
+            _fail(REASON_COLLATERAL_SETTLED)
+        if held != _COL_FORFEIT:
+            _fail(REASON_COLLATERAL_NOT_FORFEITED)
+
+        amount = int(self.eng_collateral.get(engagement_id, 0))
+        if amount <= 0:
+            _fail(REASON_NO_COLLATERAL)
+
+        self.eng_collateral_state[engagement_id] = _COL_CLAIMED
+        gl.get_contract_at(client).emit_transfer(value=amount)
+
     # --- views --------------------------------------------------------------
 
-    @gl.public.view
-    def get_report(self, subject: Address) -> dict:
+    def _report(self, subject: Address) -> dict:
         """An agent's standing, recomputed from stored grades at read time.
 
         Decay is a function of age, so the score is derived per call rather than
         cached. Nothing here calls a model: the grades were settled when they
         were written.
+
+        Private, and called from a write path as well as a read one:
+        `accept_engagement` prices collateral off the same number `get_report`
+        returns, and it must be the same number by construction rather than by
+        two implementations agreeing. A `@gl.public.view` method is a call
+        surface, not a subroutine, so the shared body lives here and both
+        entry points are thin.
         """
         policy = self._policy()
         ids = self.subject_atts.get(subject)
@@ -1511,6 +1933,11 @@ class ReputationOracle(gl.Contract):
             n_distinct_attesters=len(attesters),
             n_counted=counted,
         ).as_dict()
+
+    @gl.public.view
+    def get_report(self, subject: Address) -> dict:
+        """An agent's standing. The number collateral is priced off."""
+        return self._report(subject)
 
     @gl.public.view
     def get_attestation(self, attestation_id: u256) -> dict:
@@ -1662,14 +2089,21 @@ class ReputationOracle(gl.Contract):
         out = []
         for raw in _slice(subjects, 0, len(subjects)):
             subject = Address(raw) if not isinstance(raw, Address) else raw
-            report = self.get_report(subject)
+            report = self._report(subject)
             report["subject"] = subject.as_hex
             out.append(report)
         return out
 
     @gl.public.view
     def get_engagement(self, engagement_id: str) -> dict:
-        """The committed scope and its digest."""
+        """The committed scope, its digest, and the collateral behind the work.
+
+        `collateral` is what the provider actually posted; `score_bp` and
+        `rate_bp` are the standing it was priced at and the rate that standing
+        bought, kept so the figure can be re-derived by anyone reading the
+        engagement rather than taken on faith. All three are zero on a proposal
+        nobody has accepted yet.
+        """
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
         if state == _ENG_ABSENT:
             _fail(REASON_NO_ENGAGEMENT)
@@ -1684,6 +2118,12 @@ class ReputationOracle(gl.Contract):
             # the difference between a proposal and accepted work.
             "state": _ENG_STATE_NAMES[int(state)],
             "closed": int(state) == _ENG_CLOSED,
+            "stake": int(self.eng_stake.get(engagement_id, 0)),
+            "closed_at": int(self.eng_closed_at.get(engagement_id, 0)),
+            "collateral": int(self.eng_collateral.get(engagement_id, 0)),
+            "collateral_state": self.eng_collateral_state.get(engagement_id, _COL_NONE),
+            "collateral_rate_bp": int(self.eng_collateral_rate_bp.get(engagement_id, 0)),
+            "score_bp": int(self.eng_score_bp.get(engagement_id, 0)),
         }
 
     @gl.public.view
@@ -1701,11 +2141,40 @@ class ReputationOracle(gl.Contract):
             "slash_floor": policy.slash_floor,
             "release_floor": policy.release_floor,
             "bond_lock_seconds": policy.bond_lock_seconds,
+            "collateral_ceiling_bp": policy.collateral_ceiling_bp,
+            "collateral_floor_bp": policy.collateral_floor_bp,
+            "collateral_forfeit_bp": policy.collateral_forfeit_bp,
         }
 
     @gl.public.view
     def attestation_count(self) -> u256:
         return len(self.att_engagement)
+
+    @gl.public.view
+    def collateral_quote(self, provider: Address, stake: u256) -> dict:
+        """What taking on work worth `stake` would cost this agent, right now.
+
+        The read-side twin of the gate in `accept_engagement`, and the reason a
+        provider never has to discover the price from a rejection. It carries the
+        score and the rate as well as the amount, because the amount alone is a
+        demand and the three together are an explanation: this is your standing,
+        this is what that standing costs, this is the money.
+
+        A quote is only as fresh as the score behind it - one more attestation
+        about this provider moves it - so a caller that sends value should re-read
+        it at submit time, exactly as the bond quote is re-read.
+        """
+        policy = self._policy()
+        score_bp = int(self._report(provider)["score_bp"])
+        declared = int(stake)
+        return {
+            "provider": provider.as_hex,
+            "stake": declared,
+            "score_bp": score_bp,
+            "rate_bp": collateral_rate_bp(score_bp, policy),
+            "required": collateral_required(score_bp, declared, policy),
+            "max_stake": max_stake(policy),
+        }
 
     @gl.public.view
     def bond_for_next(self, attester: Address, subject: Address) -> u256:

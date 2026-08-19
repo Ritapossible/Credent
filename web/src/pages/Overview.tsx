@@ -5,8 +5,18 @@ import StatTile from '../components/StatTile'
 import { useDeployedPolicy, useRegistry } from '../chain/useOracle'
 import type { AgentReport } from '../chain/registry'
 import { CREDENT_POLICY, NEUTRAL_BP, type Policy } from '../core/policy'
+import { collateralRequired } from '../core/collateral'
 import { repeatPenalty } from '../core/simulate'
 import { bpToScore, formatBond, formatCount, formatDuration, shortAddress } from '../core/format'
+
+/**
+ * The engagement the hero prices collateral against.
+ *
+ * A hundred whole tokens, chosen so the figure beside a score reads as money
+ * rather than as a rate. It is an illustration and says so; the contract prices
+ * whatever stake a client actually declares.
+ */
+const EXAMPLE_STAKE = 100n * 10n ** 18n
 
 /** One line each; the full account of every step lives at `/docs#protocol`. */
 const STEPS = [
@@ -228,6 +238,18 @@ function StandingPreview({ agent, policy }: { agent: AgentReport | null; policy:
           <div className="standing__row">
             <dt>Weight half-life</dt>
             <dd className="mono">{formatDuration(policy.halfLifeSeconds)}</dd>
+          </div>
+          {/* The point of the whole system, on the fold: what this score costs
+              its holder to take on work. Computed by the ported engine from the
+              deployed policy, which is the same arithmetic `accept_engagement`
+              runs before it will let the job start. */}
+          <div className="standing__row">
+            <dt>Collateral on a {formatBond(EXAMPLE_STAKE)} job</dt>
+            <dd className="mono">
+              {formatBond(
+                collateralRequired(report?.scoreBp ?? NEUTRAL_BP, EXAMPLE_STAKE, policy),
+              )}
+            </dd>
           </div>
         </dl>
 

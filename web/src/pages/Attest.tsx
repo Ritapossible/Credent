@@ -16,18 +16,25 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import { CONTRACT_ADDRESS, EXPLORER_URL, IS_CONFIGURED, NETWORK } from '../chain/config'
-import { bondForNext, getEngagement } from '../chain/oracle'
+import {
+  bondForNext,
+  collateralQuote,
+  getEngagement,
+  type CollateralQuote,
+} from '../chain/oracle'
 import { useWallet } from '../chain/useWallet'
 import {
   acceptEngagement,
   attest,
+  claimCollateral,
   closeEngagement,
   openEngagement,
   reclaimBond,
+  releaseCollateral,
   type WriteResult,
 } from '../chain/wallet'
 import { useWalletPicker } from '../components/WalletModal'
-import { formatBond, shortAddress } from '../core/format'
+import { bpToPercent, bpToScore, formatBond, parseTokens, shortAddress } from '../core/format'
 import { normalizeAddress } from '../core/digest'
 import { readableError } from '../core/errors'
 
@@ -103,6 +110,7 @@ export default function Attest() {
   const [openId, setOpenId] = useState('')
   const [openProvider, setOpenProvider] = useState('')
   const [openScope, setOpenScope] = useState('')
+  const [openStake, setOpenStake] = useState('')
   const [openState, runOpen] = useAction()
 
   const [acceptId, setAcceptId] = useState('')
@@ -119,10 +127,26 @@ export default function Attest() {
   const [reclaimId, setReclaimId] = useState('')
   const [reclaimState, runReclaim] = useAction()
 
+  const [releaseId, setReleaseId] = useState('')
+  const [releaseState, runRelease] = useAction()
+
+  const [claimId, setClaimId] = useState('')
+  const [claimState, runClaim] = useAction()
+
+  // The stake is typed as GEN and sent as wei. `null` means the text is not an
+  // amount this token can represent, which disables the button rather than
+  // rounding it into one that is.
+  const stake = parseTokens(openStake)
+
   // Read once here and passed down. Both the quoted cost and the button's
   // enabled state depend on it, and asking twice would be two chain reads per
   // keystroke in the engagement id.
   const { bond: attestBond, note: attestNote, blocked: attestBlocked } = useBond(attestId, address)
+
+  // The collateral the connected wallet would have to post to accept, read from
+  // the chain for the same reason the bond is: it is priced off this provider's
+  // own score, so no constant is right for two agents.
+  const { quote: acceptQuote, blocked: acceptBlocked } = useCollateral(acceptId, address)
 
   const canWrite = IS_CONFIGURED && address !== null && rightChain !== false
 
@@ -149,8 +173,10 @@ export default function Attest() {
         <p className="eyebrow eyebrow--pill">Post</p>
         <h1>Write to the registry</h1>
         <p className="lede">
-          Five calls, in the order the protocol requires them. Each is signed by your own wallet -
-          this site never holds a key. <Link to="/docs#protocol">How the lifecycle works →</Link>
+          Seven calls, in the order the protocol requires them. Two of them move money: accepting
+          work posts collateral priced by your reputation, and attesting posts a bond. Each is
+          signed by your own wallet - this site never holds a key.{' '}
+          <Link to="/docs#protocol">How the lifecycle works →</Link>
         </p>
       </div>
 
@@ -193,6 +219,23 @@ export default function Attest() {
           </div>
 
           <div className="field">
+            <label htmlFor="open-stake">Value of the work (optional)</label>
+            <input
+              id="open-stake"
+              className="input mono"
+              value={openStake}
+              placeholder="100"
+              inputMode="decimal"
+              onChange={(event) => setOpenStake(event.target.value)}
+            />
+            <p className={`hint${stake === null ? ' bond-note--blocked' : ''}`}>
+              {stake === null
+                ? 'Not an amount in GEN. Digits, with at most eighteen decimal places.'
+                : 'In GEN. The provider posts collateral against this when they accept - more of it the worse their record. Leave it blank for an engagement with no collateral.'}
+            </p>
+          </div>
+
+          <div className="field">
             <label htmlFor="open-scope">Scope</label>
             <textarea
               id="open-scope"
@@ -209,13 +252,21 @@ export default function Attest() {
           <button
             type="button"
             className="btn"
-            disabled={!canWrite || openState.pending || !openId || !openProvider || !openScope.trim()}
+            disabled={
+              !canWrite ||
+              openState.pending ||
+              !openId ||
+              !openProvider ||
+              !openScope.trim() ||
+              stake === null
+            }
             onClick={() =>
               void runOpen(() =>
                 openEngagement(address as string, {
                   engagementId: openId,
                   provider: normalizeAddress(openProvider),
                   scope: openScope,
+                  stake: stake ?? 0n,
                 }),
               )
             }
@@ -227,8 +278,8 @@ export default function Attest() {
 
         <Step
           index={2}
-          title="Accept it"
-          blurb="The provider agrees to be graded on that scope. Only they can, and until they do the engagement is a proposal that cannot reach anyone's score."
+          title="Accept it, posting collateral"
+          blurb="The provider agrees to be graded on that scope and puts up collateral against the work. Only they can accept, and what it costs them is decided by their own score."
         >
           <div className="field">
             <label htmlFor="accept-id">Engagement id</label>
@@ -245,13 +296,26 @@ export default function Attest() {
             </p>
           </div>
 
+          <CollateralNote quote={acceptQuote} blocked={acceptBlocked} />
+
           <button
             type="button"
             className="btn"
-            disabled={!canWrite || acceptState.pending || !acceptId}
-            onClick={() => void runAccept(() => acceptEngagement(address as string, acceptId))}
+            disabled={!canWrite || acceptState.pending || !acceptId || acceptBlocked !== null}
+            onClick={() =>
+              void runAccept(async () => {
+                // Re-read at submit time, exactly as the bond is. The quote
+                // above is priced off this provider's score, and one more
+                // attestation about them moves it - a stale figure is rejected
+                // on chain as `collateral_below_required` after the gas is
+                // spent.
+                const engagement = await getEngagement(acceptId)
+                const fresh = await collateralQuote(engagement.provider, engagement.stake)
+                return acceptEngagement(address as string, acceptId, fresh.required)
+              })
+            }
           >
-            {acceptState.pending ? 'Accepting…' : 'Accept engagement'}
+            {acceptState.pending ? 'Accepting…' : 'Accept and post collateral'}
           </button>
           <Outcome state={acceptState} verb="Engagement accepted." />
         </Step>
@@ -390,6 +454,70 @@ export default function Attest() {
             {reclaimState.pending ? 'Reclaiming…' : 'Reclaim bond'}
           </button>
           <Outcome state={reclaimState} verb="Bond reclaimed." />
+        </Step>
+
+        <Step
+          index={6}
+          title="Release the collateral"
+          blurb="Returns work collateral to the provider who posted it - once the grade cleared them, or once the engagement has been closed for the dispute window with nobody grading it at all."
+        >
+          <div className="field">
+            <label htmlFor="release-id">Engagement id</label>
+            <input
+              id="release-id"
+              className="input mono"
+              value={releaseId}
+              placeholder="eng-001"
+              onChange={(event) => setReleaseId(event.target.value)}
+            />
+            <p className="hint">
+              Provider only. A client who declines to attest cannot hold your capital
+              indefinitely - after the lock it comes back ungraded.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="btn"
+            disabled={!canWrite || releaseState.pending || !releaseId}
+            onClick={() =>
+              void runRelease(() => releaseCollateral(address as string, releaseId))
+            }
+          >
+            {releaseState.pending ? 'Releasing…' : 'Release collateral'}
+          </button>
+          <Outcome state={releaseState} verb="Collateral released." />
+        </Step>
+
+        <Step
+          index={7}
+          title="Claim forfeited collateral"
+          blurb="Pays the collateral to the client when a substantiated attestation found the work undelivered. Accusation alone does not forfeit it - the attestation has to carry weight in the score first."
+        >
+          <div className="field">
+            <label htmlFor="claim-id">Engagement id</label>
+            <input
+              id="claim-id"
+              className="input mono"
+              value={claimId}
+              placeholder="eng-001"
+              onChange={(event) => setClaimId(event.target.value)}
+            />
+            <p className="hint">
+              Client only, and only where step 4 graded the work below the forfeit threshold on
+              evidence the score itself would count.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="btn"
+            disabled={!canWrite || claimState.pending || !claimId}
+            onClick={() => void runClaim(() => claimCollateral(address as string, claimId))}
+          >
+            {claimState.pending ? 'Claiming…' : 'Claim collateral'}
+          </button>
+          <Outcome state={claimState} verb="Collateral claimed." />
         </Step>
       </div>
 
@@ -568,6 +696,108 @@ function useBond(engagementId: string, attester: string | null) {
   }, [engagementId, attester])
 
   return { bond, note, blocked }
+}
+
+/**
+ * What accepting this engagement would cost the connected wallet.
+ *
+ * Read through the engagement rather than asked for directly: the collateral is
+ * priced off the *provider's* score against the stake the client committed, and
+ * both of those live on chain. Quoting a policy constant instead would be right
+ * for exactly one agent - the one with no history.
+ */
+function useCollateral(engagementId: string, provider: string | null) {
+  const [quote, setQuote] = useState<CollateralQuote | null>(null)
+  /** Set when the contract will certainly refuse this acceptance. */
+  const [blocked, setBlocked] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!engagementId || provider === null) {
+      setQuote(null)
+      setBlocked(null)
+      return
+    }
+
+    let live = true
+
+    // Debounced for the same reason `useBond` is: this runs on every keystroke
+    // in the id field and the studio RPC allows thirty requests a minute.
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const engagement = await getEngagement(engagementId)
+          if (!live) return
+
+          if (engagement.provider !== provider.toLowerCase()) {
+            setQuote(null)
+            setBlocked('You are not the provider named on this engagement, so you cannot accept it.')
+            return
+          }
+          if (engagement.state !== 'proposed') {
+            setQuote(null)
+            setBlocked('This engagement has already been accepted.')
+            return
+          }
+          setBlocked(null)
+
+          const fresh = await collateralQuote(engagement.provider, engagement.stake)
+          if (live) setQuote(fresh)
+        } catch {
+          // An id that does not resolve is the ordinary case while typing one.
+          if (live) {
+            setQuote(null)
+            setBlocked(null)
+          }
+        }
+      })()
+    }, 400)
+
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [engagementId, provider])
+
+  return { quote, blocked }
+}
+
+/**
+ * The collateral quote, with the derivation shown rather than the figure alone.
+ *
+ * An amount on its own is a demand. The score, the rate it bought and the stake
+ * it applies to are the explanation, and they are exactly the three numbers the
+ * contract used - so a provider can check the price rather than trust it.
+ */
+function CollateralNote({
+  quote,
+  blocked,
+}: {
+  quote: CollateralQuote | null
+  blocked: string | null
+}) {
+  if (quote === null && blocked === null) return null
+
+  if (quote !== null && quote.stake === 0n) {
+    return (
+      <p className="hint bond-note">
+        This engagement declares no value, so accepting it posts no collateral.
+      </p>
+    )
+  }
+
+  return (
+    <p className={`hint bond-note${blocked !== null ? ' bond-note--blocked' : ''}`}>
+      {quote !== null ? (
+        <>
+          Collateral required: <strong>{formatBond(quote.required)}</strong> -{' '}
+          {bpToPercent(quote.rateBp)} of a {formatBond(quote.stake)} stake, at your score of{' '}
+          {bpToScore(quote.scoreBp)}. Anything you send above it is returned in the same
+          transaction.{' '}
+        </>
+      ) : null}
+      {blocked}
+    </p>
+  )
 }
 
 function BondNote({

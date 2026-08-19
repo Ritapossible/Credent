@@ -43,6 +43,8 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         "close_engagement",
         "attest",
         "reclaim_bond",
+        "release_collateral",
+        "claim_collateral",
         "get_report",
         "get_attestation",
         "get_attestations",
@@ -53,6 +55,7 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         "get_policy",
         "attestation_count",
         "bond_for_next",
+        "collateral_quote",
     }
 )
 
@@ -215,7 +218,7 @@ def test_genvm_lint_validates_the_artifact_and_extracts_a_full_schema() -> None:
     # The schema is the ABI a client reads to learn what it can call. A missing
     # or partial one is the symptom both defects above produced.
     assert report["validate"]["methods"] == len(EXPECTED_PUBLIC_METHODS)
-    assert report["validate"]["ctor_params"] == 10, "the ten policy parameters"
+    assert report["validate"]["ctor_params"] == 13, "the thirteen policy parameters"
 
 
 def test_the_artifact_has_no_future_import(artifact_source: str) -> None:

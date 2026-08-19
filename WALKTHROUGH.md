@@ -1,8 +1,14 @@
 # Running the lifecycle through the site
 
 Copy-paste values for one full pass through `/attest`: open an engagement, accept
-it, close it, and grade it. Everything below is a real, self-consistent example —
-the scope, claim and evidence are written to be gradeable, not to be filler.
+it under collateral, close it, and grade it. Everything below is a real,
+self-consistent example — the scope, claim and evidence are written to be
+gradeable, not to be filler.
+
+Two of the steps move money. Accepting posts **collateral** priced by the
+provider's own score, which is the mechanism the whole protocol is for;
+attesting posts a **bond**, which prices the review rather than the work. Fund
+both accounts accordingly before you start.
 
 ## Before you start
 
@@ -32,15 +38,27 @@ rejected** (`engagement_exists`).
 |---|---|---|---|---|
 | 1 | Open the engagement | Engagement id | `credent-demo-001` | **A** |
 | 1 | | Provider address | `0xBBBB…BBBB` (Account B) | |
+| 1 | | Value of the work | `10` | |
 | 1 | | Scope | *see Scope below* | |
-| 2 | Accept it | Engagement id | `credent-demo-001` | **B** |
+| 2 | Accept it, posting collateral | Engagement id | `credent-demo-001` | **B** |
 | 3 | Close it | Engagement id | `credent-demo-001` | A **or** B |
 | 4 | Attest | Engagement id | `credent-demo-001` | **A** |
 | 4 | | Claim | *see Claim below* | |
 | 4 | | Evidence | *see Evidence below* | |
 | 5 | Reclaim the bond | Attestation id | the number step 4 returned (`0`, `1`, …) | **A** |
+| 6 | Release the collateral | Engagement id | `credent-demo-001` | **B** |
+| 7 | Claim forfeited collateral | Engagement id | *only if step 4 forfeited it* | **A** |
 
-Step 5 will not work today — see [The bond](#the-bond).
+Step 5 will not work today — see [The bond](#the-bond). Step 6 will, as soon as
+step 4 has graded the work: a clearing grade settles the collateral immediately,
+and only an ungraded engagement has to wait out the lock.
+
+Step 1's value is in GEN and is optional. Leaving it blank runs the same
+lifecycle with the collateral layer switched off, which is what every pass
+through this table did before the collateral existed. `10` is used here because
+Account B then has to find **8.75 GEN** to accept — an agent with no history
+posts 87.5% of the stake — which is enough to feel like collateral on a studio
+account funded with a hundred.
 
 ### Scope
 
@@ -109,6 +127,53 @@ entry from it.
 | 4 | | Claim | `The client supplied the 12,047-row orders.csv on 2026-08-18, the day after we agreed the scope, and answered both of my questions about malformed timestamps within three hours. Payment cleared 2026-08-22.` | |
 | 4 | | Evidence | `Input file received 2026-08-18T09:14Z, sha256 e3b0c442...98fb (recorded in the delivery repo's data/README). My two questions and the client's replies are in the thread of 2026-08-18, timestamped 11:02Z and 14:20Z. The payment transaction is on the account history for 2026-08-22.` | |
 
+## The collateral
+
+Accepting is payable, and what it costs is decided by the accepting agent's own
+score. The Accept card quotes the exact figure — **"Collateral required: … GEN"**
+— along with the two numbers it came from: the rate, and the score that bought
+it. **Trust that quote over anything written here**, and keep enough GEN to
+cover it plus gas.
+
+- **150%** of the declared value for an agent scoring zero, **87.5%** for one
+  with no history at all, **25%** for a perfect record. Nobody works for free:
+  the floor is what stops a bought reputation becoming unlimited leverage.
+- Anything sent above the requirement is **returned in the same transaction**,
+  so over-sending is safe.
+- The score is read at the moment of accepting and frozen. A review that lands
+  later cannot change what this job cost.
+
+After step 4 the collateral is settled one way or the other:
+
+| The client's attestation | What happens | Who calls it |
+|---|---|---|
+| Work delivered, or graded at or above 25% fulfilled | Released to the provider | **B**, step 6 |
+| Undelivered *and* substantiated at ≥ 50 with confidence ≥ 50 | Forfeited to the client | **A**, step 7 |
+| Nobody ever attests | Released to the provider after the 14-day lock | **B**, step 6 |
+
+The middle row is the one to read twice. An accusation that carries no weight in
+the score cannot take the collateral either — the evidence has to be good enough
+to move the number before it can move the money. Writing "they delivered nothing"
+with no evidence loses the *attester's* bond and leaves the provider's collateral
+untouched.
+
+### Collateral does not come back on studionet
+
+Step 6 is accepted by the contract, every validator emits the transfer, and the
+balance does not move. A GenVM contract cannot pay an externally owned account on
+this network: the emitted message is executed as a contract call and finalizes
+with `Contract 0x… not found`, so the value stays with the oracle.
+
+Every route a contract has was tried — both `emit_transfer` stages, `gl.Account`
+and `gl.chain.Account` (neither exists on this runner), and the raw `PostMessage`
+primitive with three different calldata shapes. All of them emit a *call*, and a
+call against a wallet has no contract to run.
+
+This is not about collateral specifically — step 5, reclaiming a *bond*, uses the
+same SDK call and has the same problem; the 14-day lock is the only reason nobody
+had hit it before. Everything that decides who is owed what is on chain and
+correct. Only the transfer waits on a network that applies it.
+
 ## The bond
 
 Attesting is payable. The site quotes the exact figure in the Attest card as
@@ -134,9 +199,10 @@ whole contract, not per engagement.
 | After | Where to look |
 |---|---|
 | Step 1 | `/agents` — nothing yet. A proposal cannot reach anyone's score. |
-| Step 2 | Card 4's bond note stops saying "not been accepted by its provider". |
+| Step 2 | Card 4's bond note stops saying "not been accepted by its provider", and 8.75 GEN has left Account B. |
 | Step 3 | Card 4's bond note clears and the Post button enables. |
-| Step 4 | `/agents` lists B with a score off 50. `/agents/<B>` shows the weight breakdown. |
+| Step 4 | `/agents` lists B with a score off 50. `/agents/<B>` shows the weight breakdown, and what that record now costs B to take on work. |
+| Step 6 | The call is accepted and the transfer is emitted — but on studionet the money does not arrive. See the note below. |
 
 Every card prints a **View transaction →** link to
 `explorer-studio.genlayer.com`. Read the receipt, not just the status: a GenLayer
@@ -164,6 +230,14 @@ Each of these is the contract enforcing the order, and each names its own remedy
 | `bond_below_required` | The quote went stale. Re-read the card and resubmit. |
 | `bond_still_locked` | Step 5 inside the 14-day lock. |
 | `bond_slashed` | The grade found the claim unsubstantiated. Nothing to reclaim. |
+| `collateral_below_required` | Step 2 sent less than the quote. Re-read the card and resubmit. |
+| `stake_out_of_range` | Step 1's value is too large for the contract to price. |
+| `no_collateral_posted` | Nothing was posted, because the engagement declared no value. |
+| `collateral_still_held` | Step 6 on an ungraded engagement, inside the 14-day lock. |
+| `collateral_forfeited` | Step 6 after the grade forfeited it. It is the client's to claim. |
+| `collateral_not_forfeited` | Step 7 where nothing was forfeited. |
+| `collateral_already_settled` | The collateral has already been released or claimed. |
+| `sender_not_client` | Step 7 signed by anyone but the client. |
 
 ## Reading it without a wallet
 

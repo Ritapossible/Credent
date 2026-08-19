@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 
 import { PARAMETER_NOTES } from '../content/parameters'
 import { DEFAULT_POLICY, type Policy } from '../core/policy'
-import { formatBond, formatCount, formatDuration } from '../core/format'
+import { bpToPercent, formatBond, formatCount, formatDuration } from '../core/format'
 import { useEffectivePolicy } from '../chain/useOracle'
 
 /**
@@ -21,6 +21,9 @@ const RENDER: Record<keyof Policy, (policy: Policy) => string> = {
   slashFloor: (policy) => `${policy.slashFloor} substantiated`,
   releaseFloor: (policy) => `${policy.releaseFloor} substantiated`,
   bondLockSeconds: (policy) => formatDuration(policy.bondLockSeconds),
+  collateralCeilingBp: (policy) => `${bpToPercent(policy.collateralCeilingBp)} of stake`,
+  collateralFloorBp: (policy) => `${bpToPercent(policy.collateralFloorBp)} of stake`,
+  collateralForfeitBp: (policy) => `fulfilled below ${bpToPercent(policy.collateralForfeitBp)}`,
 }
 
 export default function PolicyPage() {

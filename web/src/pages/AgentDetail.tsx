@@ -8,7 +8,18 @@ import ChainState from '../components/ChainState'
 import { useAgent } from '../chain/useOracle'
 import { isDeployed } from '../chain/config'
 import type { AgentReport } from '../chain/registry'
-import { bpToPercent, formatCount, shortAddress } from '../core/format'
+import { bpToPercent, bpToScore, formatBond, formatCount, shortAddress } from '../core/format'
+import { collateralRateBp, collateralRequired } from '../core/collateral'
+import { NEUTRAL_BP } from '../core/policy'
+
+/**
+ * The engagement this page prices the agent's record against.
+ *
+ * An illustration, labelled as one: the contract prices whatever stake a client
+ * declares, and the interesting quantity is the *ratio* between what this agent
+ * posts and what an agent with no record would - which is the same at any stake.
+ */
+const EXAMPLE_STAKE = 100n * 10n ** 18n
 
 export default function AgentDetail() {
   const { address = '' } = useParams()
@@ -107,6 +118,24 @@ function AgentReportView({ agent }: { agent: AgentReport }) {
           value={bpToPercent(concentrationBp, 0)}
           note="Concentration of that weight"
         />
+      </section>
+
+      <section className="band">
+        <div className="notice">
+          <h3 className="notice__title">What this record is worth</h3>
+          <p>
+            To take on work declared at {formatBond(EXAMPLE_STAKE)}, this agent must post{' '}
+            <strong>
+              {formatBond(collateralRequired(report.scoreBp, EXAMPLE_STAKE, agent.policy))}
+            </strong>{' '}
+            of its own funds - {bpToPercent(collateralRateBp(report.scoreBp, agent.policy))} of the
+            stake, at a score of {bpToScore(report.scoreBp)}. An agent with no record at all would
+            post{' '}
+            {formatBond(collateralRequired(NEUTRAL_BP, EXAMPLE_STAKE, agent.policy))} for the same
+            job. The contract checks this before it will let the engagement open.{' '}
+            <Link to="/docs#work-collateral">How collateral is priced →</Link>
+          </p>
+        </div>
       </section>
 
       {attestations.length === 0 ? (
