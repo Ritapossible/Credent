@@ -19,8 +19,10 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on GenLayer Studio at `0x1903b01a14053c2322ede4373669F411Dcd2Cd05`,
+First deployed on GenLayer Studio at `0x1903b01a14053c2322ede4373669F411Dcd2Cd05`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/).
+That deployment still reads correctly and still cannot pay a wallet, which is why
+the site now targets `testnet-asimov` by default — see **Settlement**.
 
 ---
 
@@ -65,6 +67,9 @@ npm run units                    # formatting, error text, calldata encoding
 npm run build
 ```
 
+Everything above runs offline. The one check that cannot is `npm run settlement`,
+which proves the payouts actually pay — see **Settlement** below.
+
 CI runs all of it on every push. Neither of the two failures this project hit in
 deployment would have been caught by it — both were green locally and broken on
 chain — but everything checkable without a network is now checked without anyone
@@ -73,8 +78,8 @@ remembering to.
 ## Deploying
 
 ```bash
-genlayer account import --name studio --private-key 0x...
-genlayer network set studionet
+genlayer account import --name deployer --private-key 0x...
+genlayer network set testnet-asimov   # studionet cannot pay a wallet; see Settlement
 
 # The thirteen policy parameters, in constructor order. Deploying without them
 # takes the contract defaults, and the seventh of those is `min_bond = 0` - which
@@ -144,9 +149,24 @@ claimable balances, or paying into a vault contract — because the last hop is
 still contract to wallet. The fix is not in this repository. `reclaim_bond` has
 carried the same limitation since it was written, hidden behind a 14-day lock
 nobody had waited out, and the collateral layer is simply the first code here
-that settles fast enough to expose it. Worth retrying on `testnet-asimov` or
-`testnet-bradbury`, where the node may apply these messages properly; the
-contract needs no change for that.
+that settles fast enough to expose it.
+
+**So the site no longer points at studionet.** The default network is
+`testnet-asimov`, which is not a studio network and applies these messages
+properly; `testnet-bradbury` is the other. The contract needed no change for
+that — the runner API was never the problem — but three things did:
+
+- `VITE_GENLAYER_NETWORK` defaults to `testnet-asimov` rather than `studionet`.
+- The site refuses to imply a payout will arrive when it will not. Studio
+  networks are detected structurally, through the SDK's own `isStudio` flag
+  rather than a list of names, and `/attest` says so above the three settlement
+  steps. See `SETTLEMENT_SUPPORTED` in `web/src/chain/config.ts`.
+- `npm run settlement` verifies the payouts against a live network instead of
+  asserting what the contract decided. See **Settlement** below.
+
+Studionet remains a supported target, because it is still the fastest place to
+exercise grading and every read path. It is simply no longer a place where a
+settled payout means anything.
 
 **Integers are typed, and large ones arrive as strings.** An address argument is
 its own calldata type: passing the hex string encodes a `str`, the contract
@@ -194,6 +214,72 @@ To run that sequence through the site rather than read about it,
 account signs each step, and what each refusal means. It needs two accounts —
 the client cannot name itself as the provider, and only the provider can accept.
 
+## Settlement
+
+Every other check in this repository asserts what the contract *decided*. None of
+them could have caught the defect above, because the contract decided correctly
+every time: `release_collateral` marked the collateral returned, emitted the
+transfer, reached `ACCEPTED`, and left a clean leader receipt — over money that
+never moved.
+
+`npm run settlement` is the check that closes that gap. It asserts the only two
+things that separate a settled payout from a recorded one:
+
+1. the **triggered transaction** the payout produced finished without error, and
+2. the **recipient's balance** actually went up.
+
+The first is the diagnosis and the second is the ground truth. `emit_transfer`
+does not move value inside the calling transaction — it queues a message the node
+executes as its own transaction afterwards — so the failure is invisible in the
+parent receipt and visible in exactly those two places.
+
+```bash
+cd web
+VITE_GENLAYER_NETWORK=testnet-asimov \
+CLIENT_PRIVATE_KEY=0x... \
+PROVIDER_PRIVATE_KEY=0x... \
+npm run settlement
+```
+
+It covers every path in this contract that returns value:
+
+| Payout | Reached by |
+| --- | --- |
+| acceptance refund | an overfunded `accept_engagement` returns the excess |
+| attestation refund | an overfunded `attest` returns the excess |
+| release, graded | the client graded the work as delivered |
+| release, ungraded | nobody attested and the dispute window elapsed |
+| claim | a substantiated grade forfeited it to the client |
+| bond reclaim | the attester takes the bond back after the lock |
+
+Two accounts, because the protocol requires two: a client cannot name itself as
+its own provider, and only the named provider can accept. Both need funding —
+the provider posts collateral, the client posts bonds. `SETTLEMENT_STAKE`
+(default 2 GEN) sets the engagement value everything else is priced off, and
+`SETTLEMENT_BOND`, `SETTLEMENT_OVERPAY` and `SETTLEMENT_GAS_ALLOWANCE` tune the
+rest.
+
+**It deploys its own contract**, rather than running against the live one. Two of
+those six paths wait out `bond_lock_seconds` — fourteen days at the deployed
+policy — so verifying them against a long-lived deployment would mean running the
+setup and the assertion a fortnight apart. The lock is a policy parameter, so the
+script deploys an instance with it set to zero and every other parameter left at
+the deployed values. Nothing about the payout path changes with the lock; only
+the wait does.
+
+**On a studio network it does not pretend.** It runs the same lifecycle, reports
+each payout as an expected failure with the triggered transaction's own error,
+and exits non-zero saying settlement is not verifiable there. That makes it the
+evidence for the section above rather than a paragraph asking to be believed.
+
+It is not in CI, and cannot be: it needs two funded accounts and a live network,
+and CI has neither. Two of the six outcomes also depend on how the model grades
+the evidence — the release path needs a grade that is substantiated and
+fulfilled, the claim path one that is substantiated and *un*fulfilled — so the
+script checks the resulting `collateral_state` and reports plainly when a grade
+did not reach the state a leg needs, rather than reporting a pass it did not
+earn.
+
 ## Status
 
 Verified end to end against a live deployment: the consent gate refuses an
@@ -213,14 +299,30 @@ attestation freeing 1.44 GEN of working capital. Offline it carries 60 new tests
 and 266 new parity vectors, and `genvm-lint` validates the rebuilt schema: 18
 methods, 13 constructor parameters.
 
-What does **not** work is the payout leg, and it is a property of the network
-rather than of this contract — see *A contract cannot pay a wallet on studionet*
-above, where all seven available routes are tabulated. `release_collateral`,
-`claim_collateral`, the acceptance refund and `reclaim_bond` all record the right
-decision, emit the right transfer, and then the chain fails to apply it. Until
-that is resolved upstream, collateral posted on studionet is collateral held: the
-pricing and the gate work correctly, and the money returns only on a network
-where a contract can pay a wallet.
+### The payout leg
+
+On studionet the payout leg does **not** work, and it is a property of the
+network rather than of this contract — see *A contract cannot pay a wallet on
+studionet* above, where all seven available routes are tabulated.
+`release_collateral`, `claim_collateral`, the two refunds and `reclaim_bond` all
+record the right decision, emit the right transfer, and then the chain fails to
+apply it. Collateral posted on studionet is collateral held.
+
+The response to that is in this repository and has two halves. The site no
+longer defaults to a network that cannot settle, and it says so where it offers
+a settlement action. And `npm run settlement` now verifies the payouts the only
+way they can be verified — by reading the triggered transaction and the
+recipient's balance — instead of asserting what the contract decided, which was
+never the broken part.
+
+**The harness has not yet been run against Asimov.** It is written, it
+typechecks, it bundles, and its guards and balance-read path have been exercised
+as far as the first RPC call; what remains is a run against a live network with
+two funded accounts, which needs a funded faucet and outbound access to
+`rpc-asimov.genlayer.com`. Until that run happens and this section records its
+output, treat contract-to-wallet settlement on Asimov as **expected to work and
+unproven** — the same standard this file applies everywhere else, and the reason
+the claim is written here rather than in the present tense above.
 
 It is **not** production infrastructure, for reasons mostly outside this
 repository:

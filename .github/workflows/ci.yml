@@ -6,6 +6,12 @@
 # without a network now is, on every push, instead of whenever someone
 # remembers.
 #
+# The third failure of that shape was the payout leg: a transfer the contract
+# emitted correctly and the network never applied. `npm run settlement` is what
+# catches it, and it cannot run here either - it needs a live network and two
+# funded accounts. So CI checks that it still typechecks and still bundles,
+# which is what stops it rotting between the runs that do have a faucet.
+#
 # The two jobs are independent and run in parallel: the contract is Python with
 # no dependencies but a test runner, and the site is a Vite build. Nothing here
 # needs a wallet, a key, or an RPC endpoint, so there are no secrets and a fork's
@@ -87,6 +93,14 @@ jobs:
       # shipped a bond quoted at the wrong number of decimals.
       - name: Presentation and decoding helpers
         run: npm run units
+
+      # Bundled, not run. The settlement harness is the only check that can prove
+      # a payout reached a wallet, and it needs a live network and two funded
+      # accounts to do it - neither of which exists here. Bundling it still
+      # catches the ways it would break silently between real runs: a renamed
+      # export, a bad import, a node-only dependency that stops resolving.
+      - name: The settlement harness still builds
+        run: npx esbuild scripts/settlement.ts --bundle --format=esm --platform=node --define:import.meta.env={} --outfile=/dev/null
 
       # Built without VITE_CONTRACT_ADDRESS on purpose: an unconfigured build is
       # a state the site is required to render rather than crash on, and this is

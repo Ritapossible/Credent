@@ -24,8 +24,11 @@ themselves. One wallet cannot complete the flow alone.
 In MetaMask: **account menu → Add account** to create the second one. Fund both
 from the Studio faucet. Note B's address before you start — you type it in step 1.
 
-Both accounts must be on **studionet**, and the masthead must show the connected
-address (not "Switch to studionet"). Switching accounts in your wallet switches
+Both accounts must be on the network the site is built for — **testnet-asimov**
+by default — and the masthead must show the connected address (not "Switch to
+testnet-asimov"). If you point the build at studionet instead, every step below
+still works except the ones that move money back; see *Where the money comes
+back* below. Switching accounts in your wallet switches
 who signs; the site follows it live, so you do not reload between steps.
 
 ## The table
@@ -49,9 +52,11 @@ rejected** (`engagement_exists`).
 | 6 | Release the collateral | Engagement id | `credent-demo-001` | **B** |
 | 7 | Claim forfeited collateral | Engagement id | *only if step 4 forfeited it* | **A** |
 
-Step 5 will not work today — see [The bond](#the-bond). Step 6 will, as soon as
-step 4 has graded the work: a clearing grade settles the collateral immediately,
-and only an ungraded engagement has to wait out the lock.
+Steps 5, 6 and 7 return money, so they depend on the network: on testnet-asimov
+they settle, on studionet they are recorded and the balance does not move. Step 5
+additionally waits out the 14-day lock — see [The bond](#the-bond). Step 6 does
+not, as soon as step 4 has graded the work: a clearing grade settles the
+collateral immediately, and only an ungraded engagement waits.
 
 Step 1's value is in GEN and is optional. Leaving it blank runs the same
 lifecycle with the collateral layer switched off, which is what every pass
@@ -157,12 +162,21 @@ to move the number before it can move the money. Writing "they delivered nothing
 with no evidence loses the *attester's* bond and leaves the provider's collateral
 untouched.
 
-### Collateral does not come back on studionet
+### Where the money comes back
 
-Step 6 is accepted by the contract, every validator emits the transfer, and the
-balance does not move. A GenVM contract cannot pay an externally owned account on
-this network: the emitted message is executed as a contract call and finalizes
-with `Contract 0x… not found`, so the value stays with the oracle.
+**On studionet it does not.** Step 6 is accepted by the contract, every validator
+emits the transfer, and the balance does not move. A GenVM contract cannot pay an
+externally owned account on this network: the emitted message is executed as a
+contract call and finalizes with `Contract 0x… not found`, so the value stays
+with the oracle. The site now says so above steps 5–7 when it is built against a
+studio network, rather than reporting a success your balance contradicts.
+
+**This is why the default network is testnet-asimov**, which is not a studio
+network. To check settlement rather than take it on trust, run
+`npm run settlement` from `web/` — it drives this whole table headlessly against
+two funded accounts and asserts that each payout's triggered transaction
+succeeded *and* that the recipient's balance went up. See the README's
+**Settlement** section.
 
 Every route a contract has was tried — both `emit_transfer` stages, `gl.Account`
 and `gl.chain.Account` (neither exists on this runner), and the raw `PostMessage`
@@ -170,9 +184,9 @@ primitive with three different calldata shapes. All of them emit a *call*, and a
 call against a wallet has no contract to run.
 
 This is not about collateral specifically — step 5, reclaiming a *bond*, uses the
-same SDK call and has the same problem; the 14-day lock is the only reason nobody
+same SDK call and had the same problem; the 14-day lock is the only reason nobody
 had hit it before. Everything that decides who is owed what is on chain and
-correct. Only the transfer waits on a network that applies it.
+correct either way. Only the transfer depends on the network applying it.
 
 ## The bond
 
@@ -202,12 +216,14 @@ whole contract, not per engagement.
 | Step 2 | Card 4's bond note stops saying "not been accepted by its provider", and 8.75 GEN has left Account B. |
 | Step 3 | Card 4's bond note clears and the Post button enables. |
 | Step 4 | `/agents` lists B with a score off 50. `/agents/<B>` shows the weight breakdown, and what that record now costs B to take on work. |
-| Step 6 | The call is accepted and the transfer is emitted — but on studionet the money does not arrive. See the note below. |
+| Step 6 | The call is accepted and the transfer is emitted. On testnet-asimov the collateral lands back in B; on studionet it does not arrive. See the note below. |
 
-Every card prints a **View transaction →** link to
-`explorer-studio.genlayer.com`. Read the receipt, not just the status: a GenLayer
-transaction reaches `ACCEPTED` when consensus agrees on what happened — including
-when what happened is that the contract rejected your call.
+Every card prints a **View transaction →** link to the explorer for whichever
+network the build targets — `explorer-asimov.genlayer.com` by default,
+`explorer-studio.genlayer.com` for a studionet build. Read the receipt, not just
+the status: a GenLayer transaction reaches `ACCEPTED` when consensus agrees on
+what happened — including when what happened is that the contract rejected your
+call.
 
 Step 4 is the slow one. It is a live LLM call settled by validator consensus, so
 give it a moment; the button says *"Grading… this takes a moment"* because it

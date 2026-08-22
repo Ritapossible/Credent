@@ -27,7 +27,24 @@ const CHAINS = {
 
 export type NetworkAlias = keyof typeof CHAINS
 
-const DEFAULT_NETWORK: NetworkAlias = 'studionet'
+/**
+ * Where an unconfigured build points.
+ *
+ * Asimov rather than studionet, and the reason is settlement rather than
+ * preference. A studio network cannot pay an externally owned account: the
+ * transfer a contract emits becomes a contract call against the recipient, the
+ * recipient is a wallet, and the call fails with `Contract 0x... not found`
+ * while the parent transaction still reports success. Every payout this protocol
+ * has - the collateral release, the client's claim, the two overpayment refunds
+ * and the bond reclaim - ends at a wallet, so on studionet all five record the
+ * right decision over money that never moves.
+ *
+ * That made studionet the wrong default for a build whose whole subject is
+ * collateral. It stays a supported target because it is still the fastest place
+ * to exercise grading and the read paths, but a build that lands there is told
+ * what it cannot do, through `SETTLEMENT_SUPPORTED` below.
+ */
+const DEFAULT_NETWORK: NetworkAlias = 'testnet-asimov'
 
 /**
  * Resolve the target network, reporting a bad value instead of throwing.
@@ -140,3 +157,41 @@ const EXPLORER_OVERRIDE: Partial<Record<NetworkAlias, string>> = {
 
 export const EXPLORER_URL =
   EXPLORER_OVERRIDE[NETWORK] ?? CHAIN.blockExplorers?.default?.url ?? ''
+
+/**
+ * Whether a payout from this contract can actually reach a wallet here.
+ *
+ * Keyed on the SDK's own `isStudio`, not on a list of network names. The
+ * property is what the distinction *is* - studio networks run the simulator's
+ * message handling, where the message a contract emits toward an externally
+ * owned account is executed as a contract call and fails `Contract 0x... not
+ * found` - so a network added to the SDK later classifies itself correctly
+ * instead of silently defaulting to "settlement works" because nobody edited an
+ * array here.
+ *
+ * False does not stop anything being read, graded or written. It means only that
+ * the five value-returning calls - `release_collateral`, `claim_collateral`, the
+ * acceptance and attestation refunds, and `reclaim_bond` - will record the right
+ * settlement over money that stays with the contract. The site says so where it
+ * offers those actions rather than reporting a success the balance contradicts.
+ *
+ * The rule is a function so it can be checked against every network the SDK
+ * ships, rather than only against whichever one this build happens to target -
+ * see `npm run units`. A network that silently changed sides here would change
+ * what the site promises about money.
+ */
+export function settlesToWallet(chain: Pick<GenLayerChain, 'isStudio'>): boolean {
+  return chain.isStudio !== true
+}
+
+export const SETTLEMENT_SUPPORTED: boolean = settlesToWallet(CHAIN)
+
+/**
+ * Why settlement will not complete here, for the UI to show. Null when it will.
+ */
+export const SETTLEMENT_WARNING: string | null = SETTLEMENT_SUPPORTED
+  ? null
+  : `${CHAIN.name} cannot pay a wallet from a contract. Releases, claims, refunds ` +
+    `and bond reclaims will be recorded correctly and the transfer will not ` +
+    `arrive - the balance does not move. Point VITE_GENLAYER_NETWORK at ` +
+    `testnet-asimov or testnet-bradbury to settle for real.`

@@ -2,7 +2,7 @@
 
 GenLayer's standard `py-genlayer` runner takes one Python file, so the contract
 has to carry the engine inside it rather than importing it. Concatenating by
-hand would mean maintaining two copies of arithmetic that 279 tests are pinned
+hand would mean maintaining two copies of arithmetic that 337 tests are pinned
 to, and the copy that drifts would be the one nobody runs.
 
 So: `contract_shell.py` holds the chain-facing code with an `#<<<ENGINE>>>`
@@ -32,7 +32,7 @@ client reads to learn the call surface. `genvm-lint check` is where this is
 visible; `test_build_contract.py` pins it so it cannot come back.
 
 The sources keep their own `__future__` imports. They are ordinary modules that
-never face the GenVM reflection path, and 279 tests import them directly.
+never face the GenVM reflection path, and 337 tests import them directly.
 """
 
 from __future__ import annotations

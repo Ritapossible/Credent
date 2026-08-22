@@ -20,6 +20,8 @@ import { BP } from '../src/core/policy'
 import { isRateLimit, readableError } from '../src/core/errors'
 import { addressArg } from '../src/chain/oracle'
 import { outcomeOf } from '../src/chain/wallet'
+import { settlesToWallet } from '../src/chain/config'
+import { localnet, studionet, testnetAsimov, testnetBradbury } from 'genlayer-js/chains'
 import type { GenLayerTransaction } from 'genlayer-js/types'
 import { CREDENT_POLICY, DEFAULT_POLICY } from '../src/core/policy'
 
@@ -269,6 +271,28 @@ eq(
 // An empty or unrecognised receipt must not invent a failure that did not happen.
 eq(outcomeOf(receipt([])).ok, true, 'outcomeOf: an empty leader_receipt is not a failure')
 
+// --- settlement ------------------------------------------------------------
+
+// Which networks can pay a wallet, checked against every chain the SDK ships
+// rather than only the one this build targets. The site tells a visitor whether
+// a release, claim, refund or bond reclaim will actually arrive, and it decides
+// that from `isStudio` - so a network changing sides here, or a new one arriving
+// classified wrongly, would change what the site promises about money. That is
+// worth one assertion per network.
+eq(settlesToWallet(localnet), false, 'settlement: localnet is a studio network')
+eq(settlesToWallet(studionet), false, 'settlement: studionet cannot pay a wallet')
+eq(settlesToWallet(testnetAsimov), true, 'settlement: testnet-asimov settles')
+eq(settlesToWallet(testnetBradbury), true, 'settlement: testnet-bradbury settles')
+
+// The flag is read, not assumed present. A chain definition that stopped
+// carrying `isStudio` would make every network look like it settles, which is
+// the failure direction that costs someone money.
+eq(
+  typeof studionet.isStudio === 'boolean' && typeof testnetAsimov.isStudio === 'boolean',
+  true,
+  'settlement: the SDK still carries isStudio on its chain definitions',
+)
+
 // --- report ---------------------------------------------------------------
 
 if (failures > 0) {
@@ -277,5 +301,5 @@ if (failures > 0) {
 }
 console.log(
   `units ok - ${checks} checks across formatting, stake parsing, collateral pricing, error text, ` +
-    `address encoding and receipt outcomes`,
+    `address encoding, receipt outcomes and settlement support`,
 )

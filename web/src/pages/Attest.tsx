@@ -15,7 +15,13 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
-import { CONTRACT_ADDRESS, EXPLORER_URL, IS_CONFIGURED, NETWORK } from '../chain/config'
+import {
+  CONTRACT_ADDRESS,
+  EXPLORER_URL,
+  IS_CONFIGURED,
+  NETWORK,
+  SETTLEMENT_WARNING,
+} from '../chain/config'
 import {
   bondForNext,
   collateralQuote,
@@ -425,6 +431,17 @@ export default function Attest() {
           </button>
           <Outcome state={attestState} verb="Attestation posted." />
         </Step>
+
+        {SETTLEMENT_WARNING !== null ? (
+          <div className="notice notice--critical" role="alert">
+            <h3 className="notice__title">Payouts will not arrive on this network</h3>
+            <p>{SETTLEMENT_WARNING}</p>
+            <p>
+              The three steps below, and the change returned by steps 2 and 4, all end at a
+              wallet. They will be recorded correctly and the balance will not move.
+            </p>
+          </div>
+        ) : null}
 
         <Step
           index={5}
