@@ -30,21 +30,26 @@ export type NetworkAlias = keyof typeof CHAINS
 /**
  * Where an unconfigured build points.
  *
- * Asimov rather than studionet, and the reason is settlement rather than
- * preference. A studio network cannot pay an externally owned account: the
- * transfer a contract emits becomes a contract call against the recipient, the
- * recipient is a wallet, and the call fails with `Contract 0x... not found`
- * while the parent transaction still reports success. Every payout this protocol
- * has - the collateral release, the client's claim, the two overpayment refunds
- * and the bond reclaim - ends at a wallet, so on studionet all five record the
- * right decision over money that never moves.
+ * Studionet, because that is where this contract is actually deployed, and a
+ * default that names a network with no deployment on it renders an empty
+ * registry - which looks like a broken site rather than a missing address.
  *
- * That made studionet the wrong default for a build whose whole subject is
- * collateral. It stays a supported target because it is still the fastest place
- * to exercise grading and the read paths, but a build that lands there is told
- * what it cannot do, through `SETTLEMENT_SUPPORTED` below.
+ * It is worth being explicit that this is *not* the network where money moves.
+ * A studio network cannot pay an externally owned account: the transfer a
+ * contract emits becomes a contract call against the recipient, the recipient is
+ * a wallet, and the call fails with `Contract 0x... not found` while the parent
+ * transaction still reports success. Every payout this protocol has - the
+ * collateral release, the client's claim, the two overpayment refunds and the
+ * bond reclaim - ends at a wallet, so on studionet all five record the right
+ * decision over money that never moves.
+ *
+ * The site therefore says so rather than implying otherwise, through
+ * `SETTLEMENT_SUPPORTED` below, and `npm run settlement` confirms it against the
+ * live chain instead of asking anyone to take it on trust. Pointing this at
+ * `testnet-asimov` or `testnet-bradbury` is the supported way to settle for
+ * real; nothing in the contract or the client needs to change for it.
  */
-const DEFAULT_NETWORK: NetworkAlias = 'testnet-asimov'
+const DEFAULT_NETWORK: NetworkAlias = 'studionet'
 
 /**
  * Resolve the target network, reporting a bad value instead of throwing.

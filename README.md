@@ -19,10 +19,11 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-First deployed on GenLayer Studio at `0x1903b01a14053c2322ede4373669F411Dcd2Cd05`,
+Deployed on GenLayer Studio at `0x1903b01a14053c2322ede4373669F411Dcd2Cd05`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/).
-That deployment still reads correctly and still cannot pay a wallet, which is why
-the site now targets `testnet-asimov` by default — see **Settlement**.
+Studio cannot pay a wallet from a contract, so every payout there is recorded and
+never arrives — the site says so, and `npm run settlement` proves it. See
+**Settlement**.
 
 ---
 
@@ -78,8 +79,10 @@ remembering to.
 ## Deploying
 
 ```bash
-genlayer account import --name deployer --private-key 0x...
-genlayer network set testnet-asimov   # studionet cannot pay a wallet; see Settlement
+genlayer account import --name studio --private-key 0x...
+genlayer network set studionet
+# ...or `testnet-asimov` / `testnet-bradbury` to deploy where payouts actually
+# arrive. Nothing below changes; see Settlement.
 
 # The thirteen policy parameters, in constructor order. Deploying without them
 # takes the contract defaults, and the seventh of those is `min_bond = 0` - which
@@ -151,22 +154,31 @@ carried the same limitation since it was written, hidden behind a 14-day lock
 nobody had waited out, and the collateral layer is simply the first code here
 that settles fast enough to expose it.
 
-**So the site no longer points at studionet.** The default network is
-`testnet-asimov`, which is not a studio network and applies these messages
-properly; `testnet-bradbury` is the other. The contract needed no change for
-that — the runner API was never the problem — but three things did:
+**The deployment stays on studionet, and the software stops implying otherwise.**
+That is a deliberate split, so it is worth separating the two halves.
 
-- `VITE_GENLAYER_NETWORK` defaults to `testnet-asimov` rather than `studionet`.
-- The site refuses to imply a payout will arrive when it will not. Studio
-  networks are detected structurally, through the SDK's own `isStudio` flag
-  rather than a list of names, and `/attest` says so above the three settlement
-  steps. See `SETTLEMENT_SUPPORTED` in `web/src/chain/config.ts`.
-- `npm run settlement` verifies the payouts against a live network instead of
-  asserting what the contract decided. See **Settlement** below.
+Studionet is where this contract is deployed and where it is being demonstrated,
+so it remains the default: a default naming a network with no deployment on it
+renders an empty registry, which reads as a broken site rather than a missing
+address. What changes is that nothing here claims a payout will arrive when it
+will not:
 
-Studionet remains a supported target, because it is still the fastest place to
-exercise grading and every read path. It is simply no longer a place where a
-settled payout means anything.
+- The site detects studio networks **structurally**, through the SDK's own
+  `isStudio` flag rather than a list of names, so a network added later
+  classifies itself instead of defaulting to "settlement works". `/attest` says
+  so above the three settlement steps. See `SETTLEMENT_SUPPORTED` in
+  `web/src/chain/config.ts`.
+- `npm run settlement` stops asserting what the contract decided and checks what
+  the chain did — the triggered transaction and the recipient's balance. On
+  studionet it **confirms** the limitation: it passes when every payout is
+  recorded and none is paid, and fails if one unexpectedly arrives. See
+  **Settlement** below.
+
+`testnet-asimov` and `testnet-bradbury` are not studio networks and should apply
+these messages properly. Both are fully supported targets — the contract and the
+client need no change for either — and the same harness verifies settlement
+there for real. Moving is a deploy and two environment variables, not a code
+change.
 
 **Integers are typed, and large ones arrive as strings.** An address argument is
 its own calldata type: passing the hex string encodes a `str`, the contract
@@ -235,11 +247,24 @@ parent receipt and visible in exactly those two places.
 
 ```bash
 cd web
+
+# On studionet: confirm the limitation on the deployed network.
+CLIENT_PRIVATE_KEY=0x... PROVIDER_PRIVATE_KEY=0x... npm run settlement
+
+# On a network that can pay a wallet: verify settlement for real.
 VITE_GENLAYER_NETWORK=testnet-asimov \
 CLIENT_PRIVATE_KEY=0x... \
 PROVIDER_PRIVATE_KEY=0x... \
 npm run settlement
 ```
+
+The two runs mean different things, and the script keeps them apart rather than
+collapsing both into "pass". On studionet it is a **characterization test**: it
+passes when every payout is recorded and none is paid — the documented
+limitation, reproduced rather than asserted — and fails if a payout unexpectedly
+arrives, which would mean this file has gone stale. A pass there never reads as
+"the money moved"; the closing line says so explicitly. On a settling network it
+is a **verification**: every payout must arrive, or the run fails.
 
 It covers every path in this contract that returns value:
 
@@ -267,10 +292,11 @@ script deploys an instance with it set to zero and every other parameter left at
 the deployed values. Nothing about the payout path changes with the lock; only
 the wait does.
 
-**On a studio network it does not pretend.** It runs the same lifecycle, reports
-each payout as an expected failure with the triggered transaction's own error,
-and exits non-zero saying settlement is not verifiable there. That makes it the
-evidence for the section above rather than a paragraph asking to be believed.
+**On a studio network it does not pretend, and does not merely give up.** It runs
+the same lifecycle and reports each payout with the triggered transaction's own
+error, which is what turns the section above from a claim into a reproducible
+result. Anyone doubting that studionet records payouts it never pays can run this
+and watch it happen.
 
 It is not in CI, and cannot be: it needs two funded accounts and a live network,
 and CI has neither. Two of the six outcomes also depend on how the model grades
@@ -308,21 +334,33 @@ studionet* above, where all seven available routes are tabulated.
 record the right decision, emit the right transfer, and then the chain fails to
 apply it. Collateral posted on studionet is collateral held.
 
-The response to that is in this repository and has two halves. The site no
-longer defaults to a network that cannot settle, and it says so where it offers
-a settlement action. And `npm run settlement` now verifies the payouts the only
-way they can be verified — by reading the triggered transaction and the
-recipient's balance — instead of asserting what the contract decided, which was
-never the broken part.
+The response to that is in this repository and has two halves. The site stops
+implying a payout will arrive when it will not, and says so where it offers a
+settlement action. And `npm run settlement` now checks the payouts the only way
+they can be checked — by reading the triggered transaction and the recipient's
+balance — instead of asserting what the contract decided, which was never the
+broken part.
 
-**The harness has not yet been run against Asimov.** It is written, it
-typechecks, it bundles, and its guards and balance-read path have been exercised
-as far as the first RPC call; what remains is a run against a live network with
-two funded accounts, which needs a funded faucet and outbound access to
-`rpc-asimov.genlayer.com`. Until that run happens and this section records its
-output, treat contract-to-wallet settlement on Asimov as **expected to work and
-unproven** — the same standard this file applies everywhere else, and the reason
-the claim is written here rather than in the present tense above.
+Deployment stays on studionet, so the honest position is that the collateral
+layer **prices and gates correctly, and does not settle**. That is a property of
+the network, it is now reproducible on demand rather than argued, and the
+software no longer reports it as a success.
+
+**Neither run has been performed yet.** The harness is written, typechecks,
+bundles, and its guards and balance-read path have been exercised as far as the
+first RPC call; what remains is a run against a live network with two funded
+accounts. Two things are therefore still open, and neither should be read as
+settled:
+
+- the studionet run, which should **confirm** the limitation — this needs only a
+  faucet and the deployed contract;
+- the Asimov run, which should **verify** settlement. Contract-to-wallet payment
+  there is **expected to work and unproven**: the seven routes above establish
+  that studio is the blocker, not that Asimov is the cure.
+
+Until this section records the output of either, treat both as unproven — the
+same standard this file applies everywhere else, and the reason these claims are
+written here rather than in the present tense above.
 
 It is **not** production infrastructure, for reasons mostly outside this
 repository:

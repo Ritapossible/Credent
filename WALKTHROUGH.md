@@ -24,11 +24,10 @@ themselves. One wallet cannot complete the flow alone.
 In MetaMask: **account menu → Add account** to create the second one. Fund both
 from the Studio faucet. Note B's address before you start — you type it in step 1.
 
-Both accounts must be on the network the site is built for — **testnet-asimov**
-by default — and the masthead must show the connected address (not "Switch to
-testnet-asimov"). If you point the build at studionet instead, every step below
-still works except the ones that move money back; see *Where the money comes
-back* below. Switching accounts in your wallet switches
+Both accounts must be on the network the site is built for — **studionet** by
+default — and the masthead must show the connected address (not "Switch to
+studionet"). Every step below works there except the ones that move money back;
+see *Where the money comes back* below. Switching accounts in your wallet switches
 who signs; the site follows it live, so you do not reload between steps.
 
 ## The table
@@ -52,10 +51,10 @@ rejected** (`engagement_exists`).
 | 6 | Release the collateral | Engagement id | `credent-demo-001` | **B** |
 | 7 | Claim forfeited collateral | Engagement id | *only if step 4 forfeited it* | **A** |
 
-Steps 5, 6 and 7 return money, so they depend on the network: on testnet-asimov
-they settle, on studionet they are recorded and the balance does not move. Step 5
-additionally waits out the 14-day lock — see [The bond](#the-bond). Step 6 does
-not, as soon as step 4 has graded the work: a clearing grade settles the
+Steps 5, 6 and 7 return money, so they depend on the network: on studionet they
+are recorded and the balance does not move; on testnet-asimov they should settle.
+Step 5 additionally waits out the 14-day lock — see [The bond](#the-bond). Step 6
+does not, as soon as step 4 has graded the work: a clearing grade settles the
 collateral immediately, and only an ungraded engagement waits.
 
 Step 1's value is in GEN and is optional. Leaving it blank runs the same
@@ -171,12 +170,12 @@ contract call and finalizes with `Contract 0x… not found`, so the value stays
 with the oracle. The site now says so above steps 5–7 when it is built against a
 studio network, rather than reporting a success your balance contradicts.
 
-**This is why the default network is testnet-asimov**, which is not a studio
-network. To check settlement rather than take it on trust, run
-`npm run settlement` from `web/` — it drives this whole table headlessly against
-two funded accounts and asserts that each payout's triggered transaction
-succeeded *and* that the recipient's balance went up. See the README's
-**Settlement** section.
+**To see this rather than take it on trust**, run `npm run settlement` from
+`web/`. It drives this whole table headlessly against two funded accounts and
+reads each payout's triggered transaction *and* the recipient's balance. On
+studionet it confirms the limitation — every payout recorded, none paid. Pointed
+at `testnet-asimov`, which is not a studio network, the same run asserts the
+payouts arrive. See the README's **Settlement** section.
 
 Every route a contract has was tried — both `emit_transfer` stages, `gl.Account`
 and `gl.chain.Account` (neither exists on this runner), and the raw `PostMessage`
@@ -216,11 +215,11 @@ whole contract, not per engagement.
 | Step 2 | Card 4's bond note stops saying "not been accepted by its provider", and 8.75 GEN has left Account B. |
 | Step 3 | Card 4's bond note clears and the Post button enables. |
 | Step 4 | `/agents` lists B with a score off 50. `/agents/<B>` shows the weight breakdown, and what that record now costs B to take on work. |
-| Step 6 | The call is accepted and the transfer is emitted. On testnet-asimov the collateral lands back in B; on studionet it does not arrive. See the note below. |
+| Step 6 | The call is accepted and the transfer is emitted — but on studionet the money does not arrive. Pointed at testnet-asimov, the collateral should land back in B. See the note below. |
 
 Every card prints a **View transaction →** link to the explorer for whichever
-network the build targets — `explorer-asimov.genlayer.com` by default,
-`explorer-studio.genlayer.com` for a studionet build. Read the receipt, not just
+network the build targets — `explorer-studio.genlayer.com` by default,
+`explorer-asimov.genlayer.com` for an Asimov build. Read the receipt, not just
 the status: a GenLayer transaction reaches `ACCEPTED` when consensus agrees on
 what happened — including when what happened is that the contract rejected your
 call.
