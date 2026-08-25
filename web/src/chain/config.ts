@@ -138,5 +138,18 @@ const EXPLORER_OVERRIDE: Partial<Record<NetworkAlias, string>> = {
   studionet: 'https://explorer-studio.genlayer.com',
 }
 
-export const EXPLORER_URL =
-  EXPLORER_OVERRIDE[NETWORK] ?? CHAIN.blockExplorers?.default?.url ?? ''
+/**
+ * Trailing slash stripped, because every caller appends a rooted path.
+ *
+ * `Docs.tsx`, `ConnectButton.tsx` and `scripts/settlement.ts` all build links as
+ * `${EXPLORER_URL}/tx/...`, which is right for the studionet override and wrong
+ * for the SDK's own definitions: `testnetAsimov` and `testnetBradbury` both
+ * carry `https://explorer-...genlayer.com/` with the slash already on it, so
+ * every link off those networks would be `...com//tx/0x...`. Normalising here
+ * rather than at each call site keeps the next caller from having to know.
+ */
+export const EXPLORER_URL = (
+  EXPLORER_OVERRIDE[NETWORK] ??
+  CHAIN.blockExplorers?.default?.url ??
+  ''
+).replace(/\/+$/, '')
