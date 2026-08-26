@@ -168,11 +168,22 @@ caller   126.343365 GEN -> 126.343090 GEN   (-0.000274 GEN)
 RESULT: the contract did NOT pay out. Same defect as studionet.
 ```
 
-The full harness agrees. `settlement.ts` deployed a real oracle to bradbury and
-failed on the first payout it checked, which is the harness working: the message
-is emitted, `onAcceptance: true`, recipient the provider's wallet, value
-0.05 GEN — and `triggered_transactions` stays empty while the contract keeps the
-money.
+The full harness agrees, and it was run to completion rather than stopped at the
+first failure. `settlement.ts` deployed a fresh oracle to bradbury
+(`0x1356D279BdcE00d3fd99f3d4BF858bbF6c33cf69`) and exercised every settlement the
+review asks about — release, claim, both refund paths and bond reclaim:
+
+```text
+settlement FAILED: 8 of 8 checks
+contract holds 1.86 GEN after every settlement
+```
+
+Every one fails the same way. The message is emitted with `onAcceptance: true`
+and the recipient's wallet as its target, `triggered_transactions` stays empty,
+the contract's balance does not fall by a single wei, and the recipient's balance
+moves only downward by the gas they spent asking. The harness is doing its job:
+it reads balances on both sides instead of trusting the receipt, so a settlement
+the contract records but never pays is reported as a failure.
 
 **`testnet-asimov` is not a second chance.** Both aliases resolve to chain id
 **4221** and answer `eth_chainId` with the same `0x107d`; they are the same
