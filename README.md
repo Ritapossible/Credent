@@ -204,6 +204,32 @@ Two things were tried and did not help, recorded so nobody repeats them:
   the transaction; the transaction had already finished. A message that is never
   dispatched is not a slow message.
 
+**A different runner pin would not help either, and the SDK says so itself.**
+The bundle ships four `py-genlayer` runners and four `py-lib-genlayer-std`
+versions. All four construct the same message, with the same four fields:
+
+```python
+'PostMessage': {
+    'address': ..., 'calldata': ..., 'value': ..., 'on': ...,
+}
+```
+
+There is no gas field, no EOA-specific variant, no second opcode — the emitted
+message is identical whichever version you pin, so swapping the pin cannot change
+the result. And `emit_transfer` with no method name encodes calldata `{}`, which
+is one of the three payloads already tested above.
+
+The SDK's own docstring names the assumption that fails:
+
+> Emit a simple value transfer without calling any method. Receiver **may catch it
+> with** `genlayer.gl.Contract.__receive__` **method**, so users may need to supply
+> non-zero gas.
+
+The receiver is expected to be a contract with a `__receive__` method. Every
+provider and attester is an externally owned account, which has none, and that is
+precisely the `Contract 0x… not found` that studio reports. The API surface has no
+other route to try; this is the end of what a contract can express.
+
 What remains true is the original diagnosis, now with a testnet to its name: the
 last hop is contract to wallet, and no available GenLayer network completes it.
 The contract needs no change; the runner does.
