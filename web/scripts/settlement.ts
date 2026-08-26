@@ -501,7 +501,21 @@ async function main(): Promise<void> {
   // figures below are predictable; it also keeps a failed run from leaving
   // half-settled engagements in a deployment the site is pointed at.
   console.log('\ndeploying a fresh ReputationOracle with the bond lock at zero')
-  const code = readFileSync(new URL('../../reputation_oracle.py', import.meta.url), 'utf8')
+
+  // The minified artifact, not the generated one. `reputation_oracle.py` is
+  // 96,285 bytes and bradbury refuses it outright - not for gas, which fails
+  // identically at 20M, 40M and 60M, but with `BlockPubdataLimitReached`, a cap
+  // on the bytes a block will carry. `reputation_oracle.min.py` is the same
+  // contract with 49% of its bytes - docstrings and comments - removed, every
+  // line of code copied verbatim and the trees compared with `ast.dump` before
+  // it is written. See `minify_contract.py`.
+  //
+  // Testing the minified file is also the more faithful choice: it is the
+  // artifact that reaches the chain, so it is the one whose settlement behaviour
+  // is worth asserting.
+  const artifact = new URL('../../reputation_oracle.min.py', import.meta.url)
+  const code = readFileSync(artifact, 'utf8')
+  console.log(`artifact  reputation_oracle.min.py (${code.length.toLocaleString()} bytes)`)
   const deployHash = await client.client.deployContract({ code, args: POLICY as never[] })
   const deployReceipt = await client.client.waitForTransactionReceipt({
     // `deployContract` is typed as returning a plain `0x${string}` while the
@@ -664,7 +678,19 @@ async function main(): Promise<void> {
 
 // Started before `main` rather than inside it, because `role` reads `endpoint`
 // as it builds each client and the shim has to be answering by then.
-const proxy = await startGasProxy(RPC)
+const proxy = await startGasProxy(RPC, {
+  // The shim's defaults were measured against studionet, where this contract
+  // deploys for about 2,000,000. Bradbury charges far more for the same bytes:
+  // the deploy burned 27,684,780 and then reverted against the 30,000,000 cap,
+  // which reads as a contract failure and is really a ceiling.
+  //
+  // 60,000,000 is roughly twice what the deploy actually needs and still well
+  // inside bradbury's 100,000,000 block limit - the distinction that matters,
+  // because a request at the block limit is unminable and disappears from the
+  // mempool without a receipt rather than failing.
+  onEstimateFailure: 50_000_000n,
+  cap: 60_000_000n,
+})
 endpoint = proxy.url
 console.log(`gas shim  ${proxy.url} -> ${RPC}`)
 

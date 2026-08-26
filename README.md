@@ -20,7 +20,11 @@ to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
 Deployed on GenLayer Studio at `0x1903b01a14053c2322ede4373669F411Dcd2Cd05`,
-inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/).
+inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
+and on Testnet Bradbury at `0x58ea89B668180F8E9Cc486488159b6a2Fa7C482b` — the
+minified artifact, since bradbury refuses the 96 KB one. Every view and every
+write works on both. Payouts complete on neither, and that is a property of the
+runner rather than of this contract — see *A contract cannot pay a wallet*.
 
 ---
 
@@ -144,9 +148,51 @@ claimable balances, or paying into a vault contract — because the last hop is
 still contract to wallet. The fix is not in this repository. `reclaim_bond` has
 carried the same limitation since it was written, hidden behind a 14-day lock
 nobody had waited out, and the collateral layer is simply the first code here
-that settles fast enough to expose it. Worth retrying on `testnet-asimov` or
-`testnet-bradbury`, where the node may apply these messages properly; the
-contract needs no change for that.
+that settles fast enough to expose it.
+
+**Retried on testnet, and it fails there too.** The suggestion above used to read
+"worth retrying on `testnet-asimov` or `testnet-bradbury`, where the node may
+apply these messages properly". That has now been tried rather than assumed, and
+the answer is no.
+
+`web/scripts/payprobe.ts` — a five-method contract that takes a deposit and pays
+it straight back — against testnet-bradbury:
+
+```text
+funding the contract with 0.1 GEN
+contract holds 0.1 GEN
+asking for 0.1 GEN back
+   ...waiting (275s, contract 0.1 GEN)
+contract 0.1 GEN -> 0.1 GEN   (0 GEN)
+caller   126.343365 GEN -> 126.343090 GEN   (-0.000274 GEN)
+RESULT: the contract did NOT pay out. Same defect as studionet.
+```
+
+The full harness agrees. `settlement.ts` deployed a real oracle to bradbury and
+failed on the first payout it checked, which is the harness working: the message
+is emitted, `onAcceptance: true`, recipient the provider's wallet, value
+0.05 GEN — and `triggered_transactions` stays empty while the contract keeps the
+money.
+
+**`testnet-asimov` is not a second chance.** Both aliases resolve to chain id
+**4221** and answer `eth_chainId` with the same `0x107d`; they are the same
+network under two names. So the SDK ships localnet, studionet and one testnet,
+and contract-to-wallet transfer completes on none of them.
+
+Two things were tried and did not help, recorded so nobody repeats them:
+
+- **Emitting `on="accepted"` instead of the default `on="finalized"`.** The flag
+  reaches the chain — the message carries `onAcceptance: true` — and nothing
+  dispatches regardless. It was reverted rather than kept: it trades the SDK's
+  safer default for no gain.
+- **Waiting.** Bradbury finalizes against a 24h epoch, so slowness was the
+  charitable reading. The message is not slow, it is undispatched: a *contract*
+  recipient on the same network and the same flag credits within seconds, so the
+  machinery works and stops at the wallet.
+
+What remains true is the original diagnosis, now with a testnet to its name: the
+last hop is contract to wallet, and no available GenLayer network completes it.
+The contract needs no change; the runner does.
 
 **Integers are typed, and large ones arrive as strings.** An address argument is
 its own calldata type: passing the hex string encodes a `str`, the contract
