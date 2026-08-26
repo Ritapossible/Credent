@@ -192,17 +192,46 @@ and contract-to-wallet transfer completes on none of them.
 
 Two things were tried and did not help, recorded so nobody repeats them:
 
-- **Emitting `on="accepted"` instead of the default `on="finalized"`.** The flag
-  reaches the chain — the message carries `onAcceptance: true` — and nothing
-  dispatches regardless. It was reverted rather than kept: it trades the SDK's
-  safer default for no gain.
-- **Waiting.** Bradbury finalizes against a 24h epoch, so slowness was the
-  charitable reading, and it is wrong. The payout transactions **reach
-  `FINALIZED`** — status 7, the end of the lifecycle — and still carry an empty
-  `triggered_transactions` with the contract's balance untouched. `settlement.ts`
-  printing *"waiting for finalization"* is polling the recipient's balance, not
-  the transaction; the transaction had already finished. A message that is never
-  dispatched is not a slow message.
+- **Emitting `on="accepted"` instead of the default `on="finalized"`.** It was
+  reverted, and reading the chain afterwards shows why it could never have
+  mattered. The deployed contract passes no `on=` at all, taking the SDK default
+  of `finalized` — and the message the chain records still reads
+  `onAcceptance: true`. Both settings produce the same on-chain message, so the
+  experiment was never a variable.
+- **Waiting.** Slowness was the charitable reading, and it is measurably wrong.
+  Consensus closes in about ten seconds (`createdTimestamp` to
+  `lastVoteTimestamp`), and re-reading the five settlement transactions later put
+  every one at **`FINALIZED`** — the youngest already finalized 32 minutes after
+  submission — each still carrying an empty `triggered_transactions` with the
+  contract's balance untouched. `settlement.ts` printing *"waiting for
+  finalization"* is polling the recipient's balance, not the transaction; the
+  transaction had long since finished. A message that is never dispatched is not
+  a slow message.
+
+**The contract does its half correctly, and the chain drops it.** Re-reading all
+five settlement transactions from the bradbury run afterwards:
+
+| Settlement | Status | Execution | Message emitted |
+| --- | --- | --- | --- |
+| refund (`accept_engagement`) | FINALIZED | FINISHED_WITH_RETURN | 0.05 GEN -> provider |
+| `release_collateral` | FINALIZED | FINISHED_WITH_RETURN | 0.875 GEN -> provider |
+| refund (`attest` bond) | FINALIZED | FINISHED_WITH_RETURN | 0.05 GEN -> client |
+| `release_collateral` (graded) | FINALIZED | FINISHED_WITH_RETURN | 0.875 GEN -> provider |
+| `reclaim_bond` | FINALIZED | FINISHED_WITH_RETURN | 0.01 GEN -> client |
+
+Every one finalized, executed cleanly, and carried a well-formed message with the
+right recipient and the right amount, agreed 5-0 by the validators:
+
+```json
+{"messageType":1,"recipient":"0xF9dF…D0a7","value":"875000000000000000",
+ "data":"0xc20680","onAcceptance":true,"saltNonce":"0"}
+```
+
+The five emitted messages total **1.86 GEN**, which is exactly the balance the
+contract still holds. The contract computed every recipient and every amount
+correctly and handed the chain five valid instructions to pay them; the chain
+turned none of them into a transaction. `triggered_transactions` is empty not
+because the transfer failed a check but because it was never attempted.
 
 **A different runner pin would not help either, and the SDK says so itself.**
 The bundle ships four `py-genlayer` runners and four `py-lib-genlayer-std`
