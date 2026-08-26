@@ -186,9 +186,12 @@ Two things were tried and did not help, recorded so nobody repeats them:
   dispatches regardless. It was reverted rather than kept: it trades the SDK's
   safer default for no gain.
 - **Waiting.** Bradbury finalizes against a 24h epoch, so slowness was the
-  charitable reading. The message is not slow, it is undispatched: a *contract*
-  recipient on the same network and the same flag credits within seconds, so the
-  machinery works and stops at the wallet.
+  charitable reading, and it is wrong. The payout transactions **reach
+  `FINALIZED`** — status 7, the end of the lifecycle — and still carry an empty
+  `triggered_transactions` with the contract's balance untouched. `settlement.ts`
+  printing *"waiting for finalization"* is polling the recipient's balance, not
+  the transaction; the transaction had already finished. A message that is never
+  dispatched is not a slow message.
 
 What remains true is the original diagnosis, now with a testnet to its name: the
 last hop is contract to wallet, and no available GenLayer network completes it.
