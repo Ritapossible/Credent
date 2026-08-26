@@ -145,14 +145,38 @@ def render() -> str:
     return BANNER + "\n" + shell.replace(MARKER, engine)
 
 
+def _write_minified(rendered: str) -> None:
+    """Emit the deploy artifact alongside the readable one.
+
+    Generated here rather than on demand so the two cannot drift. A stale
+    minified contract is worse than none: it deploys, it runs, and it is a
+    different program from the one the tests pin.
+
+    See `minify_contract.py` for why the chain needs a second artifact at all -
+    bradbury refuses the readable one at every gas limit with
+    `BlockPubdataLimitReached`, and half of it is prose the runner never reads.
+    """
+    import minify_contract
+
+    minified = minify_contract.minify(rendered)
+    minify_contract.verify(rendered, minified)
+    minify_contract.OUTPUT.write_text(minified, encoding="utf-8", newline="\n")
+    before, after = len(rendered.encode()), len(minified.encode())
+    print(
+        f"wrote {minify_contract.OUTPUT.name} ({after:,} bytes, "
+        f"{100 * after / before:.0f}% of {before:,})"
+    )
+
+
 def main() -> int:
     rendered = render()
     current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else None
     if current == rendered:
         print(f"{OUTPUT.name} already up to date ({len(rendered.splitlines())} lines)")
-        return 0
-    OUTPUT.write_text(rendered, encoding="utf-8", newline="\n")
-    print(f"wrote {OUTPUT.name} ({len(rendered.splitlines())} lines)")
+    else:
+        OUTPUT.write_text(rendered, encoding="utf-8", newline="\n")
+        print(f"wrote {OUTPUT.name} ({len(rendered.splitlines())} lines)")
+    _write_minified(rendered)
     return 0
 
 
