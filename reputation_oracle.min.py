@@ -537,6 +537,8 @@ def _slice(items, offset: int, limit: int) -> list:
     if stop > total:
         stop = total
     return [items[index] for index in range(offset, stop)]
+def _owed_key(address: Address) -> str:
+    return address.as_hex.lower()
 def _fail(reason: str) -> None:
     raise gl.vm.UserError(f"{ERROR_EXPECTED} {reason}")
 def _now_seconds() -> int:
@@ -879,7 +881,7 @@ class ReputationOracle(gl.Contract):
         self.eng_collateral_state[engagement_id] = _COL_CLAIMED
         self._credit(client, amount)
     def _credit(self, recipient: Address, amount: int) -> None:
-        key = recipient.as_hex
+        key = _owed_key(recipient)
         current = self.owed.get(key)
         total = (0 if current is None else int(current)) + int(amount)
         if total < 0 or total > U256_MAX:
@@ -891,7 +893,7 @@ class ReputationOracle(gl.Contract):
             _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
         if not recipient_is_a_contract:
             _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
-        key = gl.message.sender_address.as_hex
+        key = _owed_key(gl.message.sender_address)
         current = self.owed.get(key)
         amount = 0 if current is None else int(current)
         if amount <= 0:

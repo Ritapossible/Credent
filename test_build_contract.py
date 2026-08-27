@@ -349,3 +349,72 @@ def test_no_float_arithmetic_in_the_contract_layer(artifact_source: str) -> None
         if isinstance(node, ast.Constant) and isinstance(node.value, float)
     ]
     assert not offenders, f"float literals in the deployed contract: {offenders}"
+
+
+def test_entitlement_keys_go_through_the_lowercasing_helper(artifact_source: str) -> None:
+    """`owed` is keyed consistently, or `owed_to` reports zero forever.
+
+    `Address.as_hex` returns the **EIP-55 checksummed** form -- mixed case
+    derived from a keccak hash of the digits. Crediting an entitlement under
+    `as_hex` while reading it back under a lowercased string is two keys for one
+    address, and it fails in the worst way available: `withdraw` still works,
+    because it derives the key the same way on both sides, so the money is
+    recoverable and only the balance *enquiry* is broken. Every `owed_to` call
+    returns 0 and nothing looks wrong until someone asks what they are owed.
+
+    That shipped once and cost a settlement run to find. The rule is therefore
+    structural rather than about one expression: **any function that touches
+    `self.owed` must build its key with `_owed_key`, and must not reach for a
+    bare `as_hex` of its own.**
+    """
+    tree = ast.parse(artifact_source)
+
+    def touches_owed(fn: ast.FunctionDef) -> bool:
+        for node in ast.walk(fn):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "owed"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "self"
+            ):
+                return True
+        return False
+
+    offenders = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef) or not touches_owed(fn):
+            continue
+        body = ast.unparse(fn)
+        # `owed_to` takes a string from a caller and lowercases it directly;
+        # it has no Address to run through the helper.
+        if fn.name == "owed_to":
+            if ".lower()" not in body:
+                offenders.append(f"{fn.name} does not lowercase its key")
+            continue
+        if "_owed_key(" not in body:
+            offenders.append(f"{fn.name} keys `owed` without _owed_key")
+        bare = [
+            ast.unparse(node)
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Attribute) and node.attr == "as_hex"
+        ]
+        if bare:
+            offenders.append(f"{fn.name} uses a bare as_hex: {bare}")
+
+    assert not offenders, "entitlement keys are not canonicalized: " + "; ".join(offenders)
+
+
+def test_owed_key_helper_lowercases(artifact_source: str) -> None:
+    """The helper the test above points at actually does the lowering."""
+    tree = ast.parse(artifact_source)
+    helper = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_owed_key"
+        ),
+        None,
+    )
+    assert helper is not None, "_owed_key is missing from the artifact"
+    body = ast.unparse(helper)
+    assert ".lower()" in body, f"_owed_key does not lowercase: {body}"

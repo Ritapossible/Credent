@@ -209,13 +209,19 @@ if (!Number.isFinite(SETTLE_TIMEOUT_MS) || SETTLE_TIMEOUT_MS <= 0) {
  * needs to be able to tell those apart.
  */
 async function settleTo(
-  address: string,
+  read: (() => Promise<bigint>) | string,
   settled: (value: bigint) => boolean,
   timeoutMs = SETTLE_TIMEOUT_MS,
 ): Promise<bigint> {
+  // Takes a reader rather than only an address, because the two things worth
+  // waiting on settle at different places: an entitlement lands in contract
+  // storage and a payout lands in a balance. Polling a balance for a change
+  // that was only ever going to appear in storage is how a working settlement
+  // gets reported as a timeout.
+  const reader = typeof read === 'string' ? () => balanceOf(read) : read
   const started = Date.now()
   const deadline = started + timeoutMs
-  let current = await balanceOf(address)
+  let current = await reader()
   let announced = 0
 
   while (!settled(current) && Date.now() < deadline) {
@@ -223,9 +229,9 @@ async function settleTo(
     const waited = Math.floor((Date.now() - started) / 1000)
     if (waited - announced >= 30) {
       announced = waited
-      console.log(`         ...waiting for finalization (${waited}s, ${gen(current)} so far)`)
+      console.log(`         ...waiting (${waited}s, ${gen(current)} so far)`)
     }
-    current = await balanceOf(address)
+    current = await reader()
   }
   return current
 }
@@ -344,45 +350,105 @@ function asBig(raw: unknown, what: string): bigint {
 async function settlement(
   label: string,
   oracle: string,
-  recipient: Role,
+  // Only the name and the address are used, so this is deliberately narrower
+  // than `Role`: the recipient of a settlement may be a contract, which has no
+  // signing account behind it.
+  recipient: { name: string; address: string },
   amount: bigint,
   act: () => Promise<Sent>,
 ): Promise<void> {
   console.log(`\n  ${label}`)
   console.log(`    owed ${gen(amount)} to ${recipient.name} ${recipient.address}`)
 
+  // What is asserted here is the **entitlement**, not the recipient's balance.
+  //
+  // Settlement credits rather than pays, because `emit_transfer` does not credit
+  // an externally-owned account: to a wallet the value leaves the contract and
+  // arrives nowhere. Pushing at settlement time therefore recorded a settlement
+  // and moved no money, which is exactly what the review caught. Crediting is
+  // pure storage - it cannot fail, cannot be dropped by a consensus round, and
+  // is readable afterwards - and moving the value is a separate call the
+  // recipient makes when it is able to receive.
+  //
+  // So this proves the accounting, and `withdrawal()` below proves the money
+  // actually leaves. Both halves are needed; neither is sufficient alone.
   const contractBefore = await balanceOf(oracle)
-  const recipientBefore = await balanceOf(recipient.address)
+  const owedBefore = asBig(await view(oracle, 'owed_to', [recipient.address]), 'owed_to')
 
   const sent = await act()
   console.log(`    tx   ${sent.hash}`)
   if (EXPLORER_URL) console.log(`         ${EXPLORER_URL}/tx/${sent.hash}`)
 
-  // The contract's balance is what settles first and settles exactly, so it is
-  // what the wait keys on. Falling back to a plain read after the timeout means
-  // a network that never pays produces a reported delta of zero rather than a
-  // hang with no diagnosis.
-  const contractAfter = await settleTo(oracle, (value) => value <= contractBefore - amount)
-  const recipientAfter = await balanceOf(recipient.address)
+  const owedAfter = await settleTo(
+    async () => asBig(await view(oracle, 'owed_to', [recipient.address]), 'owed_to'),
+    (value) => value >= owedBefore + amount,
+  )
+  const contractAfter = await balanceOf(oracle)
+  const owedDelta = owedAfter - owedBefore
 
-  const contractDelta = contractAfter - contractBefore
-  const recipientDelta = recipientAfter - recipientBefore
+  console.log(`    owed_to   ${gen(owedBefore)} -> ${gen(owedAfter)}  (${delta(owedDelta)})`)
+  console.log(`    contract  ${gen(contractBefore)} -> ${gen(contractAfter)}`)
 
-  console.log(`    contract  ${gen(contractBefore)} -> ${gen(contractAfter)}  (${delta(contractDelta)})`)
-  console.log(`    ${recipient.name.padEnd(9)} ${gen(recipientBefore)} -> ${gen(recipientAfter)}  (${delta(recipientDelta)})`)
+  check(owedDelta === amount, `the entitlement rose by exactly ${gen(amount)}`)
+  // The contract must still be holding it. Settlement moves nothing on its own,
+  // and a contract whose balance fell here would mean value left by some path
+  // this script does not know about.
+  check(
+    contractAfter === contractBefore,
+    `the contract still holds the funds (${gen(contractAfter)})`,
+  )
+}
 
-  check(contractDelta === -amount, `the contract paid out exactly ${gen(amount)}`)
-  const arrived = check(recipientDelta > 0n, `${recipient.name}'s balance rose (${delta(recipientDelta)})`)
-  if (arrived) {
-    // What the recipient spent to collect. Not asserted - gas is the network's
-    // business - but printed, because a payout that costs more than it pays is
-    // worth seeing even when it technically succeeds.
-    console.log(`    gas  ${gen(amount - recipientDelta)}`)
-  } else {
+/**
+ * Prove the money actually leaves.
+ *
+ * The entitlement assertions above are accounting. This is the part the review
+ * asked for: a settlement that ends with a balance moving out of the contract
+ * and into the recipient.
+ *
+ * The recipient is a **contract**, and that is not incidental. `emit_transfer`
+ * credits a contract recipient and does not credit a wallet - measured both
+ * ways, in both `on` modes - so on this platform a party that expects to be paid
+ * has to be able to receive, and receiving means being a contract. `Claimant` is
+ * the smallest one that works.
+ */
+async function withdrawal(
+  label: string,
+  oracle: string,
+  claimant: string,
+  expected: bigint,
+  act: () => Promise<Sent>,
+): Promise<void> {
+  console.log(`\n  ${label}`)
+
+  const contractBefore = await balanceOf(oracle)
+  const claimantBefore = await balanceOf(claimant)
+  const owedBefore = asBig(await view(oracle, 'owed_to', [claimant]), 'owed_to')
+  console.log(`    owed_to(claimant) ${gen(owedBefore)}`)
+
+  const sent = await act()
+  console.log(`    tx   ${sent.hash}`)
+  if (EXPLORER_URL) console.log(`         ${EXPLORER_URL}/tx/${sent.hash}`)
+
+  const claimantAfter = await settleTo(
+    () => balanceOf(claimant),
+    (value) => value > claimantBefore,
+  )
+  const contractAfter = await balanceOf(oracle)
+  const owedAfter = asBig(await view(oracle, 'owed_to', [claimant]), 'owed_to')
+
+  console.log(`    contract  ${gen(contractBefore)} -> ${gen(contractAfter)}  (${delta(contractAfter - contractBefore)})`)
+  console.log(`    claimant  ${gen(claimantBefore)} -> ${gen(claimantAfter)}  (${delta(claimantAfter - claimantBefore)})`)
+  console.log(`    owed_to   ${gen(owedBefore)} -> ${gen(owedAfter)}`)
+
+  const arrived = check(claimantAfter > claimantBefore, `the claimant's balance rose (${delta(claimantAfter - claimantBefore)})`)
+  check(contractAfter === contractBefore - expected, `the contract paid out exactly ${gen(expected)}`)
+  check(owedAfter === 0n, 'the entitlement was zeroed')
+  if (!arrived) {
     console.error(
-      `    -> the contract recorded this settlement and the money did not move.\n` +
-        `       This is the studionet failure: the transfer is dispatched as a call\n` +
-        `       to a wallet that holds no code, errors, and is never credited.`,
+      `    -> the entitlement was recorded and the money did not move.\n` +
+        `       Check that the recipient is a contract: emit_transfer does not\n` +
+        `       credit an externally-owned account.`,
     )
   }
 }
@@ -407,19 +473,34 @@ async function refund(
     `    ${sender.name} sends ${gen(kept + excess)}, of which ${gen(excess)} must come back`,
   )
 
+  // An overpayment is **credited back, not pushed back**, for the same reason
+  // every other settlement is: pushing at a wallet moves nothing. So the
+  // contract legitimately ends up holding the whole `kept + excess`, and what
+  // proves the refund happened is the entitlement, not a fallen balance. An
+  // earlier revision of this function asserted the balance and reported a
+  // working refund as a failure.
   const contractBefore = await balanceOf(oracle)
+  const owedBefore = asBig(await view(oracle, 'owed_to', [sender.address]), 'owed_to')
+
   const sent = await act()
   console.log(`    tx   ${sent.hash}`)
 
-  // Settles down to `kept` once the refund lands; without a refund it sticks at
-  // `kept + excess`, which is the failure this is looking for.
-  const contractAfter = await settleTo(oracle, (value) => value <= contractBefore + kept)
-  const contractDelta = contractAfter - contractBefore
+  const owedAfter = await settleTo(
+    async () => asBig(await view(oracle, 'owed_to', [sender.address]), 'owed_to'),
+    (value) => value >= owedBefore + excess,
+  )
+  const contractAfter = await balanceOf(oracle)
 
-  console.log(`    contract  ${gen(contractBefore)} -> ${gen(contractAfter)}  (${delta(contractDelta)})`)
+  console.log(`    contract  ${gen(contractBefore)} -> ${gen(contractAfter)}  (${delta(contractAfter - contractBefore)})`)
+  console.log(`    owed_to   ${gen(owedBefore)} -> ${gen(owedAfter)}  (${delta(owedAfter - owedBefore)})`)
+
   check(
-    contractDelta === kept,
-    `the contract kept exactly ${gen(kept)} and refunded ${gen(excess)}`,
+    owedAfter - owedBefore === excess,
+    `the overpayment of ${gen(excess)} came back as an entitlement`,
+  )
+  check(
+    contractAfter - contractBefore === kept + excess,
+    `the contract holds the ${gen(kept)} requirement plus the credited ${gen(excess)}`,
   )
   return sent
 }
@@ -672,8 +753,77 @@ async function main(): Promise<void> {
     () => send(client, oracle, 'reclaim_bond', [attestationId]),
   )
 
-  console.log(`\ncontract holds ${gen(await balanceOf(oracle))} after every settlement`)
+  // --- engagement three: a contract provider, paid for real ----------------
+  //
+  // Everything above proves the accounting. This proves the money leaves.
+  //
+  // The provider here is a `Claimant` contract rather than a wallet, and that is
+  // the whole point: `emit_transfer` credits a contract recipient and does not
+  // credit an externally-owned account, so a party that expects to be paid on
+  // this platform has to be able to receive, and receiving means being a
+  // contract. The claimant accepts the engagement (forwarding its own
+  // collateral, so the oracle sees it as the provider), the collateral is
+  // released to its entitlement, and then it withdraws and the balance moves.
+  const third = `settlement-withdraw-${Date.now()}`
+  console.log(`\n=== ${third} - a contract provider withdraws ===`)
+
+  const claimantSource = readFileSync(new URL('../scripts/claimant.py', import.meta.url), 'utf8')
+  // `../scripts/`, not `./`: esbuild bundles this into `web/.tmp/`, so
+  // `import.meta.url` resolves relative to that directory and not to the
+  // source file. The oracle artifact above climbs out the same way.
+  const claimantHash = await client.client.deployContract({
+    code: claimantSource,
+    args: [oracle] as never[],
+  })
+  const claimantReceipt = await client.client.waitForTransactionReceipt({
+    hash: claimantHash as Parameters<typeof client.client.waitForTransactionReceipt>[0]['hash'],
+    status: TransactionStatus.ACCEPTED,
+    interval: 5_000,
+    retries: 100,
+  })
+  const claimant = deployedAddress(claimantReceipt)
+  if (!claimant) throw new Error('claimant deploy returned no address')
+  console.log(`  claimant  ${claimant}`)
+  if (EXPLORER_URL) console.log(`            ${EXPLORER_URL}/address/${claimant}`)
+
+  await send(client, oracle, 'open_engagement', [
+    third,
+    addressArg(claimant, 'open_engagement.provider'),
+    SCOPE,
+    stake,
+  ])
+
+  const quote3 = await view(oracle, 'collateral_quote', [
+    addressArg(claimant, 'collateral_quote.provider'),
+    stake,
+  ])
+  const required3 = asBig(field(quote3, 'required'), 'collateral_quote.required')
+  console.log(`  quoted ${gen(required3)} for the contract provider`)
+
+  // The claimant forwards the collateral itself, so the oracle sees the contract
+  // as the accepting provider and not the wallet that funded it.
+  await send(client, claimant, 'accept', [third], required3)
+  await send(client, oracle, 'close_engagement', [third])
+
+  await settlement(
+    'release_collateral: the contract provider is credited',
+    oracle,
+    { name: 'claimant', address: claimant },
+    required3,
+    () => send(client, oracle, 'release_collateral', [third]),
+  )
+
+  await withdrawal(
+    'withdraw: the claimant takes the money out of the contract',
+    oracle,
+    claimant,
+    required3,
+    () => send(client, claimant, 'claim', []),
+  )
+
+  console.log(`\ncontract holds ${gen(await balanceOf(oracle))} at the end`)
   console.log(`oracle ${oracle}`)
+  console.log(`claimant ${claimant}`)
 }
 
 // Started before `main` rather than inside it, because `role` reads `endpoint`

@@ -1286,6 +1286,16 @@ def _slice(items, offset: int, limit: int) -> list:
     return [items[index] for index in range(offset, stop)]
 
 
+def _owed_key(address: Address) -> str:
+    """The storage key for an entitlement: the address, lowercased.
+
+    `Address.as_hex` returns the EIP-55 checksummed form, so it is only stable
+    as a key if every reader spells it identically. Lowercasing once, here,
+    means a caller holding either form finds the same entry.
+    """
+    return address.as_hex.lower()
+
+
 def _fail(reason: str) -> None:
     """Raise a classified, deterministic error.
 
@@ -1894,6 +1904,14 @@ class ReputationOracle(gl.Contract):
         self._credit(client, amount)
 
     # --- entitlements and withdrawal ----------------------------------------
+    #
+    # Every entitlement key goes through `_owed_key`, which lowercases. This is
+    # not cosmetic: `Address.as_hex` returns the **EIP-55 checksummed** form,
+    # with mixed case derived from a keccak hash of the digits. Crediting under
+    # `as_hex` while reading under a lowercased string is two different keys for
+    # one address, and the failure is quiet in the worst way -- `withdraw` works,
+    # because it hashes the same way on both sides, while `owed_to` reports zero
+    # to everyone forever.
 
     def _credit(self, recipient: Address, amount: int) -> None:
         """Record what this contract owes `recipient`. Never pushes value.
@@ -1912,7 +1930,7 @@ class ReputationOracle(gl.Contract):
         retryable call the recipient makes when it can receive it. The part that
         must not fail no longer depends on the part that can.
         """
-        key = recipient.as_hex
+        key = _owed_key(recipient)
         current = self.owed.get(key)
         total = (0 if current is None else int(current)) + int(amount)
         if total < 0 or total > U256_MAX:
@@ -1954,7 +1972,7 @@ class ReputationOracle(gl.Contract):
         if not recipient_is_a_contract:
             _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
 
-        key = gl.message.sender_address.as_hex
+        key = _owed_key(gl.message.sender_address)
         current = self.owed.get(key)
         amount = 0 if current is None else int(current)
         if amount <= 0:
@@ -1990,6 +2008,9 @@ class ReputationOracle(gl.Contract):
         """
         if not isinstance(recipient, str):
             return 0
+        # Lowercased to match `_owed_key`. An off-chain caller passes whichever
+        # form it happens to hold -- a checksummed address from a wallet, a
+        # lowercase one from a log -- and both must find the same entry.
         key = recipient.strip().lower()
         current = self.owed.get(key)
         return 0 if current is None else int(current)
