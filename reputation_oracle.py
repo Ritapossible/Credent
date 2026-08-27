@@ -229,6 +229,8 @@ REASON_COLLATERAL_FORFEITED = "collateral_forfeited"
 REASON_COLLATERAL_NOT_FORFEITED = "collateral_not_forfeited"
 REASON_COLLATERAL_SETTLED = "collateral_already_settled"
 REASON_NOT_CLIENT = "sender_not_client"
+REASON_NOTHING_OWED = "nothing_owed"
+REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
 
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
@@ -248,6 +250,8 @@ REASONS = frozenset({
     REASON_COLLATERAL_NOT_FORFEITED,
     REASON_COLLATERAL_SETTLED,
     REASON_NOT_CLIENT,
+    REASON_NOTHING_OWED,
+    REASON_WITHDRAW_NEEDS_CONTRACT,
 })
 
 
@@ -1384,8 +1388,16 @@ class ReputationOracle(gl.Contract):
     att_bond: DynArray[u256]
     att_bond_state: DynArray[str]
 
+    # Entitlements. Settlement credits here; `withdraw` is the only method that
+    # moves value out. Keyed by the recipient's lowercase hex, because a
+    # `TreeMap[Address, u256]` cannot be read back by an off-chain caller that
+    # only has the string form.
+    owed: TreeMap[str, u256]
+
     # Indexes.
     subject_atts: TreeMap[Address, DynArray[u256]]
+    pair_count: TreeMap[str, u256]
+    engagement_attested: TreeMap[str, bool]
     pair_count: TreeMap[str, u256]
     engagement_attested: TreeMap[str, bool]
 
@@ -1581,7 +1593,7 @@ class ReputationOracle(gl.Contract):
         # curve is the entire argument for having a score at all.
         excess = posted - required
         if excess > 0:
-            gl.get_contract_at(provider).emit_transfer(value=excess)
+            self._credit(provider, excess)
 
         return required
 
@@ -1750,10 +1762,7 @@ class ReputationOracle(gl.Contract):
         # curve a floor rather than a price, and the curve is the argument.
         excess = posted - required
         if excess > 0:
-            # `value` is keyword-only here, and `emit_transfer` raises on a
-            # non-positive amount -- hence the guard above rather than an
-            # unconditional call.
-            gl.get_contract_at(attester).emit_transfer(value=excess)
+            self._credit(attester, excess)
 
         return attestation_id
 
@@ -1792,7 +1801,7 @@ class ReputationOracle(gl.Contract):
             _fail("no_bond_posted")
 
         self.att_bond_state[index] = _BOND_RELEASED
-        gl.get_contract_at(attester).emit_transfer(value=amount)
+        self._credit(attester, amount)
 
     # --- collateral ---------------------------------------------------------
 
@@ -1846,7 +1855,7 @@ class ReputationOracle(gl.Contract):
             _fail(REASON_NO_COLLATERAL)
 
         self.eng_collateral_state[engagement_id] = _COL_RETURNED
-        gl.get_contract_at(provider).emit_transfer(value=amount)
+        self._credit(provider, amount)
 
     @gl.public.write
     def claim_collateral(self, engagement_id: str) -> None:
@@ -1882,9 +1891,157 @@ class ReputationOracle(gl.Contract):
             _fail(REASON_NO_COLLATERAL)
 
         self.eng_collateral_state[engagement_id] = _COL_CLAIMED
-        gl.get_contract_at(client).emit_transfer(value=amount)
+        self._credit(client, amount)
+
+    # --- entitlements and withdrawal ----------------------------------------
+
+    def _credit(self, recipient: Address, amount: int) -> None:
+        """Record what this contract owes `recipient`. Never pushes value.
+
+        Settlement credits rather than pays, and the reason is measured rather
+        than stylistic. `emit_transfer` **does not credit an externally-owned
+        account**: to a wallet the value leaves this contract and arrives
+        nowhere, in both `on` modes. It credits a *contract* recipient
+        correctly. Every provider, client and attester here is a wallet, so the
+        old design -- five direct `emit_transfer` calls at the moment of
+        settlement -- recorded settlement and moved no money.
+
+        Splitting it in two fixes that. Crediting an entitlement is pure
+        storage: it cannot fail, cannot be dropped by a consensus round, and is
+        readable afterwards through `owed_to`. Moving the value is a separate,
+        retryable call the recipient makes when it can receive it. The part that
+        must not fail no longer depends on the part that can.
+        """
+        key = recipient.as_hex
+        current = self.owed.get(key)
+        total = (0 if current is None else int(current)) + int(amount)
+        if total < 0 or total > U256_MAX:
+            _fail("entitlement_overflow")
+        # Plain int, never `u256(total)`. On the v0.3 runner the integer
+        # aliases are `typing.Annotated[int, ...]` rather than `NewType`, so
+        # they are annotations and not callables -- the wrapping still reads
+        # as correct and still parses, and raises a TypeError once live.
+        self.owed[key] = total
+
+    @gl.public.write
+    def withdraw(self, recipient_is_a_contract: bool = False) -> dict:
+        """Claim an entitlement. The only method that moves value out.
+
+        The caller must assert that it is a contract, because **this contract
+        cannot check**, and the consequence of being wrong is losing the
+        entitlement: the balance is zeroed before the transfer, which is not
+        optional -- leaving it intact across the transfer would let a caller
+        withdraw twice and drain the contract.
+
+        The obvious guard does not work on GenLayer. On Ethereum
+        `sender != origin` proves the caller is a contract; here an emitted
+        cross-contract message arrives with `origin_address` **equal to**
+        `sender_address`, both set to the calling contract, so the originating
+        account is not carried through. A guard built on that comparison rejects
+        the one path that actually works.
+
+        What is left is to make the caller say it, and to refuse by default. A
+        wallet calling `withdraw()` with no argument is turned away with its
+        entitlement intact; losing it takes deliberately passing `True` while
+        being wrong about your own address. That is not a proof and this
+        docstring does not pretend otherwise -- it is the difference between a
+        mistake anyone can make by accident and one you have to opt into.
+
+        Lift the flag the moment `emit_transfer` credits wallets.
+        """
+        if not isinstance(recipient_is_a_contract, bool):
+            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
+        if not recipient_is_a_contract:
+            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
+
+        key = gl.message.sender_address.as_hex
+        current = self.owed.get(key)
+        amount = 0 if current is None else int(current)
+        if amount <= 0:
+            _fail(REASON_NOTHING_OWED)
+
+        self.owed[key] = 0
+        # `on="accepted"`, not the SDK's safer-by-default `on="finalized"`.
+        #
+        # Measured on Bradbury: a transfer emitted `on="finalized"` is recorded
+        # on the transaction and then never dispatched -- the claim reached
+        # FINALIZED with an empty `triggered_transactions` and the value never
+        # moved. The same probe with `on="accepted"` credited the recipient.
+        #
+        # The usual reason to prefer `finalized` is that an appealed transaction
+        # can be overturned after the value has left. That risk is as low as it
+        # gets here: `withdraw` runs no nondet block. It reads storage,
+        # subtracts and emits -- a deterministic computation with nothing for
+        # validators to disagree about, so an appeal re-runs it and reaches the
+        # same answer. The appeal hazard belongs to payouts attached to a
+        # *grade*, and settlement deliberately does not pay: it credits.
+        gl.get_contract_at(gl.message.sender_address).emit_transfer(
+            value=amount, on="accepted"
+        )
+        return {"to": key, "amount": amount}
 
     # --- views --------------------------------------------------------------
+
+    @gl.public.view
+    def owed_to(self, recipient: str) -> int:
+        """What this contract owes an address but has not yet paid out.
+
+        Free to call, and the number a recipient checks before withdrawing.
+        """
+        if not isinstance(recipient, str):
+            return 0
+        key = recipient.strip().lower()
+        current = self.owed.get(key)
+        return 0 if current is None else int(current)
+
+
+    def _report(self, subject: Address) -> dict:
+        """An agent's standing, recomputed from stored grades at read time.
+
+        Decay is a function of age, so the score is derived per call rather than
+        cached. Nothing here calls a model: the grades were settled when they
+        were written.
+
+        Private, and called from a write path as well as a read one:
+        `accept_engagement` prices collateral off the same number `get_report`
+        returns, and it must be the same number by construction rather than by
+        two implementations agreeing. A `@gl.public.view` method is a call
+        surface, not a subroutine, so the shared body lives here and both
+        entry points are thin.
+        """
+        policy = self._policy()
+        ids = self.subject_atts.get(subject)
+        if ids is None:
+            return Report(NEUTRAL_BP, 0, 0, 0, 0).as_dict()
+
+        now = _now_seconds()
+        entries = []
+        attesters = []
+        counted = 0
+        for raw_id in ids:
+            index = int(raw_id)
+            weight = attestation_weight(
+                substantiated=int(self.att_substantiated[index]),
+                confidence=int(self.att_confidence[index]),
+                repeat_index=int(self.att_repeat_index[index]),
+                age_seconds=now - int(self.att_created_at[index]),
+                policy=policy,
+            )
+            if weight > 0:
+                counted += 1
+            entries.append((weight, int(self.att_fulfilled[index])))
+            who = normalize_address(self.att_attester[index].as_hex)
+            if who not in attesters:
+                attesters.append(who)
+
+        score_bp, total_weight = aggregate(entries, policy)
+        return Report(
+            score_bp=score_bp,
+            total_weight=total_weight,
+            n_attestations=len(entries),
+            n_distinct_attesters=len(attesters),
+            n_counted=counted,
+        ).as_dict()
 
     def _report(self, subject: Address) -> dict:
         """An agent's standing, recomputed from stored grades at read time.

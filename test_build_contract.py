@@ -56,6 +56,10 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         "attestation_count",
         "bond_for_next",
         "collateral_quote",
+        # Settlement credits an entitlement; `withdraw` is the only method that
+        # moves value out, and `owed_to` is how a recipient reads what is due.
+        "withdraw",
+        "owed_to",
     }
 )
 

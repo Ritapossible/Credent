@@ -50,6 +50,8 @@ REASON_COLLATERAL_FORFEITED = "collateral_forfeited"
 REASON_COLLATERAL_NOT_FORFEITED = "collateral_not_forfeited"
 REASON_COLLATERAL_SETTLED = "collateral_already_settled"
 REASON_NOT_CLIENT = "sender_not_client"
+REASON_NOTHING_OWED = "nothing_owed"
+REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
     REASON_NOT_CLOSED,
@@ -68,6 +70,8 @@ REASONS = frozenset({
     REASON_COLLATERAL_NOT_FORFEITED,
     REASON_COLLATERAL_SETTLED,
     REASON_NOT_CLIENT,
+    REASON_NOTHING_OWED,
+    REASON_WITHDRAW_NEEDS_CONTRACT,
 })
 def normalize_address(text: str) -> str:
     if not isinstance(text, str):
@@ -578,7 +582,10 @@ class ReputationOracle(gl.Contract):
     att_repeat_index: DynArray[u256]
     att_bond: DynArray[u256]
     att_bond_state: DynArray[str]
+    owed: TreeMap[str, u256]
     subject_atts: TreeMap[Address, DynArray[u256]]
+    pair_count: TreeMap[str, u256]
+    engagement_attested: TreeMap[str, bool]
     pair_count: TreeMap[str, u256]
     engagement_attested: TreeMap[str, bool]
     def __init__(
@@ -693,7 +700,7 @@ class ReputationOracle(gl.Contract):
         self.eng_state[engagement_id] = _ENG_OPEN
         excess = posted - required
         if excess > 0:
-            gl.get_contract_at(provider).emit_transfer(value=excess)
+            self._credit(provider, excess)
         return required
     @gl.public.write
     def close_engagement(self, engagement_id: str) -> None:
@@ -800,7 +807,7 @@ class ReputationOracle(gl.Contract):
                 self.eng_collateral_state[engagement_id] = _COL_RELEASABLE
         excess = posted - required
         if excess > 0:
-            gl.get_contract_at(attester).emit_transfer(value=excess)
+            self._credit(attester, excess)
         return attestation_id
     @gl.public.write
     def reclaim_bond(self, attestation_id: u256) -> None:
@@ -825,7 +832,7 @@ class ReputationOracle(gl.Contract):
         if amount <= 0:
             _fail("no_bond_posted")
         self.att_bond_state[index] = _BOND_RELEASED
-        gl.get_contract_at(attester).emit_transfer(value=amount)
+        self._credit(attester, amount)
     @gl.public.write
     def release_collateral(self, engagement_id: str) -> None:
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
@@ -852,7 +859,7 @@ class ReputationOracle(gl.Contract):
         if amount <= 0:
             _fail(REASON_NO_COLLATERAL)
         self.eng_collateral_state[engagement_id] = _COL_RETURNED
-        gl.get_contract_at(provider).emit_transfer(value=amount)
+        self._credit(provider, amount)
     @gl.public.write
     def claim_collateral(self, engagement_id: str) -> None:
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
@@ -870,7 +877,69 @@ class ReputationOracle(gl.Contract):
         if amount <= 0:
             _fail(REASON_NO_COLLATERAL)
         self.eng_collateral_state[engagement_id] = _COL_CLAIMED
-        gl.get_contract_at(client).emit_transfer(value=amount)
+        self._credit(client, amount)
+    def _credit(self, recipient: Address, amount: int) -> None:
+        key = recipient.as_hex
+        current = self.owed.get(key)
+        total = (0 if current is None else int(current)) + int(amount)
+        if total < 0 or total > U256_MAX:
+            _fail("entitlement_overflow")
+        self.owed[key] = total
+    @gl.public.write
+    def withdraw(self, recipient_is_a_contract: bool = False) -> dict:
+        if not isinstance(recipient_is_a_contract, bool):
+            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
+        if not recipient_is_a_contract:
+            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
+        key = gl.message.sender_address.as_hex
+        current = self.owed.get(key)
+        amount = 0 if current is None else int(current)
+        if amount <= 0:
+            _fail(REASON_NOTHING_OWED)
+        self.owed[key] = 0
+        gl.get_contract_at(gl.message.sender_address).emit_transfer(
+            value=amount, on="accepted"
+        )
+        return {"to": key, "amount": amount}
+    @gl.public.view
+    def owed_to(self, recipient: str) -> int:
+        if not isinstance(recipient, str):
+            return 0
+        key = recipient.strip().lower()
+        current = self.owed.get(key)
+        return 0 if current is None else int(current)
+    def _report(self, subject: Address) -> dict:
+        policy = self._policy()
+        ids = self.subject_atts.get(subject)
+        if ids is None:
+            return Report(NEUTRAL_BP, 0, 0, 0, 0).as_dict()
+        now = _now_seconds()
+        entries = []
+        attesters = []
+        counted = 0
+        for raw_id in ids:
+            index = int(raw_id)
+            weight = attestation_weight(
+                substantiated=int(self.att_substantiated[index]),
+                confidence=int(self.att_confidence[index]),
+                repeat_index=int(self.att_repeat_index[index]),
+                age_seconds=now - int(self.att_created_at[index]),
+                policy=policy,
+            )
+            if weight > 0:
+                counted += 1
+            entries.append((weight, int(self.att_fulfilled[index])))
+            who = normalize_address(self.att_attester[index].as_hex)
+            if who not in attesters:
+                attesters.append(who)
+        score_bp, total_weight = aggregate(entries, policy)
+        return Report(
+            score_bp=score_bp,
+            total_weight=total_weight,
+            n_attestations=len(entries),
+            n_distinct_attesters=len(attesters),
+            n_counted=counted,
+        ).as_dict()
     def _report(self, subject: Address) -> dict:
         policy = self._policy()
         ids = self.subject_atts.get(subject)
