@@ -181,9 +181,17 @@ still arrives -- crediting and executing are separate outcomes -- but every
 inbound transfer leaves `ValueError: call to private method ...` in its receipt,
 which reads exactly like a failed payout and is not one.
 
-**Proven end to end, with balances.** `npm run settlement` runs release, claim,
-both refund paths and bond reclaim, asserting each entitlement to the wei, and
-then withdraws through a contract provider:
+**Proven end to end, with balances, on both networks.** `npm run settlement`
+runs release, claim, both refund paths and bond reclaim, asserting each
+entitlement to the wei, and then withdraws through a contract provider. It
+passes 15 of 15 checks on studionet and on testnet-bradbury, with the same
+figures on each:
+
+| Network | Oracle | Claimant |
+|---|---|---|
+| Studionet | `0x3d36FcF0A748C10Fa122Cd0Cb8a962F14873C168` | `0x771361b5fD163586B15B4D67576e5e08fb107903` |
+| Testnet Bradbury | `0xd7729d45C973D3031B715e38ac9fd56DbF219B2f` | `0x945A10410F76eed4a3F547657FaBeA8C3a8d30A4` |
+
 
 ```text
 withdraw: the claimant takes the money out of the contract
