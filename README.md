@@ -19,14 +19,19 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on GenLayer Studio at `0x1903b01a14053c2322ede4373669F411Dcd2Cd05`,
+Deployed on **GenLayer Studio** at `0x0bf3E333D5529F2EaE9bD32316c037fa4460A456`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
-and on Testnet Bradbury at `0x58ea89B668180F8E9Cc486488159b6a2Fa7C482b` — the
-minified artifact, since bradbury refuses the 96 KB one. Every view and every
-write works on both, **payouts included**: settlement credits an entitlement and
-`withdraw()` moves the value to a recipient that can receive it, proven with
-balances on both sides. See *A contract cannot pay a wallet, and that is a design
-constraint rather than a dead end*.
+and on **Testnet Bradbury** at `0x13D11BBFc834c3a91C659FDd19B5b58466394560` — the
+minified artifact there, since bradbury refuses the full-size source on
+transaction pubdata rather than on gas.
+
+Both carry the production policy, including the 14-day bond lock, and both
+answer `owed_to`, which is the quickest way to confirm you are looking at a
+build with the settlement fix in it rather than an earlier one. Every view and
+every write works on both, **payouts included**: settlement credits an
+entitlement and `withdraw()` moves the value out to a recipient that can receive
+it, proven with balances on both sides of the transfer. See *A contract cannot
+pay a wallet, and that is a design constraint rather than a dead end*.
 
 ---
 

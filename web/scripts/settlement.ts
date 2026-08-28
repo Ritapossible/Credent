@@ -463,7 +463,9 @@ async function withdrawal(
 async function refund(
   label: string,
   oracle: string,
-  sender: Role,
+  // Narrower than `Role` for the same reason `settlement` is: the party being
+  // refunded may be a contract, which has no signing account behind it.
+  sender: { name: string; address: string },
   kept: bigint,
   excess: bigint,
   act: () => Promise<Sent>,
@@ -800,11 +802,58 @@ async function main(): Promise<void> {
   const required3 = asBig(field(quote3, 'required'), 'collateral_quote.required')
   console.log(`  quoted ${gen(required3)} for the contract provider`)
 
-  // The claimant forwards the collateral itself, so the oracle sees the contract
-  // as the accepting provider and not the wallet that funded it.
-  await send(client, claimant, 'accept', [third], required3)
+  // The rejection named three payout types specifically -- release, refund and
+  // bond reclaim -- as leaving funds in the contract. So the claimant earns all
+  // three, and the withdrawal at the end has to carry the sum of them.
+
+  // 1. Refund. The claimant overpays its collateral; the excess is credited.
+  await refund(
+    'refund: the contract provider overpays and is credited the excess',
+    oracle,
+    { name: 'claimant', address: claimant },
+    required3,
+    overpay,
+    () => send(client, claimant, 'accept', [third], required3 + overpay),
+  )
+
   await send(client, oracle, 'close_engagement', [third])
 
+  // 2. Bond reclaim. The claimant attests about the client -- the oracle allows
+  // either party to grade the other -- posting a bond from its own balance, and
+  // then reclaims it. The lock is zero under this policy.
+  const bond3 = asBig(
+    await view(oracle, 'bond_for_next', [
+      addressArg(claimant, 'bond_for_next.attester'),
+      addressArg(client.address, 'bond_for_next.subject'),
+    ]),
+    'bond_for_next',
+  )
+  const attested3 = await send(
+    client,
+    claimant,
+    'attest',
+    [
+      third,
+      'The client specified the scope up front, answered questions during the ' +
+        'work, and accepted the delivered artefact without renegotiating terms.',
+      'Scope was fixed at open_engagement and its digest is on-chain; the ' +
+        'engagement closed without amendment and the collateral was released.',
+    ],
+    bond3,
+  )
+  void attested3
+  const attestationId3 = Number(await view(oracle, 'attestation_count', [])) - 1
+  console.log(`    attestation id ${attestationId3}`)
+
+  await settlement(
+    'reclaim_bond: the contract attester is credited its bond',
+    oracle,
+    { name: 'claimant', address: claimant },
+    bond3,
+    () => send(client, claimant, 'reclaim', [attestationId3]),
+  )
+
+  // 3. Release. The collateral itself comes back.
   await settlement(
     'release_collateral: the contract provider is credited',
     oracle,
@@ -815,11 +864,15 @@ async function main(): Promise<void> {
     () => send(client, claimant, 'release', [third]),
   )
 
+  // All three, withdrawn in one call. This is the number the review asked for:
+  // funds from a release, a refund and a bond reclaim, leaving the contract.
+  const total3 = required3 + overpay + bond3
+  console.log(`\n  owed from all three payout types: ${gen(total3)}`)
   await withdrawal(
-    'withdraw: the claimant takes the money out of the contract',
+    'withdraw: release, refund and bond reclaim all leave the contract',
     oracle,
     claimant,
-    required3,
+    total3,
     () => send(client, claimant, 'claim', []),
   )
 

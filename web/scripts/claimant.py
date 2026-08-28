@@ -95,6 +95,26 @@ class Claimant(gl.Contract):
             engagement_id
         )
 
+    @gl.public.write.payable
+    def attest(self, engagement_id: str, claim: str, evidence: str) -> None:
+        """Grade the counterparty, posting the bond from this contract.
+
+        The oracle requires the attester to be one of the engagement's two
+        parties. This contract is the provider, so it attests about the client,
+        and the bond it posts becomes an entitlement it can reclaim later --
+        which is the third of the three payout types the review names.
+        """
+        gl.get_contract_at(self.oracle).emit(
+            value=gl.message.value, on="accepted"
+        ).attest(engagement_id, claim, evidence)
+
+    @gl.public.write
+    def reclaim(self, attestation_id: int) -> None:
+        """Reclaim a bond this contract posted, once the lock has elapsed."""
+        gl.get_contract_at(self.oracle).emit(on="accepted").reclaim_bond(
+            attestation_id
+        )
+
     @gl.public.write
     def claim(self) -> None:
         """Call `withdraw` on the oracle, asserting that this caller is a contract.
