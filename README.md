@@ -226,7 +226,13 @@ could not settle on bradbury at all, which was wrong and is the same shape of
 error as the one this whole section corrects.
 
 
-| Network | Oracle | Claimant |
+**These are the suite's own throwaway contracts, not the deployments.** Each run
+deploys a fresh oracle with the bond lock at zero so one pass can reach every
+path, and a fresh claimant to receive the payout. They are listed so the run
+above can be inspected on-chain; the addresses to actually use are the two at
+the top of this file.
+
+| Network | Oracle (test policy) | Claimant |
 |---|---|---|
 | Studionet | `0x3d36FcF0A748C10Fa122Cd0Cb8a962F14873C168` | `0x771361b5fD163586B15B4D67576e5e08fb107903` |
 | Testnet Bradbury | `0xd7729d45C973D3031B715e38ac9fd56DbF219B2f` | `0x945A10410F76eed4a3F547657FaBeA8C3a8d30A4` |
