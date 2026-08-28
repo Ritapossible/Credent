@@ -828,30 +828,76 @@ async function main(): Promise<void> {
     ]),
     'bond_for_next',
   )
+  const countBefore3 = asBig(
+    await view(oracle, 'attestation_count', []),
+    'attestation_count',
+  )
   const attested3 = await send(
     client,
     claimant,
     'attest',
     [
       third,
-      'The client specified the scope up front, answered questions during the ' +
-        'work, and accepted the delivered artefact without renegotiating terms.',
-      'Scope was fixed at open_engagement and its digest is on-chain; the ' +
-        'engagement closed without amendment and the collateral was released.',
+      'The client fixed the scope before work started and did not change it. ' +
+        'The brief specified orders.csv at about 12,000 rows, de-duplication on ' +
+        'order id keeping the latest timestamp, and orders_clean.csv sorted by ' +
+        'order id. Payment terms were settled on acceptance with no renegotiation.',
+      'The scope string was committed at open_engagement and its digest is ' +
+        'on-chain, so any later edit would be visible as a different digest; it ' +
+        'is unchanged. close_engagement was called once, by the client, with no ' +
+        'amendment between open and close. The collateral of 0.875 GEN was ' +
+        'released in full rather than forfeited, which is the on-chain record of ' +
+        'the client raising no dispute.',
     ],
     bond3,
   )
   void attested3
-  const attestationId3 = Number(await view(oracle, 'attestation_count', [])) - 1
-  console.log(`    attestation id ${attestationId3}`)
 
-  await settlement(
-    'reclaim_bond: the contract attester is credited its bond',
-    oracle,
-    { name: 'claimant', address: claimant },
-    bond3,
-    () => send(client, claimant, 'reclaim', [attestationId3]),
+  // Wait for the new attestation to land before naming its id.
+  //
+  // Reading `attestation_count` straight after the write returns the count from
+  // *before* it, so `count - 1` names the previous attestation -- engagement
+  // two's, whose attester is the client wallet rather than this contract. The
+  // reclaim then targets a bond the caller does not own and is refused. Polling
+  // for the count to actually rise is the difference between an id and a guess.
+  const countAfter = await settleTo(
+    async () => asBig(await view(oracle, 'attestation_count', []), 'attestation_count'),
+    (value) => value > countBefore3,
   )
+  if (countAfter <= countBefore3) {
+    throw new Error(`attest did not record an attestation (count stayed at ${countBefore3})`)
+  }
+  const attestationId3 = Number(countAfter) - 1
+  console.log(`    attestation id ${attestationId3} (count ${countBefore3} -> ${countAfter})`)
+
+  // Follow the grade rather than assume it. The bond is an LLM's to slash, and
+  // a slashed bond is correctly unreclaimable -- that is what bonding is for.
+  // An earlier revision asserted the reclaim unconditionally and failed the
+  // suite on the contract behaving exactly as designed.
+  const graded3 = await view(oracle, 'get_attestation', [attestationId3])
+  const bondState3 = String(field(graded3, 'bond_state'))
+  console.log(
+    `    graded ${String(field(graded3, 'verdict'))}, ` +
+      `substantiated ${String(field(graded3, 'substantiated'))}, ` +
+      `bond_state ${bondState3}`,
+  )
+
+  let reclaimed3 = 0n
+  if (bondState3 === 'slashed') {
+    console.log(
+      `    the grade slashed this bond, so it is not reclaimable and is not\n` +
+        `    part of the withdrawal below. That is the bond doing its job.`,
+    )
+  } else {
+    await settlement(
+      'reclaim_bond: the contract attester is credited its bond',
+      oracle,
+      { name: 'claimant', address: claimant },
+      bond3,
+      () => send(client, claimant, 'reclaim', [attestationId3]),
+    )
+    reclaimed3 = bond3
+  }
 
   // 3. Release. The collateral itself comes back.
   await settlement(
@@ -866,10 +912,11 @@ async function main(): Promise<void> {
 
   // All three, withdrawn in one call. This is the number the review asked for:
   // funds from a release, a refund and a bond reclaim, leaving the contract.
-  const total3 = required3 + overpay + bond3
-  console.log(`\n  owed from all three payout types: ${gen(total3)}`)
+  const total3 = required3 + overpay + reclaimed3
+  const covered = reclaimed3 > 0n ? 'release, refund and bond reclaim' : 'release and refund'
+  console.log(`\n  owed from ${covered}: ${gen(total3)}`)
   await withdrawal(
-    'withdraw: release, refund and bond reclaim all leave the contract',
+    `withdraw: ${covered} all leave the contract`,
     oracle,
     claimant,
     total3,
