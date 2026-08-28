@@ -810,7 +810,9 @@ async function main(): Promise<void> {
     oracle,
     { name: 'claimant', address: claimant },
     required3,
-    () => send(client, oracle, 'release_collateral', [third]),
+    // Sent through the claimant: the oracle checks the caller against the
+    // engagement's provider, and the provider is the contract.
+    () => send(client, claimant, 'release', [third]),
   )
 
   await withdrawal(

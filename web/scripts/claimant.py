@@ -82,6 +82,20 @@ class Claimant(gl.Contract):
         ).accept_engagement(engagement_id)
 
     @gl.public.write
+    def release(self, engagement_id: str) -> None:
+        """Ask the oracle to release this engagement's collateral.
+
+        The oracle checks the caller against the engagement's provider, and the
+        provider is this contract, so this call has to originate here. Driving
+        it from the wallet that funded the contract is rejected with
+        `sender_not_provider` -- correctly, since that wallet is not the party
+        the collateral belongs to.
+        """
+        gl.get_contract_at(self.oracle).emit(on="accepted").release_collateral(
+            engagement_id
+        )
+
+    @gl.public.write
     def claim(self) -> None:
         """Call `withdraw` on the oracle, asserting that this caller is a contract.
 
