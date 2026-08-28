@@ -19,15 +19,22 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on **GenLayer Studio** at `0x0bf3E333D5529F2EaE9bD32316c037fa4460A456`,
+Deployed on **GenLayer Studio** at `0xd66c9CA85Ead615D5bb5feD5d431cF7bdccc1670`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
-and on **Testnet Bradbury** at `0x13D11BBFc834c3a91C659FDd19B5b58466394560` — the
+and on **Testnet Bradbury** at `0x58af7b5785132346FAb8771e55f7C28849eB9c01` — the
 minified artifact there, since bradbury refuses the full-size source on
 transaction pubdata rather than on gas.
 
-Both carry the production policy, including the 14-day bond lock, and both
-answer `owed_to`, which is the quickest way to confirm you are looking at a
-build with the settlement fix in it rather than an earlier one. Every view and
+Both carry the production policy and both answer `owed_to`, which is the
+quickest way to confirm you are looking at a build with the settlement fix in it
+rather than an earlier one.
+
+The production policy is **not** the constructor's bare defaults, and the
+difference matters. The defaults leave `min_bond` at zero, which makes an
+attestation free to write and switches off the cost that the anti-sybil argument
+rests on. `npm run livecheck` asserts `min_bond == 1 GEN` for exactly that
+reason, and it is the check to run against any deployment before trusting it --
+an earlier pair of these addresses was deployed on the defaults and failed it. Every view and
 every write works on both, **payouts included**: settlement credits an
 entitlement and `withdraw()` moves the value out to a recipient that can receive
 it, proven with balances on both sides of the transfer. See *A contract cannot
