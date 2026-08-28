@@ -189,8 +189,35 @@ which reads exactly like a failed payout and is not one.
 **Proven end to end, with balances, on both networks.** `npm run settlement`
 runs release, claim, both refund paths and bond reclaim, asserting each
 entitlement to the wei, and then withdraws through a contract provider. It
-passes 15 of 15 checks on studionet and on testnet-bradbury, with the same
-figures on each:
+passes **19 of 19 checks on studionet and on testnet-bradbury**, with the same
+figures on each.
+
+The rejection that prompted this change named release, refund and bond reclaim
+specifically, so the final engagement earns all three against a contract
+recipient and takes them out in a single call:
+
+```text
+owed from release, refund and bond reclaim: 0.935 GEN
+
+withdraw: release, refund and bond reclaim all leave the contract
+  contract  2.795 GEN -> 1.86 GEN   (-0.935 GEN)
+  claimant  0 GEN     -> 0.935 GEN  (+0.935 GEN)
+  owed_to   0.935 GEN -> 0 GEN
+  ok   the claimant's balance rose (+0.935 GEN)
+  ok   the contract paid out exactly 0.935 GEN
+  ok   the entitlement was zeroed
+```
+
+0.935 GEN is 0.875 release plus 0.05 refund plus 0.01 bond reclaim.
+
+One timing note for anyone re-running this. `attest` makes an LLM call inside
+the consensus round, and a contract-emitted one adds a hop; on bradbury it has
+taken over fifteen minutes and settled comfortably at twenty. `ATTEST_TIMEOUT_MS`
+exists for that, and a timeout there is a timeout rather than a verdict -- an
+earlier draft of this repository concluded from one such timeout that the path
+could not settle on bradbury at all, which was wrong and is the same shape of
+error as the one this whole section corrects.
+
 
 | Network | Oracle | Claimant |
 |---|---|---|
