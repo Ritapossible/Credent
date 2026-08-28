@@ -23,8 +23,10 @@ Deployed on GenLayer Studio at `0x1903b01a14053c2322ede4373669F411Dcd2Cd05`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
 and on Testnet Bradbury at `0x58ea89B668180F8E9Cc486488159b6a2Fa7C482b` — the
 minified artifact, since bradbury refuses the 96 KB one. Every view and every
-write works on both. Payouts complete on neither, and that is a property of the
-runner rather than of this contract — see *A contract cannot pay a wallet*.
+write works on both, **payouts included**: settlement credits an entitlement and
+`withdraw()` moves the value to a recipient that can receive it, proven with
+balances on both sides. See *A contract cannot pay a wallet, and that is a design
+constraint rather than a dead end*.
 
 ---
 
@@ -120,148 +122,80 @@ contract rejected the call. Always read `consensus_data.leader_receipt`, where
 studio receipts put `execution_result` and the contract's own reason. Checking
 the transaction status alone reports rejected writes as successes.
 
-**A contract cannot pay a wallet on studionet.** Emitting value is the one thing
-this runner cannot do toward an externally owned account, and every provider and
-attester is one. The message a contract emits becomes a **type 2** transaction — a
-contract call — which studio executes against the recipient and finalizes with
-`execution_result: ERROR` and the reason `Contract 0x… not found`. The parent call
-still reports success, because from the contract's side emitting the message *is*
-the whole operation, so nothing surfaces until you read the triggered transaction
-or notice the balance never moved.
+**A contract cannot pay a wallet, and that is a design constraint rather than a
+dead end.** This section used to end by concluding the opposite, and the
+conclusion was wrong. It is left corrected rather than deleted, because the
+mistake is more instructive than the finding.
 
-Seven routes were tried against a probe contract on the same runner pin, and all
-seven end in the same place:
+Emitting value toward an **externally owned account** does not work. The message
+a contract emits becomes a call to the recipient; a wallet holds no code, the
+call errors with `Contract 0x… not found`, and `__on_errored_message__` refunds
+the value to the sender. The parent transaction still reports success, because
+from the contract's side emitting the message *is* the whole operation, so
+nothing surfaces until you read the triggered transaction or notice the balance
+never moved. Seven routes were tried -- both `on` modes, `gl.Account`,
+`gl.chain.Account`, and `wasi.gl_call({'PostMessage': …})` with three different
+calldata shapes -- and all seven end in the same place.
 
-| Route | Result |
-| --- | --- |
-| `emit_transfer(on='finalized')` | emits, transfer fails `Contract 0x… not found` |
-| `emit_transfer(on='accepted')` | emits, same failure |
-| `gl.Account(...)` | not exposed on this runner's proxy; `exit_code 1` |
-| `gl.chain.Account(...)` | not exposed either; same crash |
-| `wasi.gl_call({'PostMessage': …})`, calldata `{}` | emits, same failure |
-| the same with calldata `b''` | emits, same failure |
-| the same with calldata `None` | emits, same failure |
+**Emitting value toward a contract works.** That is the half this repository
+never tested, and it is the half that matters. Measured with an isolated probe:
 
-The calldata makes no difference: the message kind is a call whatever it carries.
-That also rules out the indirections worth reaching for — an internal ledger of
-claimable balances, or paying into a vault contract — because the last hop is
-still contract to wallet. The fix is not in this repository. `reclaim_bond` has
-carried the same limitation since it was written, hidden behind a 14-day lock
-nobody had waited out, and the collateral layer is simply the first code here
-that settles fast enough to expose it.
+| Recipient | `on` | `value_credited` | Recipient credited |
+|---|---|---|---|
+| EOA | `accepted` | **false** | no |
+| EOA | `finalized` | **false** | no |
+| **Contract** | `finalized` | **true** | **yes** |
 
-**Retried on testnet, and it fails there too.** The suggestion above used to read
-"worth retrying on `testnet-asimov` or `testnet-bradbury`, where the node may
-apply these messages properly". That has now been tried rather than assumed, and
-the answer is no.
+So the fix belongs in this contract, not in the runner, and the earlier claim
+that "the contract needs no change" was the expensive kind of wrong: it was
+true about the mechanism and false about the remedy. Testing only the failing
+half and generalizing from it is how a platform limitation gets invented.
 
-`web/scripts/payprobe.ts` — a five-method contract that takes a deposit and pays
-it straight back — against testnet-bradbury:
+**What the contract does now.** Settlement **credits an entitlement** rather
+than pushing value. `_credit(recipient, amount)` is pure storage: it cannot
+fail, cannot be dropped by a consensus round, and is readable through
+`owed_to`. `withdraw()` moves the value in a separate call the recipient makes
+when it can receive it, so the part that must not fail no longer depends on the
+part that can.
+
+`withdraw()` requires the caller to assert it is a contract, and refuses by
+default. The contract cannot check this itself, and the Ethereum guard does not
+port: GenLayer sets `origin_address` **equal to** `sender_address` across an
+emitted call, so `sender != origin` rejects the one path that works. Making the
+caller say it, and refusing unless they do, is not a proof -- it is the
+difference between a mistake anyone can make by accident and one you have to opt
+into.
+
+**What that means for an integrator.** A party that expects to be paid has to be
+able to receive, and receiving means being a contract.
+`web/scripts/claimant.py` is the smallest one that works: it accepts an
+engagement as the provider (forwarding its own collateral, so the oracle sees
+the contract as the provider), implements `__receive__`, and calls `withdraw`.
+Roughly sixty lines.
+
+One snag worth knowing before you write your own: **`genvm-lint` rejects
+`__receive__`.** E019 demands a `@gl.public.write` decorator on it and E106 then
+refuses any public name beginning with `__`, so a recipient contract can be
+lint-clean or receive value quietly, not both. Without the handler the value
+still arrives -- crediting and executing are separate outcomes -- but every
+inbound transfer leaves `ValueError: call to private method ...` in its receipt,
+which reads exactly like a failed payout and is not one.
+
+**Proven end to end, with balances.** `npm run settlement` runs release, claim,
+both refund paths and bond reclaim, asserting each entitlement to the wei, and
+then withdraws through a contract provider:
 
 ```text
-funding the contract with 0.1 GEN
-contract holds 0.1 GEN
-asking for 0.1 GEN back
-   ...waiting (275s, contract 0.1 GEN)
-contract 0.1 GEN -> 0.1 GEN   (0 GEN)
-caller   126.343365 GEN -> 126.343090 GEN   (-0.000274 GEN)
-RESULT: the contract did NOT pay out. Same defect as studionet.
+withdraw: the claimant takes the money out of the contract
+  contract  2.735 GEN -> 1.86 GEN   (-0.875 GEN)
+  claimant  0 GEN     -> 0.875 GEN  (+0.875 GEN)
+  owed_to   0.875 GEN -> 0 GEN
+  ok   the claimant's balance rose (+0.875 GEN)
+  ok   the contract paid out exactly 0.875 GEN
+  ok   the entitlement was zeroed
+
+settlement ok - 15 checks, every payout reached its recipient
 ```
-
-The full harness agrees, and it was run to completion rather than stopped at the
-first failure. `settlement.ts` deployed a fresh oracle to bradbury
-(`0x1356D279BdcE00d3fd99f3d4BF858bbF6c33cf69`) and exercised every settlement the
-review asks about — release, claim, both refund paths and bond reclaim:
-
-```text
-settlement FAILED: 8 of 8 checks
-contract holds 1.86 GEN after every settlement
-```
-
-Every one fails the same way. The message is emitted with `onAcceptance: true`
-and the recipient's wallet as its target, `triggered_transactions` stays empty,
-the contract's balance does not fall by a single wei, and the recipient's balance
-moves only downward by the gas they spent asking. The harness is doing its job:
-it reads balances on both sides instead of trusting the receipt, so a settlement
-the contract records but never pays is reported as a failure.
-
-**`testnet-asimov` is not a second chance.** Both aliases resolve to chain id
-**4221** and answer `eth_chainId` with the same `0x107d`; they are the same
-network under two names. So the SDK ships localnet, studionet and one testnet,
-and contract-to-wallet transfer completes on none of them.
-
-Two things were tried and did not help, recorded so nobody repeats them:
-
-- **Emitting `on="accepted"` instead of the default `on="finalized"`.** It was
-  reverted, and reading the chain afterwards shows why it could never have
-  mattered. The deployed contract passes no `on=` at all, taking the SDK default
-  of `finalized` — and the message the chain records still reads
-  `onAcceptance: true`. Both settings produce the same on-chain message, so the
-  experiment was never a variable.
-- **Waiting.** Slowness was the charitable reading, and it is measurably wrong.
-  Consensus closes in about ten seconds (`createdTimestamp` to
-  `lastVoteTimestamp`), and re-reading the five settlement transactions later put
-  every one at **`FINALIZED`** — the youngest already finalized 32 minutes after
-  submission — each still carrying an empty `triggered_transactions` with the
-  contract's balance untouched. `settlement.ts` printing *"waiting for
-  finalization"* is polling the recipient's balance, not the transaction; the
-  transaction had long since finished. A message that is never dispatched is not
-  a slow message.
-
-**The contract does its half correctly, and the chain drops it.** Re-reading all
-five settlement transactions from the bradbury run afterwards:
-
-| Settlement | Status | Execution | Message emitted |
-| --- | --- | --- | --- |
-| refund (`accept_engagement`) | FINALIZED | FINISHED_WITH_RETURN | 0.05 GEN -> provider |
-| `release_collateral` | FINALIZED | FINISHED_WITH_RETURN | 0.875 GEN -> provider |
-| refund (`attest` bond) | FINALIZED | FINISHED_WITH_RETURN | 0.05 GEN -> client |
-| `release_collateral` (graded) | FINALIZED | FINISHED_WITH_RETURN | 0.875 GEN -> provider |
-| `reclaim_bond` | FINALIZED | FINISHED_WITH_RETURN | 0.01 GEN -> client |
-
-Every one finalized, executed cleanly, and carried a well-formed message with the
-right recipient and the right amount, agreed 5-0 by the validators:
-
-```json
-{"messageType":1,"recipient":"0xF9dF…D0a7","value":"875000000000000000",
- "data":"0xc20680","onAcceptance":true,"saltNonce":"0"}
-```
-
-The five emitted messages total **1.86 GEN**, which is exactly the balance the
-contract still holds. The contract computed every recipient and every amount
-correctly and handed the chain five valid instructions to pay them; the chain
-turned none of them into a transaction. `triggered_transactions` is empty not
-because the transfer failed a check but because it was never attempted.
-
-**A different runner pin would not help either, and the SDK says so itself.**
-The bundle ships four `py-genlayer` runners and four `py-lib-genlayer-std`
-versions. All four construct the same message, with the same four fields:
-
-```python
-'PostMessage': {
-    'address': ..., 'calldata': ..., 'value': ..., 'on': ...,
-}
-```
-
-There is no gas field, no EOA-specific variant, no second opcode — the emitted
-message is identical whichever version you pin, so swapping the pin cannot change
-the result. And `emit_transfer` with no method name encodes calldata `{}`, which
-is one of the three payloads already tested above.
-
-The SDK's own docstring names the assumption that fails:
-
-> Emit a simple value transfer without calling any method. Receiver **may catch it
-> with** `genlayer.gl.Contract.__receive__` **method**, so users may need to supply
-> non-zero gas.
-
-The receiver is expected to be a contract with a `__receive__` method. Every
-provider and attester is an externally owned account, which has none, and that is
-precisely the `Contract 0x… not found` that studio reports. The API surface has no
-other route to try; this is the end of what a contract can express.
-
-What remains true is the original diagnosis, now with a testnet to its name: the
-last hop is contract to wallet, and no available GenLayer network completes it.
-The contract needs no change; the runner does.
 
 **Integers are typed, and large ones arrive as strings.** An address argument is
 its own calldata type: passing the hex string encodes a `str`, the contract
@@ -328,14 +262,20 @@ attestation freeing 1.44 GEN of working capital. Offline it carries 60 new tests
 and 266 new parity vectors, and `genvm-lint` validates the rebuilt schema: 18
 methods, 13 constructor parameters.
 
-What does **not** work is the payout leg, and it is a property of the network
-rather than of this contract — see *A contract cannot pay a wallet on studionet*
-above, where all seven available routes are tabulated. `release_collateral`,
-`claim_collateral`, the acceptance refund and `reclaim_bond` all record the right
-decision, emit the right transfer, and then the chain fails to apply it. Until
-that is resolved upstream, collateral posted on studionet is collateral held: the
-pricing and the gate work correctly, and the money returns only on a network
-where a contract can pay a wallet.
+The payout leg works, and getting there was the most instructive part of this
+build. An earlier revision pushed value directly at providers, clients and
+attesters at the moment of settlement, and moved nothing: `emit_transfer` does
+not credit an externally owned account, and every one of those parties is a
+wallet. This paragraph used to say so and conclude the fix was upstream. It was
+not.
+
+`release_collateral`, `claim_collateral`, the acceptance refund and
+`reclaim_bond` now credit an entitlement, which is pure storage and cannot fail,
+and `withdraw()` moves the value in a separate call the recipient makes. The
+recipient must be a contract, because that is the only kind of address this
+runner credits — `web/scripts/claimant.py` is the sixty-line reference. Run
+`npm run settlement` to watch a contract's balance fall by exactly what the
+claimant's rises by.
 
 It is **not** production infrastructure, for reasons mostly outside this
 repository:
