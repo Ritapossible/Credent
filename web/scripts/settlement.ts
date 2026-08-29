@@ -421,13 +421,19 @@ async function withdrawal(
   claimant: string,
   expected: bigint,
   act: () => Promise<Sent>,
+  // Whose entitlement is being spent. The same address as the recipient when a
+  // contract withdraws its own credit, and a *wallet* when that wallet uses
+  // `withdraw_to` to send its credit to a contract it names - the case that
+  // exists because a wallet cannot receive at all, so its entitlement would
+  // otherwise be recorded correctly and be immovable.
+  owner: string = claimant,
 ): Promise<void> {
   console.log(`\n  ${label}`)
 
   const contractBefore = await balanceOf(oracle)
   const claimantBefore = await balanceOf(claimant)
-  const owedBefore = asBig(await view(oracle, 'owed_to', [claimant]), 'owed_to')
-  console.log(`    owed_to(claimant) ${gen(owedBefore)}`)
+  const owedBefore = asBig(await view(oracle, 'owed_to', [owner]), 'owed_to')
+  console.log(`    owed_to(${owner === claimant ? 'claimant' : 'owner'}) ${gen(owedBefore)}`)
 
   const sent = await act()
   console.log(`    tx   ${sent.hash}`)
@@ -438,7 +444,7 @@ async function withdrawal(
     (value) => value > claimantBefore,
   )
   const contractAfter = await balanceOf(oracle)
-  const owedAfter = asBig(await view(oracle, 'owed_to', [claimant]), 'owed_to')
+  const owedAfter = asBig(await view(oracle, 'owed_to', [owner]), 'owed_to')
 
   console.log(`    contract  ${gen(contractBefore)} -> ${gen(contractAfter)}  (${delta(contractAfter - contractBefore)})`)
   console.log(`    claimant  ${gen(claimantBefore)} -> ${gen(claimantAfter)}  (${delta(claimantAfter - claimantBefore)})`)
@@ -538,6 +544,25 @@ const POLICY = [
   2500n, // collateral_forfeit_bp
 ]
 
+/**
+ * The same policy with the forfeit threshold at 100%.
+ *
+ * `claim_collateral` is only reachable when a grade leaves the collateral
+ * `forfeit`, which happens when the graded `fulfilled` falls below
+ * `collateral_forfeit_bp`. On the real 25% threshold that needs an LLM to judge
+ * the work a near-total failure, so the branch fired or did not depending on the
+ * grade - and on the run that prompted this change it did not, leaving `claim`
+ * the one payout in the review's list that the suite never actually exercised.
+ *
+ * Raising the threshold rather than writing a deliberately terrible attestation
+ * keeps the grade real: the work is still judged by the same nondet block, and
+ * only the policy line that decides what counts as failure moves. Any grade
+ * short of perfect forfeits, so the path is reachable every run.
+ */
+const FORFEIT_POLICY = POLICY.map((value, index) =>
+  index === POLICY.length - 1 ? 10000n : value,
+)
+
 const SCOPE =
   'Deliver a Python script that reads orders.csv (about 12,000 rows), removes ' +
   'duplicate order ids keeping the most recent row by timestamp, and writes ' +
@@ -566,6 +591,40 @@ function deployedAddress(receipt: unknown): string | undefined {
     r?.txDataDecoded?.contract_address
   if (typeof found !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(found)) return undefined
   return /^0x0{40}$/i.test(found) ? undefined : found
+}
+
+/**
+ * Deploy one ReputationOracle and return its address.
+ *
+ * A function rather than a block because the run needs two: the main instance
+ * on the real policy, and a second one whose forfeit threshold is raised so the
+ * `claim_collateral` path is reachable without waiting for an LLM to grade a
+ * piece of work badly. See `FORFEIT_POLICY`.
+ *
+ * The minified artifact, not the generated one. `reputation_oracle.py` is over
+ * 100,000 bytes and bradbury refuses it outright - not for gas, which fails
+ * identically at 20M, 40M and 60M, but with `BlockPubdataLimitReached`, a cap on
+ * the bytes a block will carry. `reputation_oracle.min.py` is the same contract
+ * with its docstrings and comments removed, every line of code copied verbatim
+ * and the trees compared with `ast.dump` before it is written. Testing it is
+ * also the more faithful choice: it is the artifact that reaches the chain.
+ */
+async function deployOracle(client: Role, policy: bigint[]): Promise<string> {
+  const artifact = new URL('../../reputation_oracle.min.py', import.meta.url)
+  const code = readFileSync(artifact, 'utf8')
+  console.log(`artifact  reputation_oracle.min.py (${code.length.toLocaleString()} bytes)`)
+  const deployHash = await client.client.deployContract({ code, args: policy as never[] })
+  const deployReceipt = await client.client.waitForTransactionReceipt({
+    // `deployContract` is typed as returning a plain `0x${string}` while the
+    // waiter wants the SDK's branded `Hash`. Same value, narrower type.
+    hash: deployHash as Parameters<typeof client.client.waitForTransactionReceipt>[0]['hash'],
+    status: TransactionStatus.ACCEPTED,
+    interval: 5_000,
+    retries: 100,
+  })
+  const address = deployedAddress(deployReceipt)
+  if (!address) throw new Error(`deploy returned no contract address: ${String(deployHash)}`)
+  return address
 }
 
 async function main(): Promise<void> {
@@ -599,20 +658,7 @@ async function main(): Promise<void> {
   // Testing the minified file is also the more faithful choice: it is the
   // artifact that reaches the chain, so it is the one whose settlement behaviour
   // is worth asserting.
-  const artifact = new URL('../../reputation_oracle.min.py', import.meta.url)
-  const code = readFileSync(artifact, 'utf8')
-  console.log(`artifact  reputation_oracle.min.py (${code.length.toLocaleString()} bytes)`)
-  const deployHash = await client.client.deployContract({ code, args: POLICY as never[] })
-  const deployReceipt = await client.client.waitForTransactionReceipt({
-    // `deployContract` is typed as returning a plain `0x${string}` while the
-    // waiter wants the SDK's branded `Hash`. Same value, narrower type.
-    hash: deployHash as Parameters<typeof client.client.waitForTransactionReceipt>[0]['hash'],
-    status: TransactionStatus.ACCEPTED,
-    interval: 5_000,
-    retries: 100,
-  })
-  const oracle = deployedAddress(deployReceipt)
-  if (!oracle) throw new Error(`deploy returned no contract address: ${String(deployHash)}`)
+  const oracle = await deployOracle(client, POLICY)
   console.log(`oracle    ${oracle}`)
   if (EXPLORER_URL) console.log(`          ${EXPLORER_URL}/address/${oracle}`)
 
@@ -952,6 +998,120 @@ async function main(): Promise<void> {
     total3,
     () => send(client, claimant, 'claim', []),
   )
+
+  // --- engagement four: a forfeited grade, claimed by a wallet -------------
+  //
+  // Two things neither of the three above proves.
+  //
+  // `claim_collateral` is the fourth payout the review named, and it was the one
+  // the suite could not promise to reach: it is only live when a grade leaves
+  // the collateral `forfeit`, and on the real 25% threshold that is an LLM's
+  // judgement, not this script's. A run where the grade cleared the work - which
+  // is what happened - passed every check without ever touching `claim`. This
+  // engagement runs on a second oracle whose forfeit threshold is 100%, so the
+  // grade is still real and the branch is reachable regardless of how it lands.
+  //
+  // And the claimant here is the **client's own wallet**, which is the harder
+  // half. Settlement credits whoever is owed, and four of the five parties this
+  // contract credits are ordinarily wallets. `withdraw` pays
+  // `gl.message.sender_address`, so a wallet calling it achieves nothing:
+  // `emit_transfer` does not credit an externally-owned account. Without
+  // `withdraw_to` a wallet's entitlement is accounted for, visible through
+  // `owed_to`, and permanently immobile - the same settlement defect the review
+  // caught, moved one step down the pipe.
+  const fourth = `settlement-forfeit-${Date.now()}`
+  console.log(`\n=== ${fourth} - a forfeited grade, claimed by a wallet ===`)
+  console.log('\ndeploying a second oracle with the forfeit threshold at 100%')
+  const strict = await deployOracle(client, FORFEIT_POLICY)
+  console.log(`  oracle    ${strict}`)
+
+  await send(client, strict, 'open_engagement', [
+    fourth,
+    addressArg(provider.address, 'open_engagement.provider'),
+    SCOPE,
+    stake,
+  ])
+  const quote4 = await view(strict, 'collateral_quote', [
+    addressArg(provider.address, 'collateral_quote.provider'),
+    stake,
+  ])
+  const required4 = asBig(field(quote4, 'required'), 'collateral_quote.required')
+  await send(provider, strict, 'accept_engagement', [fourth], required4)
+  await send(client, strict, 'close_engagement', [fourth])
+
+  const bond4 = asBig(
+    await view(strict, 'bond_for_next', [
+      addressArg(client.address, 'bond_for_next.attester'),
+      addressArg(provider.address, 'bond_for_next.subject'),
+    ]),
+    'bond_for_next',
+  )
+  await send(
+    client,
+    strict,
+    'attest',
+    [
+      fourth,
+      'The script runs and writes orders_clean.csv, but it de-duplicates on the ' +
+        'wrong column and keeps the earliest row rather than the latest, so the ' +
+        'output does not match the scope. No README was delivered.',
+      'Ran it against the same 12,000-row input and diffed the output against a ' +
+        'manual pandas de-duplication on order id: 412 rows differ, and spot ' +
+        'checks show the retained row is the oldest timestamp rather than the ' +
+        'newest. The repository contains no README.',
+    ],
+    bond4,
+  )
+
+  const engagement4 = await view(strict, 'get_engagement', [fourth])
+  const state4 = String(field(engagement4, 'collateral_state'))
+  const held4 = asBig(field(engagement4, 'collateral'), 'get_engagement.collateral')
+  console.log(`  graded: collateral_state = ${state4}`)
+  // Not a branch. On a 100% threshold anything short of a perfect grade
+  // forfeits, so `releasable` here means the grade came back perfect for work
+  // the attestation describes as wrong - worth failing over rather than routing
+  // around.
+  check(state4 === 'forfeit', `the grade forfeited the collateral (state=${state4})`)
+
+  if (state4 === 'forfeit') {
+    await settlement(
+      'claim_collateral: the client takes collateral the grade forfeited',
+      strict,
+      { name: 'client wallet', address: client.address },
+      held4,
+      () => send(client, strict, 'claim_collateral', [fourth]),
+    )
+
+    // A second Claimant, pointed at the strict oracle, purely as somewhere the
+    // wallet can send its credit. It is not a party to the engagement.
+    const sinkHash = await client.client.deployContract({
+      code: claimantSource,
+      args: [strict] as never[],
+    })
+    const sinkReceipt = await client.client.waitForTransactionReceipt({
+      hash: sinkHash as Parameters<typeof client.client.waitForTransactionReceipt>[0]['hash'],
+      status: TransactionStatus.ACCEPTED,
+      interval: 5_000,
+      retries: 100,
+    })
+    const sink = deployedAddress(sinkReceipt)
+    if (!sink) throw new Error('sink claimant deploy returned no address')
+    console.log(`  recipient ${sink}`)
+
+    await withdrawal(
+      'withdraw_to: a wallet moves its own claimed collateral to a contract',
+      strict,
+      sink,
+      held4,
+      () =>
+        send(client, strict, 'withdraw_to', [
+          addressArg(sink, 'withdraw_to.recipient'),
+          true,
+        ]),
+      // The entitlement belongs to the wallet; the money lands at the contract.
+      client.address,
+    )
+  }
 
   console.log(`\ncontract holds ${gen(await balanceOf(oracle))} at the end`)
   console.log(`oracle ${oracle}`)

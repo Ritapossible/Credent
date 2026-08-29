@@ -52,6 +52,7 @@ REASON_COLLATERAL_SETTLED = "collateral_already_settled"
 REASON_NOT_CLIENT = "sender_not_client"
 REASON_NOTHING_OWED = "nothing_owed"
 REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
+REASON_SELF_PAYOUT = "recipient_is_this_contract"
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
     REASON_NOT_CLOSED,
@@ -72,6 +73,7 @@ REASONS = frozenset({
     REASON_NOT_CLIENT,
     REASON_NOTHING_OWED,
     REASON_WITHDRAW_NEEDS_CONTRACT,
+    REASON_SELF_PAYOUT,
 })
 def normalize_address(text: str) -> str:
     if not isinstance(text, str):
@@ -903,6 +905,25 @@ class ReputationOracle(gl.Contract):
             value=amount, on="accepted"
         )
         return {"to": key, "amount": amount}
+    @gl.public.write
+    def withdraw_to(
+        self, recipient: str, recipient_is_a_contract: bool = False
+    ) -> dict:
+        if not isinstance(recipient_is_a_contract, bool):
+            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
+        if not recipient_is_a_contract:
+            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
+        to = recipient if isinstance(recipient, Address) else Address(recipient)
+        if _owed_key(to) == _owed_key(gl.message.contract_address):
+            _fail(REASON_SELF_PAYOUT)
+        key = _owed_key(gl.message.sender_address)
+        current = self.owed.get(key)
+        amount = 0 if current is None else int(current)
+        if amount <= 0:
+            _fail(REASON_NOTHING_OWED)
+        self.owed[key] = 0
+        gl.get_contract_at(to).emit_transfer(value=amount, on="accepted")
+        return {"owner": key, "to": _owed_key(to), "amount": amount}
     @gl.public.view
     def owed_to(self, recipient: str) -> int:
         if not isinstance(recipient, str):

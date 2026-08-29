@@ -231,6 +231,7 @@ REASON_COLLATERAL_SETTLED = "collateral_already_settled"
 REASON_NOT_CLIENT = "sender_not_client"
 REASON_NOTHING_OWED = "nothing_owed"
 REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
+REASON_SELF_PAYOUT = "recipient_is_this_contract"
 
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
@@ -252,6 +253,7 @@ REASONS = frozenset({
     REASON_NOT_CLIENT,
     REASON_NOTHING_OWED,
     REASON_WITHDRAW_NEEDS_CONTRACT,
+    REASON_SELF_PAYOUT,
 })
 
 
@@ -1997,6 +1999,60 @@ class ReputationOracle(gl.Contract):
             value=amount, on="accepted"
         )
         return {"to": key, "amount": amount}
+
+    @gl.public.write
+    def withdraw_to(
+        self, recipient: str, recipient_is_a_contract: bool = False
+    ) -> dict:
+        """Send your own entitlement to a contract you name.
+
+        `withdraw` pays `gl.message.sender_address`, so it can only ever deliver
+        to a contract that calls it itself. Every party this contract credits
+        may be an ordinary wallet -- a provider taking back collateral, a client
+        claiming forfeited collateral, an attester reclaiming a bond, anyone
+        refunded an overpayment -- and a wallet cannot call `withdraw` to any
+        effect: `emit_transfer` does not credit an externally-owned account, so
+        the value would leave and arrive nowhere. Without this method a wallet's
+        credit is recorded correctly and can never be moved.
+
+        Authorisation is preserved by construction rather than by a check. The
+        entitlement is keyed by `gl.message.sender_address`, so the only balance
+        a caller can spend is its own; naming a different recipient decides
+        where that balance goes, never whose balance it is. A wallet therefore
+        assigns its own credit to a contract it controls, and nobody else's.
+
+        `recipient_is_a_contract` carries the same warning as `withdraw`: this
+        contract cannot verify it, the balance is zeroed before the transfer,
+        and being wrong loses the entitlement. It is refused by default so that
+        losing it takes deliberately passing `True`.
+
+        Paying this contract is refused outright. It would zero a real
+        entitlement and return the value to the pool it came from, which is
+        indistinguishable from a burn for the caller and unattributable for
+        everyone else.
+        """
+        if not isinstance(recipient_is_a_contract, bool):
+            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
+        if not recipient_is_a_contract:
+            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
+
+        to = recipient if isinstance(recipient, Address) else Address(recipient)
+        if _owed_key(to) == _owed_key(gl.message.contract_address):
+            _fail(REASON_SELF_PAYOUT)
+
+        key = _owed_key(gl.message.sender_address)
+        current = self.owed.get(key)
+        amount = 0 if current is None else int(current)
+        if amount <= 0:
+            _fail(REASON_NOTHING_OWED)
+
+        self.owed[key] = 0
+        # `on="accepted"` for the reason spelled out in `withdraw` above: a
+        # transfer emitted `on="finalized"` was measured on Bradbury to be
+        # recorded and never dispatched. This method runs no nondet block
+        # either, so an appeal re-runs a pure computation and agrees.
+        gl.get_contract_at(to).emit_transfer(value=amount, on="accepted")
+        return {"owner": key, "to": _owed_key(to), "amount": amount}
 
     # --- views --------------------------------------------------------------
 

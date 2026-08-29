@@ -151,6 +151,7 @@ REASON_COLLATERAL_SETTLED = "collateral_already_settled"
 REASON_NOT_CLIENT = "sender_not_client"
 REASON_NOTHING_OWED = "nothing_owed"
 REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
+REASON_SELF_PAYOUT = "recipient_is_this_contract"
 
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
@@ -172,6 +173,7 @@ REASONS = frozenset({
     REASON_NOT_CLIENT,
     REASON_NOTHING_OWED,
     REASON_WITHDRAW_NEEDS_CONTRACT,
+    REASON_SELF_PAYOUT,
 })
 
 

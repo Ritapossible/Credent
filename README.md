@@ -19,9 +19,9 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on **GenLayer Studio** at `0xd66c9CA85Ead615D5bb5feD5d431cF7bdccc1670`,
+Deployed on **GenLayer Studio** at `0x8B7B9bd431F61dE6c7B2294c57fd7a820777775c`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
-and on **Testnet Bradbury** at `0x58af7b5785132346FAb8771e55f7C28849eB9c01` — the
+and on **Testnet Bradbury** at `0x335A1b98729CA924014227E7B8238d76C8A09Cb3` — the
 minified artifact there, since bradbury refuses the full-size source on
 transaction pubdata rather than on gas.
 
@@ -178,8 +178,30 @@ caller say it, and refusing unless they do, is not a proof -- it is the
 difference between a mistake anyone can make by accident and one you have to opt
 into.
 
-**What that means for an integrator.** A party that expects to be paid has to be
-able to receive, and receiving means being a contract.
+**`withdraw_to()` is the half that stops a wallet's credit from being stranded**,
+and it was missing for longer than it should have been. `withdraw()` pays
+`gl.message.sender_address`, so it can only ever deliver to a contract that calls
+it itself. But four of the five parties this contract credits are ordinarily
+wallets -- a provider taking back collateral, a client claiming forfeited
+collateral, an attester reclaiming a bond, anyone refunded an overpayment -- and
+a wallet calling `withdraw()` achieves nothing. Their entitlement was recorded
+correctly, readable through `owed_to`, and permanently immobile: the settlement
+defect this section is about, moved one step down the pipe.
+
+`withdraw_to(recipient, recipient_is_a_contract)` lets an entitlement's owner
+send its own credit to a contract it names. Authorisation is preserved by
+construction rather than by a check: the entitlement is keyed by
+`gl.message.sender_address`, so naming a recipient decides *where* the value
+goes and never *whose* value it is. Paying this contract is refused outright,
+and the balance is zeroed before the transfer for the same reason `withdraw()`
+zeroes first.
+
+**What that means for an integrator.** A party that expects to be paid has to
+name something that can receive, and receiving means being a contract. It does
+not have to *be* one: a wallet can hold an entitlement and hand it to a contract
+with `withdraw_to`. What no party can do is take value at an externally owned
+address, on any network, because that is a property of `emit_transfer` rather
+than of this contract.
 `web/scripts/claimant.py` is the smallest one that works: it accepts an
 engagement as the provider (forwarding its own collateral, so the oracle sees
 the contract as the provider), implements `__receive__`, and calls `withdraw`.
@@ -195,12 +217,22 @@ which reads exactly like a failed payout and is not one.
 
 **Proven end to end, with balances, on both networks.** `npm run settlement`
 runs release, claim, both refund paths and bond reclaim, asserting each
-entitlement to the wei, and then withdraws through a contract provider. It
-passes **19 of 19 checks on studionet and on testnet-bradbury**, with the same
+entitlement to the wei, and then withdraws twice: once as a contract collecting
+its own credit, and once as a *wallet* moving its credit to a contract it names.
+It passes **23 of 23 checks on studionet and on testnet-bradbury**, with the same
 figures on each.
 
+`claim` is in that list for real now, and was not before. `claim_collateral` is
+only live when a grade leaves the collateral `forfeit`, which on the production
+25% threshold is an LLM's judgement rather than the script's -- so the branch
+fired or did not depending on the grade, and on the run that prompted this
+change it did not. The suite passed without ever exercising one of the four
+payouts it claimed to cover. It now runs a fourth engagement on a second oracle
+whose forfeit threshold is 100%, which leaves the grade real and makes the path
+reachable every run.
+
 The rejection that prompted this change named release, refund and bond reclaim
-specifically, so the final engagement earns all three against a contract
+specifically, so the third engagement earns all three against a contract
 recipient and takes them out in a single call:
 
 ```text
@@ -217,6 +249,27 @@ withdraw: release, refund and bond reclaim all leave the contract
 
 0.935 GEN is 0.875 release plus 0.05 refund plus 0.01 bond reclaim.
 
+And the fourth engagement is the one that answers *whose* money can move. The
+collateral is forfeited by the grade, claimed by the client -- an ordinary
+wallet, not a contract -- and then moved out by that wallet with `withdraw_to`:
+
+```text
+claim_collateral: the client takes collateral the grade forfeited
+  owed 0.875 GEN to client wallet 0xaA34e14a0e0B2fdD8Ad10F06bC0907fA0b1D02Bd
+  ok   the entitlement rose by exactly 0.875 GEN
+
+withdraw_to: a wallet moves its own claimed collateral to a contract
+  contract  0.885 GEN -> 0.01 GEN   (-0.875 GEN)
+  claimant  0 GEN     -> 0.875 GEN  (+0.875 GEN)
+  owed_to   0.875 GEN -> 0 GEN
+  ok   the claimant's balance rose (+0.875 GEN)
+  ok   the contract paid out exactly 0.875 GEN
+  ok   the entitlement was zeroed
+```
+
+Without `withdraw_to` that 0.875 GEN stays in the contract for good, and
+`owed_to` reports it accurately forever.
+
 One timing note for anyone re-running this. `attest` makes an LLM call inside
 the consensus round, and a contract-emitted one adds a hop; on bradbury it has
 taken over fifteen minutes and settled comfortably at twenty. `ATTEST_TIMEOUT_MS`
@@ -232,10 +285,14 @@ path, and a fresh claimant to receive the payout. They are listed so the run
 above can be inspected on-chain; the addresses to actually use are the two at
 the top of this file.
 
-| Network | Oracle (test policy) | Claimant |
-|---|---|---|
-| Studionet | `0x3d36FcF0A748C10Fa122Cd0Cb8a962F14873C168` | `0x771361b5fD163586B15B4D67576e5e08fb107903` |
-| Testnet Bradbury | `0xd7729d45C973D3031B715e38ac9fd56DbF219B2f` | `0x945A10410F76eed4a3F547657FaBeA8C3a8d30A4` |
+| Network | Oracle (test policy) | Claimant | Strict oracle (100% forfeit) | Wallet's recipient |
+|---|---|---|---|---|
+| Studionet | `0xA7CD429BD89Bc0cce9A823F3DfB798F22C78f991` | `0x188D6b2469aa2d501e4bD6db3AF963AAC3a1d43F` | `0xa4AF97d11adf502943979e98A4C886eB5a91B7c5` | `0x33CFfe7573820Bd3e8000552a85565C391298865` |
+| Testnet Bradbury | `0xC5082d884bA10f78C32C659192E32fa8B813B750` | `0x1e4f4291dfDF19E1A100CB701EEA78552C95dA9B` | `0xe577c0DC0Ec601d613E6910196334e312D3eE4f1` | `0xEd2504Aa4D86657bB0d57fdac26E74564ed47F48` |
+
+The last two columns are the fourth engagement: the oracle whose forfeit
+threshold is raised so `claim_collateral` is reachable, and the contract the
+client's **wallet** sent its claimed collateral to with `withdraw_to`.
 
 
 ```text
@@ -312,8 +369,8 @@ with `collateral_below_required`, the correctly funded one posted 8.75 GEN
 against a 10 GEN stake at the neutral rate of 8750bp, the grade moved the
 provider to 6154, and the same job then quoted 7.308 GEN — one well-evidenced
 attestation freeing 1.44 GEN of working capital. Offline it carries 60 new tests
-and 266 new parity vectors, and `genvm-lint` validates the rebuilt schema: 18
-methods, 13 constructor parameters.
+and 266 new parity vectors, and `genvm-lint` validates the rebuilt schema: 21
+methods, 13 constructor parameters. The offline suite is 340 tests.
 
 The payout leg works, and getting there was the most instructive part of this
 build. An earlier revision pushed value directly at providers, clients and
@@ -324,11 +381,26 @@ not.
 
 `release_collateral`, `claim_collateral`, the acceptance refund and
 `reclaim_bond` now credit an entitlement, which is pure storage and cannot fail,
-and `withdraw()` moves the value in a separate call the recipient makes. The
-recipient must be a contract, because that is the only kind of address this
-runner credits — `web/scripts/claimant.py` is the sixty-line reference. Run
+and `withdraw()`/`withdraw_to()` move the value in a separate call the recipient
+makes. The *recipient* must be a contract, because that is the only kind of
+address this runner credits — `web/scripts/claimant.py` is the sixty-line
+reference. The *entitlement owner* need not be: a wallet holds its credit and
+hands it to a contract it names with `withdraw_to`, which is what stops the four
+wallet-facing payouts from being recorded correctly and left immobile. Run
 `npm run settlement` to watch a contract's balance fall by exactly what the
-claimant's rises by.
+recipient's rises by, on both counts.
+
+A note for anyone reading an older review of this repository. The answer to
+"identify a target network where contract-to-wallet payouts complete" is that
+there is not one, and there is not meant to be: `emit_transfer` does not credit
+an externally owned account on localnet, studionet or either testnet, in either
+`on` mode, by any of the seven routes tried. Naming a network would have been
+the wrong fix. The right one was to stop requiring a wallet to receive at all —
+settlement credits, and value moves contract to contract, with `withdraw_to` as
+the bridge that lets a wallet direct its own credit into one. That is proven
+with balances on studionet **and** on testnet-bradbury, which is the closest
+thing to "a target network where settlement completes" that this platform
+currently permits.
 
 It is **not** production infrastructure, for reasons mostly outside this
 repository:

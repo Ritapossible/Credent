@@ -56,9 +56,14 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         "attestation_count",
         "bond_for_next",
         "collateral_quote",
-        # Settlement credits an entitlement; `withdraw` is the only method that
-        # moves value out, and `owed_to` is how a recipient reads what is due.
+        # Settlement credits an entitlement; these two are the only methods that
+        # move value out, and `owed_to` is how a recipient reads what is due.
+        # `withdraw` pays the caller, so only a contract can use it; a wallet
+        # entitlement owner uses `withdraw_to` to send its own credit to a
+        # contract it names. Without the second, a wallet's credit is recorded
+        # correctly and can never be moved.
         "withdraw",
+        "withdraw_to",
         "owed_to",
     }
 )
@@ -418,3 +423,92 @@ def test_owed_key_helper_lowercases(artifact_source: str) -> None:
     assert helper is not None, "_owed_key is missing from the artifact"
     body = ast.unparse(helper)
     assert ".lower()" in body, f"_owed_key does not lowercase: {body}"
+
+
+def test_every_credited_party_can_move_its_credit(artifact_source: str) -> None:
+    """A wallet's entitlement must not be recorded correctly and then stranded.
+
+    `withdraw` pays `gl.message.sender_address`, so it can only ever deliver to
+    a contract that calls it itself. Every party this contract credits may be an
+    ordinary wallet -- a provider taking back collateral, a client claiming
+    forfeited collateral, an attester reclaiming a bond, anyone refunded an
+    overpayment -- and `emit_transfer` does not credit an externally-owned
+    account. With only `withdraw`, all five of those credits are unspendable.
+
+    That is a settlement defect rather than a missing convenience: the money is
+    accounted for, visible through `owed_to`, and permanently immobile. The
+    companion `withdraw_to` closes it by letting the entitlement's owner name a
+    contract to receive it.
+
+    What is asserted here is the property, not the wording:
+
+    1. `withdraw_to` exists and is a public write.
+    2. It spends the **caller's** balance -- the key comes from
+       `sender_address` -- so naming a recipient decides where value goes and
+       never whose value it is.
+    3. It transfers to the **named** recipient, not to the sender; a copy of
+       `withdraw` that ignored its argument would pass every other check here.
+    4. It zeroes before transferring, so a transfer that cannot credit is not
+       retryable into a drain.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+
+    assert "withdraw_to" in fns, (
+        "withdraw_to is missing: every wallet this contract credits would be "
+        "unable to move its entitlement"
+    )
+    fn = fns["withdraw_to"]
+
+    decorators = {ast.unparse(d) for d in fn.decorator_list}
+    assert "gl.public.write" in decorators, (
+        f"withdraw_to must be a public write, got {decorators}"
+    )
+
+    body = ast.unparse(fn)
+
+    assert "gl.message.sender_address" in body, (
+        "withdraw_to must key the entitlement by the caller, or it would let "
+        "one account spend another's credit"
+    )
+
+    # The transfer target must be the parsed recipient. Naming `sender_address`
+    # inside the emit is the exact bug this method exists to avoid.
+    emits = [
+        node
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "emit_transfer"
+    ]
+    assert len(emits) == 1, f"expected exactly one emit_transfer, found {len(emits)}"
+    target = ast.unparse(emits[0].func.value)
+    assert "sender_address" not in target, (
+        f"withdraw_to transfers to the sender ({target}); it must transfer to "
+        "the recipient the caller named, or it is just withdraw again"
+    )
+
+    # Zero before transferring, never after. Compared by source position of the
+    # statements themselves rather than by searching the unparsed text: the
+    # docstring above says "emit_transfer" too, and a check that matched it
+    # would pass whatever the code did.
+    zeroed = [
+        node.lineno
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(t, ast.Subscript)
+            and isinstance(t.value, ast.Attribute)
+            and t.value.attr == "owed"
+            for t in node.targets
+        )
+    ]
+    assert zeroed, "withdraw_to never writes to self.owed"
+    assert max(zeroed) < emits[0].lineno, (
+        "withdraw_to must zero the entitlement before emitting the transfer, "
+        "or a transfer that cannot credit is retryable into a drain"
+    )
