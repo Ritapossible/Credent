@@ -1113,6 +1113,58 @@ async function main(): Promise<void> {
     )
   }
 
+  // --- the wallet's own credit on the main oracle --------------------------
+  //
+  // The review named release, refund and bond reclaim as the three that stay
+  // stuck in the contract. Release leaves in engagement three, taken out by the
+  // contract provider. The other two were credited to the **client's wallet**
+  // in engagement two - the attest overpayment and the bond the grade did not
+  // slash - and nothing took them out, because until `withdraw_to` existed
+  // nothing could.
+  //
+  // This is deliberately not folded into engagement three's withdrawal. That
+  // one carries a bond reclaim only when the grade leaves the claimant's bond
+  // releasable, and on a run where it is slashed - which happens, correctly,
+  // and is the bond doing its job - the withdrawal covers release and refund
+  // alone. Proving bond-reclaim money leaves has to come from a bond that was
+  // actually reclaimed, and that is this one.
+  const walletOwed = asBig(await view(oracle, 'owed_to', [client.address]), 'owed_to')
+  console.log(`\n=== the client wallet's own credit ===`)
+  console.log(`  owed_to(client wallet) ${gen(walletOwed)}`)
+  check(
+    walletOwed === overpay + bond,
+    `the wallet holds its refund plus its reclaimed bond (${gen(overpay + bond)})`,
+  )
+
+  if (walletOwed > 0n) {
+    const walletSinkHash = await client.client.deployContract({
+      code: claimantSource,
+      args: [oracle] as never[],
+    })
+    const walletSinkReceipt = await client.client.waitForTransactionReceipt({
+      hash: walletSinkHash as Parameters<typeof client.client.waitForTransactionReceipt>[0]['hash'],
+      status: TransactionStatus.ACCEPTED,
+      interval: 5_000,
+      retries: 100,
+    })
+    const walletSink = deployedAddress(walletSinkReceipt)
+    if (!walletSink) throw new Error('wallet sink deploy returned no address')
+    console.log(`  recipient ${walletSink}`)
+
+    await withdrawal(
+      'withdraw_to: the wallet takes out its refund and its reclaimed bond',
+      oracle,
+      walletSink,
+      walletOwed,
+      () =>
+        send(client, oracle, 'withdraw_to', [
+          addressArg(walletSink, 'withdraw_to.recipient'),
+          true,
+        ]),
+      client.address,
+    )
+  }
+
   console.log(`\ncontract holds ${gen(await balanceOf(oracle))} at the end`)
   console.log(`oracle ${oracle}`)
   console.log(`claimant ${claimant}`)

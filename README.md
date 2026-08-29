@@ -219,8 +219,12 @@ which reads exactly like a failed payout and is not one.
 runs release, claim, both refund paths and bond reclaim, asserting each
 entitlement to the wei, and then withdraws twice: once as a contract collecting
 its own credit, and once as a *wallet* moving its credit to a contract it names.
-It passes **23 of 23 checks on studionet and on testnet-bradbury**, with the same
-figures on each.
+It passes on **studionet and on testnet-bradbury**, every check on both. The
+*number* of checks moves a little between runs -- 29 on the studionet run quoted
+below, 27 on the bradbury one -- because engagement three's bond reclaim only
+happens when the grade leaves that bond releasable. Nothing is skipped silently:
+the withdrawal's label and total change with it, and the bond-reclaim payout is
+proven separately either way, further down.
 
 `claim` is in that list for real now, and was not before. `claim_collateral` is
 only live when a grade leaves the collateral `forfeit`, which on the production
@@ -248,6 +252,30 @@ withdraw: release, refund and bond reclaim all leave the contract
 ```
 
 0.935 GEN is 0.875 release plus 0.05 refund plus 0.01 bond reclaim.
+
+**That third figure moves, and the suite says so rather than pretending
+otherwise.** The claimant's bond is reclaimable only when the grade does not
+slash it, and a grade that slashes a thin attestation is the bond working, not a
+failure. On a run where it is slashed this withdrawal covers release and refund
+alone and prints `0.925 GEN` under a label that says so. Which is why proving
+*bond-reclaim* money leaves cannot rest on this engagement, and does not:
+
+```text
+=== the client wallet's own credit ===
+  owed_to(client wallet) 0.06 GEN
+    ok   the wallet holds its refund plus its reclaimed bond (0.06 GEN)
+
+withdraw_to: the wallet takes out its refund and its reclaimed bond
+  contract  1.86 GEN -> 1.8 GEN  (-0.06 GEN)
+  claimant  0 GEN    -> 0.06 GEN  (+0.06 GEN)
+  owed_to   0.06 GEN -> 0 GEN
+  ok   the contract paid out exactly 0.06 GEN
+  ok   the entitlement was zeroed
+```
+
+That bond was reclaimed in engagement two, by the client, whose account is an
+ordinary wallet. Every run reaches it, and before `withdraw_to` nothing could
+have moved it.
 
 And the fourth engagement is the one that answers *whose* money can move. The
 collateral is forfeited by the grade, claimed by the client -- an ordinary
@@ -287,8 +315,12 @@ the top of this file.
 
 | Network | Oracle (test policy) | Claimant | Strict oracle (100% forfeit) | Wallet's recipient |
 |---|---|---|---|---|
-| Studionet | `0xA7CD429BD89Bc0cce9A823F3DfB798F22C78f991` | `0x188D6b2469aa2d501e4bD6db3AF963AAC3a1d43F` | `0xa4AF97d11adf502943979e98A4C886eB5a91B7c5` | `0x33CFfe7573820Bd3e8000552a85565C391298865` |
-| Testnet Bradbury | `0xC5082d884bA10f78C32C659192E32fa8B813B750` | `0x1e4f4291dfDF19E1A100CB701EEA78552C95dA9B` | `0xe577c0DC0Ec601d613E6910196334e312D3eE4f1` | `0xEd2504Aa4D86657bB0d57fdac26E74564ed47F48` |
+| Studionet | `0x12464272DBA6b5A2eA6eD444dAe2f66217a615E9` | `0xcb0B8E2C6d5173f928Dd5B3025Aa6586934060a0` | `0x39f6dDfEB821EA4413c60B1a534c7b393842e6a0` | `0xa0F2Dc1Ac3563cE5e8B1fd454E5378D88624fC0A` |
+| Testnet Bradbury | `0x6A2096C655A4C2784620e9E2BCcF3713ec48fD34` | `0x7a6B56D8656671C743DBB33C23E3cBB575dF7bb9` | `0x63210cFA12a1d84c42AF8560C081ea97ff272d65` | `0xAc7C9E09B5001C1c6f3a64e083614A637B8Ee008` |
+
+The wallet's own refund and reclaimed bond went to
+`0xc81EAf9a00401D634bC1cefbeC39cBEA4dB9bC95` on studionet and
+`0x45943C977A7CBAde01C6e08112fDa09C79b92a36` on bradbury.
 
 The last two columns are the fourth engagement: the oracle whose forfeit
 threshold is raised so `claim_collateral` is reachable, and the contract the
