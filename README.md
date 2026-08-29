@@ -424,9 +424,29 @@ recipient's rises by, on both counts.
 
 A note for anyone reading an older review of this repository. The answer to
 "identify a target network where contract-to-wallet payouts complete" is that
-there is not one, and there is not meant to be: `emit_transfer` does not credit
-an externally owned account on localnet, studionet or either testnet, in either
-`on` mode, by any of the seven routes tried. Naming a network would have been
+there is not one among the networks this project targets, and there is not meant
+to be. Stated precisely, because the earlier wording claimed more than had been
+measured:
+
+| Network | Chain | `on="accepted"` | `on="finalized"` |
+|---|---|---|---|
+| studionet | 61999 | EOA not credited; **the value left the sender** | EOA not credited; message never dispatched |
+| testnet-bradbury | 4221 | EOA not credited | EOA not credited |
+| testnet-asimov | 4221 | *the same chain as bradbury* | *the same chain as bradbury* |
+| localnet | 61127 | not tested | not tested |
+
+Re-measured on 29 August 2026 with an isolated two-method probe, separately from
+this contract. `testnet-asimov` and `testnet-bradbury` are chain id 4221 under
+two hostnames, not two chains, so there is one testnet here rather than two.
+Localnet is a loopback node and was never exercised; nothing in this repository
+depends on its behaviour, and a claim about it would be a guess.
+
+The studionet `accepted` row is the sharpest version of the hazard. The probe
+holds no `__on_errored_message__`, and its balance fell by exactly the amount
+emitted while the recipient's did not rise -- so the value did not bounce, it
+simply did not arrive. This contract does implement that handler, which is why
+a failed payout here refunds rather than burns; a contract written without one
+loses the money. Naming a network would have been
 the wrong fix. The right one was to stop requiring a wallet to receive at all —
 settlement credits, and value moves contract to contract, with `withdraw_to` as
 the bridge that lets a wallet direct its own credit into one. That is proven
@@ -437,8 +457,10 @@ currently permits.
 It is **not** production infrastructure, for reasons mostly outside this
 repository:
 
-- **GenLayer has no mainnet.** The SDK ships localnet, studionet and two
-  testnets; `connect()` answers `mainnet is not available yet`. Nothing built
+- **GenLayer has no mainnet.** The SDK ships localnet, studionet and two testnet
+  entries -- `testnet-asimov` and `testnet-bradbury`, which are chain id 4221
+  under two hostnames rather than two chains; `connect()` answers
+  `mainnet is not available yet`. Nothing built
   here can hold real value today, which is also why `min_bond` is set to one
   whole token rather than a figure with teeth — GEN has no market to price an
   attack in.
