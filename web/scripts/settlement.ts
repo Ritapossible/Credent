@@ -1183,6 +1183,57 @@ async function main(): Promise<void> {
     )
   }
 
+  // --- the recovery path, exercised rather than described -----------------
+  //
+  // `withdraw` emits a transfer it cannot observe, so it parks the entitlement
+  // in `in_flight`. Something has to settle that, and until this ran, nothing
+  // did on-chain: the mechanism was unit-tested and never called against a live
+  // contract.
+  //
+  // The claimant has just withdrawn successfully, so its entry is the
+  // delivered case: the value really did leave, and resolving must clear the
+  // entry rather than restore it. That direction is the one that matters. An
+  // entry that is only ever restored or left alone accumulates, obligations
+  // grow past the balance, and every later owner's recovery is refused as
+  // unbacked -- which is exactly what a first version of this did.
+  console.log(`\n=== resolving the claimant's in-flight entry ===`)
+  const inFlightBefore = asBig(await view(oracle, 'in_flight_to', [claimant]), 'in_flight_to')
+  console.log(`  in_flight_to(claimant) ${gen(inFlightBefore)}`)
+  check(inFlightBefore > 0n, 'a successful withdrawal left an entry to settle')
+
+  if (inFlightBefore > 0n) {
+    const solvencyBefore = await view(oracle, 'solvency', [])
+    console.log(`  expected balance before ${gen(asBig(field(solvencyBefore, 'expected'), 'expected'))}`)
+
+    await send(client, claimant, 'settle', [])
+
+    const inFlightAfter = await settleTo(
+      async () => asBig(await view(oracle, 'in_flight_to', [claimant]), 'in_flight_to'),
+      (value) => value === 0n,
+    ).catch(() => inFlightBefore)
+    const owedAfter = asBig(await view(oracle, 'owed_to', [claimant]), 'owed_to')
+    const solvencyAfter = await view(oracle, 'solvency', [])
+
+    console.log(`  in_flight_to(claimant) ${gen(inFlightBefore)} -> ${gen(inFlightAfter)}`)
+    console.log(`  expected balance after  ${gen(asBig(field(solvencyAfter, 'expected'), 'expected'))}`)
+
+    check(inFlightAfter === 0n, 'the settled entry was cleared')
+    check(
+      owedAfter === 0n,
+      `a delivered payout was not restored as a new entitlement (owed ${gen(owedAfter)})`,
+    )
+    // The *delta*, not the total. Another recipient on this oracle has its own
+    // unresolved entry -- correctly, since nothing has settled it yet -- so
+    // asserting the global total is zero asserts something this step does not
+    // do, and failed on a run where the contract behaved perfectly.
+    const inFlightTotalBefore = asBig(field(solvencyBefore, 'total_in_flight'), 'total_in_flight')
+    const inFlightTotalAfter = asBig(field(solvencyAfter, 'total_in_flight'), 'total_in_flight')
+    check(
+      inFlightTotalBefore - inFlightTotalAfter === inFlightBefore,
+      `obligations fell by exactly the settled entry (${gen(inFlightTotalBefore - inFlightTotalAfter)})`,
+    )
+  }
+
   console.log(`\ncontract holds ${gen(await balanceOf(oracle))} at the end`)
   console.log(`oracle ${oracle}`)
   console.log(`claimant ${claimant}`)

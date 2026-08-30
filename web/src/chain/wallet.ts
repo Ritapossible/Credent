@@ -647,14 +647,16 @@ export function withdraw(account: string): Promise<WriteResult> {
 }
 
 /**
- * Take back an entitlement whose payout never left the contract.
+ * Settle a withdrawal whose outcome the contract could not observe.
  *
- * Refused when the value has already gone, because restoring it then would pay
- * one owner out of the balance backing everybody else's entitlements. Read
- * `solvency().backed` first to know which case this is.
+ * Decides both ways and clears the entry either way: the entitlement is
+ * restored if the value never left, and written off if it did. Writing off is
+ * not a loss this call causes -- the value has already gone -- it is what stops
+ * a settled withdrawal sitting on the books and making every later owner's
+ * recovery look unbacked.
  */
-export function reclaimInFlight(account: string): Promise<WriteResult> {
-  return submit(account, 'reclaim_in_flight', [])
+export function resolveInFlight(account: string): Promise<WriteResult> {
+  return submit(account, 'resolve_in_flight', [])
 }
 
 export function reclaimBond(account: string, attestationId: number): Promise<WriteResult> {

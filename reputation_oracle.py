@@ -1434,13 +1434,28 @@ class ReputationOracle(gl.Contract):
     owed: TreeMap[str, u256]
     # Value that `withdraw` has emitted but whose arrival this contract cannot
     # observe. Held separately from `owed` so a payout that never lands is
-    # recoverable instead of simply gone. See `withdraw` and `reclaim_in_flight`.
+    # recoverable instead of simply gone. See `withdraw` and `resolve_in_flight`.
     in_flight: TreeMap[str, u256]
-    # Running totals of both maps, so solvency can be checked in constant time.
-    # Without them `reclaim_in_flight` would have to walk every entitlement to
-    # decide whether restoring one is backed by real balance.
+    # Running totals of both maps, for the views.
     total_owed: u256
     total_in_flight: u256
+    # The exact ledger `resolve_in_flight` decides against.
+    #
+    # An earlier version compared the balance to `total_owed + total_in_flight`
+    # and was wrong: the balance also holds collateral and locked bonds, which
+    # are not entitlements, so "obligations exceed balance" says nothing about
+    # whether a particular transfer left. Measured on a live run -- balance
+    # 1.800, obligations 2.795 -- it refused a resolution it had no business
+    # judging either way.
+    #
+    # These two are exact. The balance changes only by value arriving through a
+    # payable method and by value this contract emits, so
+    # `total_in - total_out` is what the balance must be if every emitted
+    # transfer left. Comparing the real balance to that answers the only
+    # question `resolve_in_flight` asks, and answers it without knowing anything
+    # about collateral or bonds.
+    total_in: u256
+    total_out: u256
 
     # Indexes.
     subject_atts: TreeMap[Address, DynArray[u256]]
@@ -1512,6 +1527,8 @@ class ReputationOracle(gl.Contract):
         # `typing.Annotated[int, ...]`, so they annotate and do not call.
         self.total_owed = 0
         self.total_in_flight = 0
+        self.total_in = 0
+        self.total_out = 0
 
     def _policy(self) -> Policy:
         """Rebuild the in-memory policy from storage."""
@@ -1614,6 +1631,10 @@ class ReputationOracle(gl.Contract):
         Returns the collateral actually held, so a caller can show what they
         posted rather than what they sent.
         """
+        # Every wei that arrives is recorded, so `resolve_in_flight` can tell
+        # a transfer that left from one that never did. See `total_in`.
+        self.total_in = int(self.total_in) + int(gl.message.value)
+
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
         if state == _ENG_ABSENT:
             _fail(REASON_NO_ENGAGEMENT)
@@ -1685,6 +1706,10 @@ class ReputationOracle(gl.Contract):
 
         Returns the attestation id.
         """
+        # Every wei that arrives is recorded, so `resolve_in_flight` can tell
+        # a transfer that left from one that never did. See `total_in`.
+        self.total_in = int(self.total_in) + int(gl.message.value)
+
         policy = self._policy()
 
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
@@ -1988,7 +2013,7 @@ class ReputationOracle(gl.Contract):
     def _contract_balance(self) -> int:
         """What this contract actually holds, as the chain sees it.
 
-        The number `reclaim_in_flight` is decided against. Read rather than
+        The number `resolve_in_flight` is decided against. Read rather than
         tracked, because a tracked figure is only as good as every path that
         touches value, and this one is the ground truth those paths are checked
         against.
@@ -2045,28 +2070,39 @@ class ReputationOracle(gl.Contract):
         return {"from": key, "to": _owed_key(to), "amount": amount}
 
     @gl.public.write
-    def reclaim_in_flight(self) -> dict:
-        """Take back an entitlement whose payout never left this contract.
+    def resolve_in_flight(self) -> dict:
+        """Settle a withdrawal whose outcome this contract could not observe.
 
-        `withdraw` cannot observe whether its emitted transfer arrived, so it
-        does not pretend to: it moves the entitlement to `in_flight` and emits.
-        This is the other half. It restores `in_flight` to `owed`, but only when
-        the money is demonstrably still here.
+        `withdraw` emits a transfer and cannot see whether it arrived, so it
+        parks the entitlement here rather than discarding it. This decides which
+        happened, exactly, and settles the entry either way.
 
-        The test is solvency, and it is exact rather than heuristic. Obligations
-        are `total_owed + total_in_flight` and do not change when `withdraw`
-        moves an amount between them. So:
+        The test is the ledger, not the balance against obligations. That
+        distinction is the whole correctness of this method, and the first
+        version got it wrong: it compared the balance to
+        `total_owed + total_in_flight`, which ignores that the same balance also
+        holds work collateral and locked bonds. On a live run that read balance
+        1.800 against obligations 2.795 and refused a resolution it had no
+        grounds to judge -- the shortfall was collateral, nothing to do with the
+        transfer in question.
 
-        * the transfer was never dispatched -- balance untouched, obligations
-          still fully backed, and the entitlement is restored;
-        * the transfer left, whether it arrived or was destroyed -- balance fell
-          by exactly that amount, obligations are no longer backed, and this
-          refuses with `value_already_left_the_contract`.
+        `total_in - total_out` is what this contract's balance must be if every
+        transfer it emitted actually left. `withdraw` counts the amount as out
+        before emitting, so:
 
-        Refusing the second case is the point, not a limitation. Value that has
-        left cannot be conjured back by rewriting a ledger, and restoring the
-        entitlement anyway would hand its owner a claim on money belonging to
-        everyone else the contract owes.
+        * `balance == expected` -- the transfer left. Delivered, or destroyed
+          because the recipient could not receive; either way there is nothing
+          here to give back, and the entry is **written off**.
+        * `balance == expected + amount` -- the transfer never left. The
+          entitlement is **restored** and the ledger corrected.
+
+        Both paths clear the entry, and that matters as much as the decision. An
+        entry that is only ever restored or left alone accumulates: a settled
+        withdrawal would sit on the books for good, and `in_flight_to` would
+        report a phantom balance to a recipient that had already been paid.
+
+        Writing off is the honest outcome of the first case, not a loss this
+        method causes. The value went when the transfer did.
         """
         key = _owed_key(gl.message.sender_address)
         current = self.in_flight.get(key)
@@ -2074,16 +2110,22 @@ class ReputationOracle(gl.Contract):
         if amount <= 0:
             _fail(REASON_NOTHING_IN_FLIGHT)
 
-        obligations = int(self.total_owed) + int(self.total_in_flight)
-        if self._contract_balance() < obligations:
-            _fail(REASON_VALUE_ALREADY_LEFT)
+        balance = self._contract_balance()
+        expected = int(self.total_in) - int(self.total_out)
 
         self.in_flight[key] = 0
         self.total_in_flight = int(self.total_in_flight) - amount
-        owed_now = self.owed.get(key)
-        self.owed[key] = (0 if owed_now is None else int(owed_now)) + amount
-        self.total_owed = int(self.total_owed) + amount
-        return {"owner": key, "restored": amount}
+
+        if balance >= expected + amount:
+            # The value is still here. Give the entitlement back, and undo the
+            # `total_out` this withdrawal added -- it never went out.
+            self.total_out = int(self.total_out) - amount
+            owed_now = self.owed.get(key)
+            self.owed[key] = (0 if owed_now is None else int(owed_now)) + amount
+            self.total_owed = int(self.total_owed) + amount
+            return {"owner": key, "outcome": "restored", "amount": amount}
+
+        return {"owner": key, "outcome": "delivered_or_lost", "amount": amount}
 
     @gl.public.write
     def withdraw(self, recipient_is_a_contract: bool = False) -> dict:
@@ -2126,7 +2168,7 @@ class ReputationOracle(gl.Contract):
         # entitlement readable across the transfer would let a caller withdraw
         # twice -- but discarding it outright makes an undeliverable payout
         # unrecoverable, which is the defect this split fixes. The obligation
-        # survives in `in_flight`, and `reclaim_in_flight` returns it if the
+        # survives in `in_flight`, and `resolve_in_flight` returns it if the
         # value never actually left. Totals move together, so the contract's
         # obligations are unchanged by this step.
         self.owed[key] = 0
@@ -2148,6 +2190,11 @@ class ReputationOracle(gl.Contract):
         # validators to disagree about, so an appeal re-runs it and reaches the
         # same answer. The appeal hazard belongs to payouts attached to a
         # *grade*, and settlement deliberately does not pay: it credits.
+        # Counted as out *before* emitting, because that is what the balance
+        # will look like if the transfer lands. `resolve_in_flight` compares the
+        # real balance to this figure; a transfer that never left shows up as a
+        # balance one `amount` higher than the ledger expects.
+        self.total_out = int(self.total_out) + amount
         gl.get_contract_at(gl.message.sender_address).emit_transfer(
             value=amount, on="accepted"
         )
@@ -2160,7 +2207,7 @@ class ReputationOracle(gl.Contract):
         """An entitlement `withdraw` emitted but whose arrival is unobservable.
 
         Non-zero here means a payout was attempted and this contract cannot tell
-        whether it landed. `reclaim_in_flight` resolves it: it restores the
+        whether it landed. `resolve_in_flight` resolves it: it restores the
         entitlement if the money is still here, and refuses if it is not.
         """
         if not isinstance(recipient, str):
@@ -2172,19 +2219,23 @@ class ReputationOracle(gl.Contract):
     def solvency(self) -> dict:
         """What this contract holds against what it owes.
 
-        `backed` is the check `reclaim_in_flight` makes, exposed so it can be
+        `backed` is the check `resolve_in_flight` makes, exposed so it can be
         read before calling rather than discovered by a refusal. It is false
         exactly when value has left against an entitlement that was never
         confirmed delivered.
         """
-        obligations = int(self.total_owed) + int(self.total_in_flight)
         held = self._contract_balance()
+        expected = int(self.total_in) - int(self.total_out)
         return {
             "balance": held,
             "total_owed": int(self.total_owed),
             "total_in_flight": int(self.total_in_flight),
-            "obligations": obligations,
-            "backed": held >= obligations,
+            "obligations": int(self.total_owed) + int(self.total_in_flight),
+            # What the balance must be if every emitted transfer left. The
+            # figure `resolve_in_flight` decides against; a balance above it
+            # means a transfer did not leave and its entitlement is restorable.
+            "expected": expected,
+            "unsent": held - expected if held > expected else 0,
         }
 
     @gl.public.view

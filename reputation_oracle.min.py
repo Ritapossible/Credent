@@ -598,6 +598,8 @@ class ReputationOracle(gl.Contract):
     in_flight: TreeMap[str, u256]
     total_owed: u256
     total_in_flight: u256
+    total_in: u256
+    total_out: u256
     subject_atts: TreeMap[Address, DynArray[u256]]
     pair_count: TreeMap[str, u256]
     engagement_attested: TreeMap[str, bool]
@@ -654,6 +656,8 @@ class ReputationOracle(gl.Contract):
         self.p_collateral_forfeit_bp = collateral_forfeit_bp
         self.total_owed = 0
         self.total_in_flight = 0
+        self.total_in = 0
+        self.total_out = 0
     def _policy(self) -> Policy:
         return Policy(
             half_life_seconds=int(self.p_half_life_seconds),
@@ -695,6 +699,7 @@ class ReputationOracle(gl.Contract):
         self.eng_state[engagement_id] = _ENG_PROPOSED
     @gl.public.write.payable
     def accept_engagement(self, engagement_id: str) -> u256:
+        self.total_in = int(self.total_in) + int(gl.message.value)
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
         if state == _ENG_ABSENT:
             _fail(REASON_NO_ENGAGEMENT)
@@ -735,6 +740,7 @@ class ReputationOracle(gl.Contract):
         self.eng_closed_at[engagement_id] = _now_seconds()
     @gl.public.write.payable
     def attest(self, engagement_id: str, claim: str, evidence: str) -> u256:
+        self.total_in = int(self.total_in) + int(gl.message.value)
         policy = self._policy()
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
         if state == _ENG_ABSENT:
@@ -925,21 +931,23 @@ class ReputationOracle(gl.Contract):
         self.owed[_owed_key(to)] = total
         return {"from": key, "to": _owed_key(to), "amount": amount}
     @gl.public.write
-    def reclaim_in_flight(self) -> dict:
+    def resolve_in_flight(self) -> dict:
         key = _owed_key(gl.message.sender_address)
         current = self.in_flight.get(key)
         amount = 0 if current is None else int(current)
         if amount <= 0:
             _fail(REASON_NOTHING_IN_FLIGHT)
-        obligations = int(self.total_owed) + int(self.total_in_flight)
-        if self._contract_balance() < obligations:
-            _fail(REASON_VALUE_ALREADY_LEFT)
+        balance = self._contract_balance()
+        expected = int(self.total_in) - int(self.total_out)
         self.in_flight[key] = 0
         self.total_in_flight = int(self.total_in_flight) - amount
-        owed_now = self.owed.get(key)
-        self.owed[key] = (0 if owed_now is None else int(owed_now)) + amount
-        self.total_owed = int(self.total_owed) + amount
-        return {"owner": key, "restored": amount}
+        if balance >= expected + amount:
+            self.total_out = int(self.total_out) - amount
+            owed_now = self.owed.get(key)
+            self.owed[key] = (0 if owed_now is None else int(owed_now)) + amount
+            self.total_owed = int(self.total_owed) + amount
+            return {"owner": key, "outcome": "restored", "amount": amount}
+        return {"owner": key, "outcome": "delivered_or_lost", "amount": amount}
     @gl.public.write
     def withdraw(self, recipient_is_a_contract: bool = False) -> dict:
         if not isinstance(recipient_is_a_contract, bool):
@@ -956,6 +964,7 @@ class ReputationOracle(gl.Contract):
         pending = self.in_flight.get(key)
         self.in_flight[key] = (0 if pending is None else int(pending)) + amount
         self.total_in_flight = int(self.total_in_flight) + amount
+        self.total_out = int(self.total_out) + amount
         gl.get_contract_at(gl.message.sender_address).emit_transfer(
             value=amount, on="accepted"
         )
@@ -968,14 +977,15 @@ class ReputationOracle(gl.Contract):
         return 0 if got is None else int(got)
     @gl.public.view
     def solvency(self) -> dict:
-        obligations = int(self.total_owed) + int(self.total_in_flight)
         held = self._contract_balance()
+        expected = int(self.total_in) - int(self.total_out)
         return {
             "balance": held,
             "total_owed": int(self.total_owed),
             "total_in_flight": int(self.total_in_flight),
-            "obligations": obligations,
-            "backed": held >= obligations,
+            "obligations": int(self.total_owed) + int(self.total_in_flight),
+            "expected": expected,
+            "unsent": held - expected if held > expected else 0,
         }
     @gl.public.view
     def owed_to(self, recipient: str) -> int:

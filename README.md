@@ -19,9 +19,9 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on **GenLayer Studio** at `0xBAE6e4F58e5aD4677ae0F4930E1DA169602fB76e`,
+Deployed on **GenLayer Studio** at `0x395A0E1b81778b69Dd128183412C1738BddD1E4F`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
-and on **Testnet Bradbury** at `0x621aAdC6A53831697249fC1e7d7d6E74EDB74E87` — the
+and on **Testnet Bradbury** at `0xeeAa76953b8E6e83CD83633A0E06f57BDC653155` — the
 minified artifact there, since bradbury refuses the full-size source on
 transaction pubdata rather than on gas.
 
@@ -223,8 +223,8 @@ settle them without ever showing a visitor the money. `/payouts` closes that: it
 reads `owed_to`, `in_flight_to` and `solvency` for the connected account, and
 offers the two ways out with the difference stated rather than implied —
 `assign_to` as the default, `withdraw` marked contracts-only, and
-`reclaim_in_flight` surfaced only when there is something unconfirmed to
-recover. When the value has already left, the page says the reclaim will be
+`resolve_in_flight` surfaced only when there is something unconfirmed to
+settle. When the value has already left, the page says the reclaim will be
 refused and why, instead of letting a visitor spend gas to find out.
 
 **What that means for an integrator.** A party that expects to be paid has to
@@ -237,20 +237,45 @@ property of `emit_transfer` rather than of this contract.
 **`withdraw()` no longer discards what it cannot confirm.** It emits a transfer
 and cannot observe the result, so clearing `owed` outright made an undeliverable
 payout unrecoverable. The entitlement now moves to `in_flight`, and
-`reclaim_in_flight()` restores it — but only while the contract still holds the
-money, checked against its own balance rather than assumed:
+`resolve_in_flight()` settles it — exactly, against a ledger rather than a guess.
 
-* the transfer was never dispatched — the balance is untouched, obligations are
-  still fully backed, and the entitlement comes back;
-* the transfer left, whether it arrived or was destroyed — the balance fell by
-  exactly that amount, and the call is refused with
-  `value_already_left_the_contract`.
+That distinction is the whole correctness of the method, and the first version
+was wrong. It compared the balance to `total_owed + total_in_flight` and read a
+shortfall as proof the value had left. But the same balance also holds work
+collateral and locked bonds, which are not entitlements. On a live run it read
+balance 1.800 against obligations 2.795 and refused a resolution it had no
+grounds to judge — the shortfall was collateral, nothing to do with the transfer
+in question.
 
-Refusing the second case is the design, not a shortfall. Value that has left
-cannot be conjured back by rewriting a ledger, and restoring the entitlement
-anyway would hand its owner a claim on the balance backing everybody else. The
-`solvency()` view reports that comparison so a caller can see which case it is
-in before spending gas to find out.
+`total_in - total_out` is what the balance must be if every transfer this
+contract emitted actually left, and `withdraw` counts an amount as out before
+emitting it. The comparison is then exact, and needs to know nothing about
+collateral or bonds:
+
+* `balance == expected + amount` — the transfer never left, and the entitlement
+  is **restored**;
+* `balance == expected` — the transfer left, delivered or destroyed. There is
+  nothing here to give back, and the entry is **written off**.
+
+Both paths clear the entry, and that matters as much as the decision. An earlier
+version restored or refused without clearing, so a *successful* withdrawal left
+its entry behind for good: `in_flight_to` reported a phantom balance to a
+recipient that had already been paid, obligations only ever grew, and every later
+owner's recovery was refused as unbacked. Measured before the fix — a claimant
+that had been paid still showed 0.925 GEN in flight, and `backed` was false
+permanently.
+
+Proven on-chain rather than argued. The suite withdraws successfully, then
+settles the entry and requires the delivered case to be written off and **not**
+restored:
+
+```text
+=== resolving the claimant's in-flight entry ===
+  in_flight_to(claimant) 0.925 GEN -> 0 GEN
+  ok   the settled entry was cleared
+  ok   a delivered payout was not restored as a new entitlement (owed 0 GEN)
+  ok   obligations fell by exactly the settled entry (0.925 GEN)
+```
 `web/scripts/claimant.py` is the smallest one that works: it accepts an
 engagement as the provider (forwarding its own collateral, so the oracle sees
 the contract as the provider), implements `__receive__`, and calls `withdraw`.
@@ -269,8 +294,8 @@ runs release, claim, both refund paths and bond reclaim, asserting each
 entitlement to the wei, and then withdraws twice: once as a contract collecting
 its own credit, and once as a *wallet* moving its credit to a contract it names.
 It passes on **studionet and on testnet-bradbury**, every check on both. The
-*number* of checks moves a little between runs -- 29 on the studionet run quoted
-below, 31 on the bradbury one -- because engagement three's bond reclaim only
+*number* of checks moves a little between runs -- 33 on both of the runs quoted
+below -- because engagement three's bond reclaim only
 happens when the grade leaves that bond releasable. Nothing is skipped silently:
 the withdrawal's label and total change with it, and the bond-reclaim payout is
 proven separately either way, further down.
@@ -369,12 +394,11 @@ the top of this file.
 
 | Network | Oracle (test policy) | Claimant | Strict oracle (100% forfeit) | Wallet's recipient |
 |---|---|---|---|---|
-| Studionet | `0x9A666f3CE597E74F26609fCADc4A8255B4F4B89B` | `0x675C21011c3DF6489F574d6C23668c908C384c28` | `0xEEc554e2CAAD4d84f287dB4085FC6BA5612D26e4` | `0x880a52c63DC86Af30005ce892c73c97481a9226f` |
-| Testnet Bradbury | `0xbf736B4B539483D69DFbEEF14696146C4c01FDEE` | `0xc90705E6ba774bAee58C46961DE0b6c8Aa982cCA` | `0x5aFE7771AC30f2B55aFe84AfB5D3592EBB1fF280` | `0x4FD6589D234ea793A7B7b247C586B0C8b8c6a2Cf` |
+| Studionet | `0x53B4B16df87312085Ee85A978F555F04EaC8B8b9` | `0xdeA7e4Be1977B0139018b3602396d3bF3E764FAD` | — | — |
+| Testnet Bradbury | `0x38b464B3A1De193663748a94E025D310C946878C` | `0xe5c809F6E7F9ad2B62589CbF26281235Ce5B743c` | — | — |
 
-The wallet's own refund and reclaimed bond went to
-`0x5abD46d9733462110829008c7DDc2EE2a8302E71` on studionet and
-`0x6c956E0701A4f6EC8077Fe470A043f866A4cc6aB` on bradbury.
+The strict-policy oracles and the recipients the wallet assigned to are named
+in the run logs; the two above are the ones the transcripts quote.
 
 The last two columns are the fourth engagement: the oracle whose forfeit
 threshold is raised so `claim_collateral` is reachable, and the contract the

@@ -60,11 +60,11 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         # emits value, and it is for a contract collecting its own credit.
         # `assign_to` is how anyone else moves an entitlement: it rewrites two
         # storage slots and pushes nothing, so it cannot destroy money the way a
-        # transfer to an unverifiable address can. `reclaim_in_flight` takes back
+        # transfer to an unverifiable address can. `resolve_in_flight` takes back
         # an entitlement whose payout never left, and refuses when the value did.
         "withdraw",
         "assign_to",
-        "reclaim_in_flight",
+        "resolve_in_flight",
         "owed_to",
         "in_flight_to",
         "solvency",
@@ -392,7 +392,7 @@ def test_entitlement_keys_go_through_the_lowercasing_helper(artifact_source: str
     for fn in ast.walk(tree):
         if not isinstance(fn, ast.FunctionDef) or not touches_owed(fn):
             continue
-        body = ast.unparse(fn)
+        body = _code_of(fn)
         # `owed_to` takes a string from a caller and lowercases it directly;
         # it has no Address to run through the helper.
         if fn.name == "owed_to":
@@ -426,6 +426,26 @@ def test_owed_key_helper_lowercases(artifact_source: str) -> None:
     assert helper is not None, "_owed_key is missing from the artifact"
     body = ast.unparse(helper)
     assert ".lower()" in body, f"_owed_key does not lowercase: {body}"
+
+
+def _code_of(fn: ast.FunctionDef) -> str:
+    """The function's code with its docstring removed.
+
+    Structural checks that search `ast.unparse(fn)` match the prose as readily
+    as the code, and a docstring that explains a rule mentions every term the
+    rule is about. Two guards in this file passed against a deliberately broken
+    contract for exactly that reason. Stripping the docstring first is what
+    makes them tests rather than spell-checks.
+    """
+    body = fn.body
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    return "\n".join(ast.unparse(node) for node in body)
 
 
 def test_every_credited_party_can_move_its_credit(artifact_source: str) -> None:
@@ -471,7 +491,7 @@ def test_every_credited_party_can_move_its_credit(artifact_source: str) -> None:
         f"assign_to must be a public write, got {decorators}"
     )
 
-    body = ast.unparse(fn)
+    body = _code_of(fn)
     assert "gl.message.sender_address" in body, (
         "assign_to must debit the caller, or it would let one account move "
         "another's entitlement"
@@ -495,7 +515,7 @@ def test_a_failed_payout_leaves_the_entitlement_recoverable(artifact_source: str
 
     It emits a transfer and cannot observe the result, so clearing `owed`
     outright made an undeliverable payout unrecoverable. The entitlement now
-    moves to `in_flight`, and `reclaim_in_flight` restores it -- but only while
+    moves to `in_flight`, and `resolve_in_flight` restores it -- but only while
     the contract still holds the money, checked against its own balance rather
     than assumed.
 
@@ -511,21 +531,42 @@ def test_a_failed_payout_leaves_the_entitlement_recoverable(artifact_source: str
         if isinstance(node, ast.FunctionDef)
     }
 
-    for name in ("withdraw", "reclaim_in_flight"):
+    for name in ("withdraw", "resolve_in_flight"):
         assert name in fns, f"{name} is missing"
 
-    withdraw = ast.unparse(fns["withdraw"])
+    withdraw = _code_of(fns["withdraw"])
     assert "self.in_flight[key]" in withdraw, (
         "withdraw discards the entitlement instead of moving it to in_flight, "
         "so a payout that never lands cannot be recovered"
     )
 
-    reclaim = ast.unparse(fns["reclaim_in_flight"])
-    assert "_contract_balance()" in reclaim, (
-        "reclaim_in_flight does not consult the contract's balance, so it would "
+    resolve = _code_of(fns["resolve_in_flight"])
+    assert "_contract_balance()" in resolve, (
+        "resolve_in_flight does not consult the contract's balance, so it would "
         "restore entitlements whose value has already left"
     )
-    assert "total_owed" in reclaim and "total_in_flight" in reclaim, (
-        "reclaim_in_flight must weigh the restoration against every obligation, "
-        "not just its own"
+    # Against the ledger, never against obligations. The balance also holds work
+    # collateral and locked bonds, so "obligations exceed balance" says nothing
+    # about whether a particular transfer left -- measured on a live run, that
+    # comparison refused a resolution it had no grounds to judge.
+    assert "total_in" in resolve and "total_out" in resolve, (
+        "resolve_in_flight does not decide against total_in - total_out; a "
+        "comparison against obligations is not sound, because the balance also "
+        "holds collateral and bonds that are not entitlements"
+    )
+    # The entry must be cleared on *both* paths. Restoring or refusing without
+    # clearing was the first version of this, and it broke the mechanism it
+    # exists for: a successful withdrawal left its entry behind for good, so
+    # obligations only ever grew and every later owner's recovery was refused as
+    # unbacked. Measured on studionet before it was fixed -- a claimant that had
+    # been paid still reported 0.925 GEN in flight and solvency backed=false.
+    assert "self.in_flight[key] = 0" in resolve, (
+        "resolve_in_flight does not clear the entry, so a settled withdrawal "
+        "stays on the books and poisons every later recovery"
+    )
+    # Judged against the other obligations, not the whole. A global comparison
+    # lets one owner's unresolved entry refuse everybody else's recovery.
+    assert "expected + amount" in resolve, (
+        "resolve_in_flight must restore only when the balance exceeds the ledger "
+        "by exactly the amount that never left"
     )

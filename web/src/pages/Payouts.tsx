@@ -35,7 +35,7 @@ import { Link } from 'react-router-dom'
 import { CONTRACT_ADDRESS, EXPLORER_URL, IS_CONFIGURED, NETWORK } from '../chain/config'
 import { inFlightTo, owedTo, solvency, type Solvency } from '../chain/oracle'
 import { useWallet } from '../chain/useWallet'
-import { assignTo, reclaimInFlight, withdraw, type WriteResult } from '../chain/wallet'
+import { assignTo, resolveInFlight, withdraw, type WriteResult } from '../chain/wallet'
 import { useWalletPicker } from '../components/WalletModal'
 import { formatBond, shortAddress } from '../core/format'
 import { normalizeAddress } from '../core/digest'
@@ -170,8 +170,8 @@ export default function Payouts() {
                     A withdrawal of {formatBond(balances.inFlight)} was emitted and this contract
                     cannot see whether it arrived.{' '}
                     {balances.solvency.backed
-                      ? 'The money is still here, so reclaiming it will restore the entitlement.'
-                      : 'The value has already left the contract, so reclaiming will be refused — restoring it would pay you out of the balance backing everyone else.'}
+                      ? 'The money is still here, so resolving will restore the entitlement.'
+                      : 'The value has already left the contract, so resolving will clear the entry rather than restore it.'}
                   </p>
                 )}
                 <button type="button" className="btn btn--ghost" onClick={() => void refresh()}>
@@ -243,9 +243,9 @@ export default function Payouts() {
                 type="button"
                 className="btn"
                 disabled={busy !== null}
-                onClick={() => void run('reclaim', () => reclaimInFlight(address))}
+                onClick={() => void run('resolve', () => resolveInFlight(address))}
               >
-                {busy === 'reclaim' ? 'Reclaiming…' : 'Reclaim'}
+                {busy === 'resolve' ? 'Resolving…' : 'Resolve'}
               </button>
             </section>
           )}

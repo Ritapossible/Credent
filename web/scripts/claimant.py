@@ -116,6 +116,19 @@ class Claimant(gl.Contract):
         )
 
     @gl.public.write
+    def settle(self) -> None:
+        """Ask the oracle to settle this contract's unconfirmed withdrawal.
+
+        `withdraw` cannot see whether its transfer arrived, so it parks the
+        entitlement. This closes the loop: the oracle compares its own balance
+        against its obligations and either restores the entitlement or writes
+        the entry off. A recipient that never calls this leaves a settled
+        withdrawal on the oracle's books, which is not neutral -- it inflates
+        obligations and makes the next owner's recovery look unbacked.
+        """
+        gl.get_contract_at(self.oracle).emit(on="accepted").resolve_in_flight()
+
+    @gl.public.write
     def claim(self) -> None:
         """Call `withdraw` on the oracle, asserting that this caller is a contract.
 

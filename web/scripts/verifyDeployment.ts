@@ -29,13 +29,13 @@ const DEPLOYMENTS: Target[] = [
   {
     net: 'studionet',
     rpc: 'https://studio.genlayer.com/api',
-    address: '0xBAE6e4F58e5aD4677ae0F4930E1DA169602fB76e',
+    address: '0x395A0E1b81778b69Dd128183412C1738BddD1E4F',
     file: 'reputation_oracle.py',
   },
   {
     net: 'testnet-bradbury',
     rpc: 'https://rpc-bradbury.genlayer.com',
-    address: '0x621aAdC6A53831697249fC1e7d7d6E74EDB74E87',
+    address: '0xeeAa76953b8E6e83CD83633A0E06f57BDC653155',
     file: 'reputation_oracle.min.py',
   },
 ]
