@@ -73,6 +73,13 @@ export function formatBond(value: bigint): string {
   const text = formatUnits(value)
   const [whole, fraction = ''] = text.split('.')
   const trimmed = fraction.slice(0, 4).replace(/0+$/, '')
+  // A non-zero amount must never render as `0`. Truncating to four places is
+  // right for the figures this site usually shows, and wrong in the one case
+  // that matters on a payout screen: a dust entitlement would read as nothing
+  // owed while the contract still owed it.
+  if (!trimmed && whole === '0' && value !== 0n) {
+    return `<0.0001 ${NATIVE_SYMBOL}`
+  }
   return `${trimmed ? `${whole}.${trimmed}` : whole} ${NATIVE_SYMBOL}`
 }
 

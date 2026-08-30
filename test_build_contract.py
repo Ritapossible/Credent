@@ -64,10 +64,11 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         # an entitlement whose payout never left, and refuses when the value did.
         "withdraw",
         "assign_to",
-        "resolve_in_flight",
+        "prove_recipient",
+        "confirm_recipient",
+        "is_proven",
         "owed_to",
-        "in_flight_to",
-        "solvency",
+        "liabilities",
     }
 )
 
@@ -510,19 +511,27 @@ def test_every_credited_party_can_move_its_credit(artifact_source: str) -> None:
     )
 
 
-def test_a_failed_payout_leaves_the_entitlement_recoverable(artifact_source: str) -> None:
-    """`withdraw` must not discard an entitlement it cannot confirm delivered.
+def test_value_is_never_emitted_at_an_unproven_recipient(artifact_source: str) -> None:
+    """`withdraw` must decline rather than guess, and there is nothing to guess.
 
-    It emits a transfer and cannot observe the result, so clearing `owed`
-    outright made an undeliverable payout unrecoverable. The entitlement now
-    moves to `in_flight`, and `resolve_in_flight` restores it -- but only while
-    the contract still holds the money, checked against its own balance rather
-    than assumed.
+    `emit_transfer` does not credit an externally owned account and does not
+    refund what it fails to deliver. Two earlier designs tried to survive that
+    after the fact and both were wrong: one compared the balance to obligations,
+    ignoring that the same balance holds collateral and bonds; the other used a
+    `total_in - total_out` ledger that a single untracked transfer into this
+    contract silently broke, crediting a delivered payout a second time.
 
-    Restoring unconditionally would be worse than the original bug: it would let
-    one owner reclaim a credit whose value has gone, paying them out of balance
-    that backs everybody else's entitlements. So the solvency comparison is part
-    of the property, not an implementation detail.
+    Delivery is not observable from inside the contract, so this design does not
+    observe it. It refuses to emit at an address that has not run code to prove
+    it can receive. The property asserted here:
+
+    1. `withdraw` takes no caller-supplied claim about the recipient -- the
+       previous `recipient_is_a_contract` was an assertion the contract could
+       not check and that cost the entitlement when it was wrong;
+    2. it consults `self.proven` before emitting;
+    3. it clears the entitlement before the transfer, so a proven recipient
+       cannot withdraw twice;
+    4. the probe carries **no value**, so a failed proof costs nothing.
     """
     tree = ast.parse(artifact_source)
     fns = {
@@ -531,42 +540,57 @@ def test_a_failed_payout_leaves_the_entitlement_recoverable(artifact_source: str
         if isinstance(node, ast.FunctionDef)
     }
 
-    for name in ("withdraw", "resolve_in_flight"):
+    for name in ("withdraw", "prove_recipient", "confirm_recipient"):
         assert name in fns, f"{name} is missing"
 
-    withdraw = _code_of(fns["withdraw"])
-    assert "self.in_flight[key]" in withdraw, (
-        "withdraw discards the entitlement instead of moving it to in_flight, "
-        "so a payout that never lands cannot be recovered"
+    withdraw = fns["withdraw"]
+    args = [a.arg for a in withdraw.args.args if a.arg != "self"]
+    assert args == [], (
+        f"withdraw still takes {args}; a caller's claim about its own address is "
+        "exactly what this design removes"
     )
 
-    resolve = _code_of(fns["resolve_in_flight"])
-    assert "_contract_balance()" in resolve, (
-        "resolve_in_flight does not consult the contract's balance, so it would "
-        "restore entitlements whose value has already left"
+    code = _code_of(withdraw)
+    assert "self.proven" in code, (
+        "withdraw does not check that the recipient proved it can receive"
     )
-    # Against the ledger, never against obligations. The balance also holds work
-    # collateral and locked bonds, so "obligations exceed balance" says nothing
-    # about whether a particular transfer left -- measured on a live run, that
-    # comparison refused a resolution it had no grounds to judge.
-    assert "total_in" in resolve and "total_out" in resolve, (
-        "resolve_in_flight does not decide against total_in - total_out; a "
-        "comparison against obligations is not sound, because the balance also "
-        "holds collateral and bonds that are not entitlements"
-    )
-    # The entry must be cleared on *both* paths. Restoring or refusing without
-    # clearing was the first version of this, and it broke the mechanism it
-    # exists for: a successful withdrawal left its entry behind for good, so
-    # obligations only ever grew and every later owner's recovery was refused as
-    # unbacked. Measured on studionet before it was fixed -- a claimant that had
-    # been paid still reported 0.925 GEN in flight and solvency backed=false.
-    assert "self.in_flight[key] = 0" in resolve, (
-        "resolve_in_flight does not clear the entry, so a settled withdrawal "
-        "stays on the books and poisons every later recovery"
-    )
-    # Judged against the other obligations, not the whole. A global comparison
-    # lets one owner's unresolved entry refuse everybody else's recovery.
-    assert "expected + amount" in resolve, (
-        "resolve_in_flight must restore only when the balance exceeds the ledger "
-        "by exactly the amount that never left"
+    zeroed = code.index("self.owed[key] = 0")
+    emitted = code.index("emit_transfer")
+    assert zeroed < emitted, "withdraw must clear the entitlement before emitting"
+
+    # The probe must risk nothing. A probe carrying value would reintroduce the
+    # whole problem in miniature.
+    probe = _code_of(fns["prove_recipient"])
+    assert "emit_transfer" not in probe, "the probe must not transfer value"
+    assert "value=" not in probe, "the probe must carry no value"
+    assert "credent_probe" in probe, "the probe must call the recipient back"
+
+
+def test_recipients_and_entitlements_are_validated(artifact_source: str) -> None:
+    """A malformed or zero recipient must be a classified refusal.
+
+    `Address(...)` raises on anything malformed, and a bare exception is an
+    *unclassified* fault: validators rotate instead of agreeing on a rejection,
+    so a caller's typo becomes a consensus event. The zero address is worse than
+    an error -- the chain accepts it and the entitlement can never be withdrawn
+    again.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "_clean_recipient" in fns, "no validating helper for payout recipients"
+
+    helper = _code_of(fns["_clean_recipient"])
+    assert "REASON_BAD_RECIPIENT" in helper, "malformed addresses are not classified"
+    assert "REASON_ZERO_RECIPIENT" in helper, "the zero address is not refused"
+
+    # Every method taking a recipient must go through it rather than calling
+    # `Address(...)` raw.
+    assign = _code_of(fns["assign_to"])
+    assert "_clean_recipient(" in assign, "assign_to does not validate its recipient"
+    assert "Address(recipient)" not in assign, (
+        "assign_to still constructs an Address directly, which raises unclassified"
     )

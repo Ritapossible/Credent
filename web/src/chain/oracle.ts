@@ -532,39 +532,35 @@ export async function owedTo(recipient: string): Promise<bigint> {
 }
 
 /**
- * An entitlement `withdraw` emitted but whose arrival the contract cannot see.
+ * Whether `withdraw` will deliver to this address.
  *
- * Non-zero means a payout was attempted and its outcome is unknown to the
- * chain. `reclaim_in_flight` settles it: the entitlement comes back if the
- * money is still in the contract, and the call is refused if it is not.
+ * True only once the address has answered the contract's zero-value probe,
+ * which needs code to run and so cannot be faked by a wallet. `withdraw` is
+ * refused for anything else, which is what stops value being emitted at an
+ * address that cannot receive it.
  */
-export async function inFlightTo(recipient: string): Promise<bigint> {
-  return scalar(await call('in_flight_to', [recipient]), 'in_flight_to')
+export async function isProven(recipient: string): Promise<boolean> {
+  return (await call('is_proven', [recipient])) === true
 }
 
-export interface Solvency {
-  balance: bigint
+export interface Liabilities {
   totalOwed: bigint
-  totalInFlight: bigint
-  obligations: bigint
-  /** False exactly when value has left against an unconfirmed entitlement. */
-  backed: boolean
+  held: bigint
 }
 
 /**
- * What the contract holds against what it owes.
+ * A reader's summary of what the contract owes against what it holds.
  *
- * Read before offering `reclaim_in_flight` so the page can say whether it will
- * work, rather than letting a user discover a refusal.
+ * `held` is larger than `totalOwed` in normal operation, because the same
+ * balance also carries work collateral and locked bonds. Nothing branches on
+ * this — an earlier design decided a payout against exactly this comparison and
+ * was wrong for exactly that reason.
  */
-export async function solvency(): Promise<Solvency> {
-  const source = asDict(await call('solvency', []), 'solvency')
+export async function liabilities(): Promise<Liabilities> {
+  const source = asDict(await call('liabilities', []), 'liabilities')
   return {
-    balance: big(source, 'balance', 'solvency'),
-    totalOwed: big(source, 'total_owed', 'solvency'),
-    totalInFlight: big(source, 'total_in_flight', 'solvency'),
-    obligations: big(source, 'obligations', 'solvency'),
-    backed: source.backed === true,
+    totalOwed: big(source, 'total_owed', 'liabilities'),
+    held: big(source, 'held', 'liabilities'),
   }
 }
 

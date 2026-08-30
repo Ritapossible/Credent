@@ -33,15 +33,15 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { CONTRACT_ADDRESS, EXPLORER_URL, IS_CONFIGURED, NETWORK } from '../chain/config'
-import { inFlightTo, owedTo, solvency, type Solvency } from '../chain/oracle'
+import { isProven, liabilities, owedTo, type Liabilities } from '../chain/oracle'
 import { useWallet } from '../chain/useWallet'
-import { assignTo, resolveInFlight, withdraw, type WriteResult } from '../chain/wallet'
+import { assignTo, withdraw, type WriteResult } from '../chain/wallet'
 import { useWalletPicker } from '../components/WalletModal'
 import { formatBond, shortAddress } from '../core/format'
-import { normalizeAddress } from '../core/digest'
+import { isAddress } from '../core/address'
 import { readableError } from '../core/errors'
 
-type Balances = { owed: bigint; inFlight: bigint; solvency: Solvency }
+type Balances = { owed: bigint; proven: boolean; liabilities: Liabilities }
 
 export default function Payouts() {
   const { address, connecting, rightChain } = useWallet()
@@ -63,12 +63,12 @@ export default function Payouts() {
       // Read together: an owed figure without its in-flight companion invites
       // the reading that a zero balance means nothing is due, when it can mean
       // a payout is out and unconfirmed.
-      const [owed, inFlight, health] = await Promise.all([
+      const [owed, proven, totals] = await Promise.all([
         owedTo(address),
-        inFlightTo(address),
-        solvency(),
+        isProven(address),
+        liabilities(),
       ])
-      setBalances({ owed, inFlight, solvency: health })
+      setBalances({ owed, proven, liabilities: totals })
       setLoadError(null)
     } catch (err) {
       setLoadError(readableError(err))
@@ -109,7 +109,7 @@ export default function Payouts() {
     )
   }
 
-  const recipientValid = recipient.trim() === '' ? null : normalizeAddress(recipient.trim()) !== null
+  const recipientValid = recipient.trim() === '' ? null : isAddress(recipient)
 
   return (
     <div className="page">
@@ -157,21 +157,19 @@ export default function Payouts() {
                     <dd>{formatBond(balances.owed)}</dd>
                   </div>
                   <div>
-                    <dt>In flight</dt>
-                    <dd>{formatBond(balances.inFlight)}</dd>
+                    <dt>Can receive</dt>
+                    <dd>{balances.proven ? 'proven' : 'not proven'}</dd>
                   </div>
                   <div>
-                    <dt>Contract holds</dt>
-                    <dd>{formatBond(balances.solvency.balance)}</dd>
+                    <dt>Contract owes in total</dt>
+                    <dd>{formatBond(balances.liabilities.totalOwed)}</dd>
                   </div>
                 </dl>
-                {balances.inFlight > 0n && (
+                {!balances.proven && balances.owed > 0n && (
                   <p className="notice">
-                    A withdrawal of {formatBond(balances.inFlight)} was emitted and this contract
-                    cannot see whether it arrived.{' '}
-                    {balances.solvency.backed
-                      ? 'The money is still here, so resolving will restore the entitlement.'
-                      : 'The value has already left the contract, so resolving will clear the entry rather than restore it.'}
+                    This address has not proven it can receive value, so withdrawing is refused
+                    rather than attempted. That is deliberate: a transfer to an address that
+                    cannot receive is not returned. Assign the entitlement to a contract instead.
                   </p>
                 )}
                 <button type="button" className="btn btn--ghost" onClick={() => void refresh()}>
@@ -217,38 +215,30 @@ export default function Payouts() {
           <section className="card">
             <h2 className="card__title">Withdraw to yourself</h2>
             <p className="muted">
-              Emits the value to the caller. It arrives only if the caller is a{' '}
-              <strong>contract</strong> that can receive — <code>emit_transfer</code> does not credit
-              an ordinary account, and a transfer that cannot be delivered is not returned. If you
-              are connected with a wallet, assign instead.
+              Emits the value to the caller, and is refused unless this address has answered the
+              contract&rsquo;s zero-value probe. A browser wallet cannot answer it — running code is
+              the proof — so this button stays disabled here and the safe path above is the one to
+              use. It is offered because a contract driving this site&rsquo;s calls can use it.
             </p>
             <button
               type="button"
               className="btn btn--ghost"
-              disabled={busy !== null || balances === null || balances.owed === 0n}
+              disabled={
+                busy !== null ||
+                balances === null ||
+                balances.owed === 0n ||
+                !balances.proven
+              }
               onClick={() => void run('withdraw', () => withdraw(address))}
+              title={
+                balances !== null && !balances.proven
+                  ? 'This address has not proven it can receive value'
+                  : undefined
+              }
             >
-              {busy === 'withdraw' ? 'Withdrawing…' : 'Withdraw (contracts only)'}
+              {busy === 'withdraw' ? 'Withdrawing…' : 'Withdraw'}
             </button>
           </section>
-
-          {balances !== null && balances.inFlight > 0n && (
-            <section className="card">
-              <h2 className="card__title">Reclaim an unconfirmed withdrawal</h2>
-              <p className="muted">
-                Restores {formatBond(balances.inFlight)} to your balance, if the contract still
-                holds it. Refused otherwise, on purpose.
-              </p>
-              <button
-                type="button"
-                className="btn"
-                disabled={busy !== null}
-                onClick={() => void run('resolve', () => resolveInFlight(address))}
-              >
-                {busy === 'resolve' ? 'Resolving…' : 'Resolve'}
-              </button>
-            </section>
-          )}
 
           {actionError !== null && <p className="notice notice--critical">{actionError}</p>}
           {result !== null && (

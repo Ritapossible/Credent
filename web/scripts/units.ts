@@ -60,8 +60,14 @@ eq(formatBond(GEN), `1 ${NATIVE_SYMBOL}`, 'formatBond: one whole token')
 eq(formatBond(25n * GEN), `25 ${NATIVE_SYMBOL}`, 'formatBond: twenty-five')
 eq(formatBond(GEN / 2n), `0.5 ${NATIVE_SYMBOL}`, 'formatBond: a half')
 eq(formatBond(1_500n * GEN), `1,500 ${NATIVE_SYMBOL}`, 'formatBond: thousands are grouped')
-// Dust must not round up into a number someone could mistake for a real bond.
-eq(formatBond(1n), `0 ${NATIVE_SYMBOL}`, 'formatBond: one wei displays as zero, not as 1')
+// Dust must not round up into a number someone could mistake for a real bond --
+// and must not round *down* into one that reads as nothing owed either. On the
+// payouts page a dust entitlement rendered as `0 GEN` says the contract owes
+// you nothing while it still owes you something, so it is reported as below the
+// display precision rather than as zero. The original intent is unchanged: the
+// number shown is never mistakable for a real bond.
+eq(formatBond(1n), `<0.0001 ${NATIVE_SYMBOL}`, 'formatBond: dust is below precision, not zero')
+eq(formatBond(0n), `0 ${NATIVE_SYMBOL}`, 'formatBond: only actual zero reads as zero')
 eq(formatUnits(GEN), '1', 'formatUnits: exact at 18 decimals')
 
 // The value that was wrong, asserted at its intended magnitude so it cannot

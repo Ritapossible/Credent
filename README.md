@@ -19,9 +19,9 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on **GenLayer Studio** at `0x395A0E1b81778b69Dd128183412C1738BddD1E4F`,
+Deployed on **GenLayer Studio** at `0xF00796De139528f5Bc9E01876b2F4fAEE6988295`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
-and on **Testnet Bradbury** at `0xeeAa76953b8E6e83CD83633A0E06f57BDC653155` — the
+and on **Testnet Bradbury** at `0x8E06e232086d095906C8f2C43D38DCC27757483c` — the
 minified artifact there, since bradbury refuses the full-size source on
 transaction pubdata rather than on gas.
 
@@ -220,11 +220,11 @@ recipient decides *where* an entitlement goes and never *whose* it is.
 **The site carries this too, and did not before.** Every payout in the protocol
 lands in `owed_to(you)`, and the app could open engagements, grade them and
 settle them without ever showing a visitor the money. `/payouts` closes that: it
-reads `owed_to`, `in_flight_to` and `solvency` for the connected account, and
+reads `owed_to`, `is_proven` and `liabilities` for the connected account, and
 offers the two ways out with the difference stated rather than implied —
 `assign_to` as the default, `withdraw` marked contracts-only, and
-`resolve_in_flight` surfaced only when there is something unconfirmed to
-settle. When the value has already left, the page says the reclaim will be
+the withdraw button disabled with a reason whenever the connected address
+has not proven it can receive — which a browser wallet never can. When the value has already left, the page says the reclaim will be
 refused and why, instead of letting a visitor spend gas to find out.
 
 **What that means for an integrator.** A party that expects to be paid has to
@@ -234,47 +234,45 @@ with `assign_to`, which then calls `withdraw()` for itself. What no party can do
 is take value at an externally owned address, on any network, because that is a
 property of `emit_transfer` rather than of this contract.
 
-**`withdraw()` no longer discards what it cannot confirm.** It emits a transfer
-and cannot observe the result, so clearing `owed` outright made an undeliverable
-payout unrecoverable. The entitlement now moves to `in_flight`, and
-`resolve_in_flight()` settles it — exactly, against a ledger rather than a guess.
+**`withdraw()` refuses rather than guesses.** It emits value and cannot observe
+whether the transfer arrived, so this contract does not try to find out
+afterwards — it declines to emit at an address that has not proven it can
+receive.
 
-That distinction is the whole correctness of the method, and the first version
-was wrong. It compared the balance to `total_owed + total_in_flight` and read a
-shortfall as proof the value had left. But the same balance also holds work
-collateral and locked bonds, which are not entitlements. On a live run it read
-balance 1.800 against obligations 2.795 and refused a resolution it had no
-grounds to judge — the shortfall was collateral, nothing to do with the transfer
-in question.
+Two earlier designs tried to recover after the fact and both were wrong, which
+is why the third does not attempt it. The first compared the contract's balance
+to `total_owed + total_in_flight` and read a shortfall as proof the value had
+left; the same balance also holds work collateral and locked bonds, so on a live
+run it read balance 1.800 against obligations 2.795 and refused a resolution it
+had no grounds to judge. The second used an exact `total_in - total_out` ledger,
+which was sound only while every wei arrived through a counted method — a single
+untracked transfer into the contract made a *delivered* payout look recoverable
+and credited its owner a second time. Both were found by auditing the fix rather
+than by a reviewer.
 
-`total_in - total_out` is what the balance must be if every transfer this
-contract emitted actually left, and `withdraw` counts an amount as out before
-emitting it. The comparison is then exact, and needs to know nothing about
-collateral or bonds:
+Delivery is not observable from inside the contract. So the question is removed
+instead of answered:
 
-* `balance == expected + amount` — the transfer never left, and the entitlement
-  is **restored**;
-* `balance == expected` — the transfer left, delivered or destroyed. There is
-  nothing here to give back, and the entry is **written off**.
+* `prove_recipient()` emits a **zero-value** call back to the caller. Answering
+  it means running code, which a wallet cannot do, so completing the handshake
+  is itself the proof. Nothing is at stake if it fails.
+* `confirm_recipient()` is what the recipient calls from inside `credent_probe`.
+* `withdraw()` is refused unless the caller is proven, and takes **no arguments**
+  — the previous `recipient_is_a_contract` was an assertion the caller made
+  about itself that this contract could not check and that cost the entitlement
+  when it was wrong.
 
-Both paths clear the entry, and that matters as much as the decision. An earlier
-version restored or refused without clearing, so a *successful* withdrawal left
-its entry behind for good: `in_flight_to` reported a phantom balance to a
-recipient that had already been paid, obligations only ever grew, and every later
-owner's recovery was refused as unbacked. Measured before the fix — a claimant
-that had been paid still showed 0.925 GEN in flight, and `backed` was false
-permanently.
+`web/scripts/claimant.py` shows both halves; the probe answer is four lines.
 
-Proven on-chain rather than argued. The suite withdraws successfully, then
-settles the entry and requires the delivered case to be written off and **not**
-restored:
+Proven on-chain rather than argued. The suite exercises the refusal, because a
+guard that is never triggered is a comment:
 
 ```text
-=== resolving the claimant's in-flight entry ===
-  in_flight_to(claimant) 0.925 GEN -> 0 GEN
-  ok   the settled entry was cleared
-  ok   a delivered payout was not restored as a new entitlement (owed 0 GEN)
-  ok   obligations fell by exactly the settled entry (0.925 GEN)
+=== the payout guard ===
+  ok   an ordinary wallet is not a proven recipient
+  ok   withdraw from an unproven wallet is refused, not attempted
+  ok   assigning to the zero address is refused
+  ok   the claimant contract proved it can receive
 ```
 `web/scripts/claimant.py` is the smallest one that works: it accepts an
 engagement as the provider (forwarding its own collateral, so the oracle sees
@@ -298,16 +296,16 @@ flow and that the README names no contract method that does not exist, which is
 what let a false claim about an error handler survive here.
 
 ```text
-studionet  0x395A0E1b81778b69Dd128183412C1738BddD1E4F
+studionet  0xF00796De139528f5Bc9E01876b2F4fAEE6988295
   ok   agreement preserves the bond outcome
   ok   agreement preserves the collateral outcome
   ok   assign_to exists and emits no value
   ok   withdraw is the only emitter
   ok   withdraw parks the entitlement instead of discarding it
-  ok   resolve_in_flight decides against the ledger
-  ok   resolve_in_flight clears the entry either way
-  ok   resolve_in_flight restores only above the ledger
-  ok   the unsafe withdraw_to is gone
+  ok   withdraw refuses an unproven recipient
+  ok   withdraw takes no caller-supplied claim
+  ok   the probe carries no value
+  ok   recipients and entitlements are validated
   ok   no __on_errored_message__ is claimed
   ok   the payout views exist
 ...

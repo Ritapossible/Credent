@@ -53,8 +53,10 @@ REASON_NOT_CLIENT = "sender_not_client"
 REASON_NOTHING_OWED = "nothing_owed"
 REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
 REASON_SELF_PAYOUT = "recipient_is_this_contract"
-REASON_NOTHING_IN_FLIGHT = "nothing_in_flight"
-REASON_VALUE_ALREADY_LEFT = "value_already_left_the_contract"
+REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
+REASON_ALREADY_PROVEN = "recipient_already_proven"
+REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
+REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
     REASON_NOT_CLOSED,
@@ -76,8 +78,10 @@ REASONS = frozenset({
     REASON_NOTHING_OWED,
     REASON_WITHDRAW_NEEDS_CONTRACT,
     REASON_SELF_PAYOUT,
-    REASON_NOTHING_IN_FLIGHT,
-    REASON_VALUE_ALREADY_LEFT,
+    REASON_RECIPIENT_UNPROVEN,
+    REASON_ALREADY_PROVEN,
+    REASON_BAD_RECIPIENT,
+    REASON_ZERO_RECIPIENT,
 })
 def normalize_address(text: str) -> str:
     if not isinstance(text, str):
@@ -549,6 +553,22 @@ def _slice(items, offset: int, limit: int) -> list:
     return [items[index] for index in range(offset, stop)]
 def _owed_key(address: Address) -> str:
     return address.as_hex.lower()
+def _clean_recipient(raw: object) -> Address:
+    if isinstance(raw, Address):
+        address = raw
+    else:
+        if not isinstance(raw, str):
+            _fail(REASON_BAD_RECIPIENT)
+        text = raw.strip()
+        if len(text) != 42 or not text.startswith("0x"):
+            _fail(REASON_BAD_RECIPIENT)
+        for character in text[2:]:
+            if character not in "0123456789abcdefABCDEF":
+                _fail(REASON_BAD_RECIPIENT)
+        address = Address(text)
+    if address.as_hex.lower() == "0x" + "0" * 40:
+        _fail(REASON_ZERO_RECIPIENT)
+    return address
 def _fail(reason: str) -> None:
     raise gl.vm.UserError(f"{ERROR_EXPECTED} {reason}")
 def _now_seconds() -> int:
@@ -595,11 +615,8 @@ class ReputationOracle(gl.Contract):
     att_bond: DynArray[u256]
     att_bond_state: DynArray[str]
     owed: TreeMap[str, u256]
-    in_flight: TreeMap[str, u256]
+    proven: TreeMap[str, bool]
     total_owed: u256
-    total_in_flight: u256
-    total_in: u256
-    total_out: u256
     subject_atts: TreeMap[Address, DynArray[u256]]
     pair_count: TreeMap[str, u256]
     engagement_attested: TreeMap[str, bool]
@@ -655,9 +672,6 @@ class ReputationOracle(gl.Contract):
         self.p_collateral_floor_bp = collateral_floor_bp
         self.p_collateral_forfeit_bp = collateral_forfeit_bp
         self.total_owed = 0
-        self.total_in_flight = 0
-        self.total_in = 0
-        self.total_out = 0
     def _policy(self) -> Policy:
         return Policy(
             half_life_seconds=int(self.p_half_life_seconds),
@@ -699,7 +713,6 @@ class ReputationOracle(gl.Contract):
         self.eng_state[engagement_id] = _ENG_PROPOSED
     @gl.public.write.payable
     def accept_engagement(self, engagement_id: str) -> u256:
-        self.total_in = int(self.total_in) + int(gl.message.value)
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
         if state == _ENG_ABSENT:
             _fail(REASON_NO_ENGAGEMENT)
@@ -740,7 +753,6 @@ class ReputationOracle(gl.Contract):
         self.eng_closed_at[engagement_id] = _now_seconds()
     @gl.public.write.payable
     def attest(self, engagement_id: str, claim: str, evidence: str) -> u256:
-        self.total_in = int(self.total_in) + int(gl.message.value)
         policy = self._policy()
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
         if state == _ENG_ABSENT:
@@ -909,11 +921,9 @@ class ReputationOracle(gl.Contract):
             _fail("entitlement_overflow")
         self.owed[key] = total
         self.total_owed = int(self.total_owed) + int(amount)
-    def _contract_balance(self) -> int:
-        return int(gl.get_contract_at(gl.message.contract_address).balance)
     @gl.public.write
     def assign_to(self, recipient: str) -> dict:
-        to = recipient if isinstance(recipient, Address) else Address(recipient)
+        to = _clean_recipient(recipient)
         if _owed_key(to) == _owed_key(gl.message.contract_address):
             _fail(REASON_SELF_PAYOUT)
         key = _owed_key(gl.message.sender_address)
@@ -931,61 +941,42 @@ class ReputationOracle(gl.Contract):
         self.owed[_owed_key(to)] = total
         return {"from": key, "to": _owed_key(to), "amount": amount}
     @gl.public.write
-    def resolve_in_flight(self) -> dict:
+    def prove_recipient(self) -> dict:
         key = _owed_key(gl.message.sender_address)
-        current = self.in_flight.get(key)
-        amount = 0 if current is None else int(current)
-        if amount <= 0:
-            _fail(REASON_NOTHING_IN_FLIGHT)
-        balance = self._contract_balance()
-        expected = int(self.total_in) - int(self.total_out)
-        self.in_flight[key] = 0
-        self.total_in_flight = int(self.total_in_flight) - amount
-        if balance >= expected + amount:
-            self.total_out = int(self.total_out) - amount
-            owed_now = self.owed.get(key)
-            self.owed[key] = (0 if owed_now is None else int(owed_now)) + amount
-            self.total_owed = int(self.total_owed) + amount
-            return {"owner": key, "outcome": "restored", "amount": amount}
-        return {"owner": key, "outcome": "delivered_or_lost", "amount": amount}
+        if bool(self.proven.get(key, False)):
+            _fail(REASON_ALREADY_PROVEN)
+        gl.get_contract_at(gl.message.sender_address).emit(on="accepted").credent_probe()
+        return {"probing": key}
     @gl.public.write
-    def withdraw(self, recipient_is_a_contract: bool = False) -> dict:
-        if not isinstance(recipient_is_a_contract, bool):
-            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
-        if not recipient_is_a_contract:
-            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
+    def confirm_recipient(self) -> dict:
         key = _owed_key(gl.message.sender_address)
+        self.proven[key] = True
+        return {"proven": key}
+    @gl.public.write
+    def withdraw(self) -> dict:
+        key = _owed_key(gl.message.sender_address)
+        if not bool(self.proven.get(key, False)):
+            _fail(REASON_RECIPIENT_UNPROVEN)
         current = self.owed.get(key)
         amount = 0 if current is None else int(current)
         if amount <= 0:
             _fail(REASON_NOTHING_OWED)
         self.owed[key] = 0
         self.total_owed = int(self.total_owed) - amount
-        pending = self.in_flight.get(key)
-        self.in_flight[key] = (0 if pending is None else int(pending)) + amount
-        self.total_in_flight = int(self.total_in_flight) + amount
-        self.total_out = int(self.total_out) + amount
         gl.get_contract_at(gl.message.sender_address).emit_transfer(
             value=amount, on="accepted"
         )
         return {"to": key, "amount": amount}
     @gl.public.view
-    def in_flight_to(self, recipient: str) -> int:
+    def is_proven(self, recipient: str) -> bool:
         if not isinstance(recipient, str):
-            return 0
-        got = self.in_flight.get(recipient.lower())
-        return 0 if got is None else int(got)
+            return False
+        return bool(self.proven.get(recipient.lower(), False))
     @gl.public.view
-    def solvency(self) -> dict:
-        held = self._contract_balance()
-        expected = int(self.total_in) - int(self.total_out)
+    def liabilities(self) -> dict:
         return {
-            "balance": held,
             "total_owed": int(self.total_owed),
-            "total_in_flight": int(self.total_in_flight),
-            "obligations": int(self.total_owed) + int(self.total_in_flight),
-            "expected": expected,
-            "unsent": held - expected if held > expected else 0,
+            "held": int(gl.get_contract_at(gl.message.contract_address).balance),
         }
     @gl.public.view
     def owed_to(self, recipient: str) -> int:

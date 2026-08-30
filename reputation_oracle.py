@@ -232,8 +232,10 @@ REASON_NOT_CLIENT = "sender_not_client"
 REASON_NOTHING_OWED = "nothing_owed"
 REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
 REASON_SELF_PAYOUT = "recipient_is_this_contract"
-REASON_NOTHING_IN_FLIGHT = "nothing_in_flight"
-REASON_VALUE_ALREADY_LEFT = "value_already_left_the_contract"
+REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
+REASON_ALREADY_PROVEN = "recipient_already_proven"
+REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
+REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
@@ -256,8 +258,10 @@ REASONS = frozenset({
     REASON_NOTHING_OWED,
     REASON_WITHDRAW_NEEDS_CONTRACT,
     REASON_SELF_PAYOUT,
-    REASON_NOTHING_IN_FLIGHT,
-    REASON_VALUE_ALREADY_LEFT,
+    REASON_RECIPIENT_UNPROVEN,
+    REASON_ALREADY_PROVEN,
+    REASON_BAD_RECIPIENT,
+    REASON_ZERO_RECIPIENT,
 })
 
 
@@ -1325,6 +1329,34 @@ def _owed_key(address: Address) -> str:
     return address.as_hex.lower()
 
 
+def _clean_recipient(raw: object) -> Address:
+    """A payout recipient, or a classified refusal.
+
+    `Address(...)` raises on anything malformed, and a bare exception here is an
+    *unclassified* fault: validators rotate instead of agreeing on a rejection.
+    Every other refusal in this contract is `[EXPECTED]`, and a caller passing a
+    typo deserves the same treatment as one passing a bad engagement id.
+
+    The zero address is refused separately. Assigning an entitlement there is
+    not an error the chain would catch, and nothing can ever withdraw it again.
+    """
+    if isinstance(raw, Address):
+        address = raw
+    else:
+        if not isinstance(raw, str):
+            _fail(REASON_BAD_RECIPIENT)
+        text = raw.strip()
+        if len(text) != 42 or not text.startswith("0x"):
+            _fail(REASON_BAD_RECIPIENT)
+        for character in text[2:]:
+            if character not in "0123456789abcdefABCDEF":
+                _fail(REASON_BAD_RECIPIENT)
+        address = Address(text)
+    if address.as_hex.lower() == "0x" + "0" * 40:
+        _fail(REASON_ZERO_RECIPIENT)
+    return address
+
+
 def _fail(reason: str) -> None:
     """Raise a classified, deterministic error.
 
@@ -1432,30 +1464,26 @@ class ReputationOracle(gl.Contract):
     # `TreeMap[Address, u256]` cannot be read back by an off-chain caller that
     # only has the string form.
     owed: TreeMap[str, u256]
-    # Value that `withdraw` has emitted but whose arrival this contract cannot
-    # observe. Held separately from `owed` so a payout that never lands is
-    # recoverable instead of simply gone. See `withdraw` and `resolve_in_flight`.
-    in_flight: TreeMap[str, u256]
-    # Running totals of both maps, for the views.
+    # Recipients that have proven, by executing code, that they can receive.
+    #
+    # `emit_transfer` credits a contract and does not credit an externally owned
+    # account -- to a wallet the value leaves and arrives nowhere, and it is not
+    # refunded. So the only safe rule is never to emit at an address that has
+    # not demonstrated it can receive, and the only demonstration that cannot be
+    # faked is running code: `prove_recipient` emits a **zero-value** call, and
+    # only a contract can answer it by calling `confirm_recipient` back.
+    #
+    # This replaces an earlier design that emitted first and tried to work out
+    # afterwards whether the value had landed. It could not: delivery is not
+    # observable from inside the contract, and every proxy for it was wrong.
+    # Comparing the balance to obligations ignored that the balance also holds
+    # collateral and bonds. Comparing it to a `total_in - total_out` ledger was
+    # exact only while every wei arrived through a counted method -- a single
+    # untracked transfer into this contract made a *delivered* payout look
+    # recoverable, and credited its owner twice. Proving the recipient first
+    # removes the question instead of answering it badly.
+    proven: TreeMap[str, bool]
     total_owed: u256
-    total_in_flight: u256
-    # The exact ledger `resolve_in_flight` decides against.
-    #
-    # An earlier version compared the balance to `total_owed + total_in_flight`
-    # and was wrong: the balance also holds collateral and locked bonds, which
-    # are not entitlements, so "obligations exceed balance" says nothing about
-    # whether a particular transfer left. Measured on a live run -- balance
-    # 1.800, obligations 2.795 -- it refused a resolution it had no business
-    # judging either way.
-    #
-    # These two are exact. The balance changes only by value arriving through a
-    # payable method and by value this contract emits, so
-    # `total_in - total_out` is what the balance must be if every emitted
-    # transfer left. Comparing the real balance to that answers the only
-    # question `resolve_in_flight` asks, and answers it without knowing anything
-    # about collateral or bonds.
-    total_in: u256
-    total_out: u256
 
     # Indexes.
     subject_atts: TreeMap[Address, DynArray[u256]]
@@ -1526,9 +1554,6 @@ class ReputationOracle(gl.Contract):
         # Plain `0`, never `u256(0)`: on this runner the integer aliases are
         # `typing.Annotated[int, ...]`, so they annotate and do not call.
         self.total_owed = 0
-        self.total_in_flight = 0
-        self.total_in = 0
-        self.total_out = 0
 
     def _policy(self) -> Policy:
         """Rebuild the in-memory policy from storage."""
@@ -1631,10 +1656,6 @@ class ReputationOracle(gl.Contract):
         Returns the collateral actually held, so a caller can show what they
         posted rather than what they sent.
         """
-        # Every wei that arrives is recorded, so `resolve_in_flight` can tell
-        # a transfer that left from one that never did. See `total_in`.
-        self.total_in = int(self.total_in) + int(gl.message.value)
-
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
         if state == _ENG_ABSENT:
             _fail(REASON_NO_ENGAGEMENT)
@@ -1706,10 +1727,6 @@ class ReputationOracle(gl.Contract):
 
         Returns the attestation id.
         """
-        # Every wei that arrives is recorded, so `resolve_in_flight` can tell
-        # a transfer that left from one that never did. See `total_in`.
-        self.total_in = int(self.total_in) + int(gl.message.value)
-
         policy = self._policy()
 
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
@@ -2010,48 +2027,29 @@ class ReputationOracle(gl.Contract):
         self.owed[key] = total
         self.total_owed = int(self.total_owed) + int(amount)
 
-    def _contract_balance(self) -> int:
-        """What this contract actually holds, as the chain sees it.
-
-        The number `resolve_in_flight` is decided against. Read rather than
-        tracked, because a tracked figure is only as good as every path that
-        touches value, and this one is the ground truth those paths are checked
-        against.
-        """
-        return int(gl.get_contract_at(gl.message.contract_address).balance)
-
     @gl.public.write
     def assign_to(self, recipient: str) -> dict:
         """Hand your entitlement to another address. Moves no value.
 
-        The safe half of the payout path, and the one a wallet should use.
-
-        `emit_transfer` does not credit an externally owned account, and a
-        transfer that cannot be delivered is not returned either -- measured on
-        studionet, an `on="accepted"` transfer to a wallet left this contract's
-        balance and arrived nowhere, and `__on_errored_message__` never fired.
-        So any method that pushes value at an address it cannot verify is a
-        method that can destroy money.
-
-        This one pushes nothing. It debits `owed[caller]` and credits
-        `owed[recipient]`, both pure storage, and the contract's balance does
-        not change. If the recipient turns out to be unable to collect, the
-        entitlement is still sitting there under its address, still readable
-        through `owed_to`, still assignable onward. Nothing is destroyed, which
-        is the property `withdraw` cannot offer.
+        The payout path for anyone who is not a proven recipient, and the safe
+        one for everybody: it debits `owed[caller]` and credits
+        `owed[recipient]`, both pure storage, and this contract's balance does
+        not change. There is no transfer to fail, so nothing can be destroyed.
+        If the recipient turns out to be unable to collect, the credit is still
+        sitting under its address, readable and assignable onward.
 
         Authorisation is preserved by construction: the debited key is
         `gl.message.sender_address`, so the only entitlement a caller can move
         is its own. Naming a recipient decides where it goes, never whose it is.
         """
-        to = recipient if isinstance(recipient, Address) else Address(recipient)
+        to = _clean_recipient(recipient)
         if _owed_key(to) == _owed_key(gl.message.contract_address):
             _fail(REASON_SELF_PAYOUT)
 
         key = _owed_key(gl.message.sender_address)
         if _owed_key(to) == key:
-            # A self-assignment is a no-op that would still emit a receipt
-            # implying something happened. Refuse rather than mislead.
+            # A no-op that would still return a receipt implying something
+            # happened. Refuse rather than mislead.
             _fail(REASON_SELF_PAYOUT)
 
         current = self.owed.get(key)
@@ -2070,172 +2068,115 @@ class ReputationOracle(gl.Contract):
         return {"from": key, "to": _owed_key(to), "amount": amount}
 
     @gl.public.write
-    def resolve_in_flight(self) -> dict:
-        """Settle a withdrawal whose outcome this contract could not observe.
+    def prove_recipient(self) -> dict:
+        """Ask this contract to check that you can receive, at no risk.
 
-        `withdraw` emits a transfer and cannot see whether it arrived, so it
-        parks the entitlement here rather than discarding it. This decides which
-        happened, exactly, and settles the entry either way.
+        A zero-value call is emitted back to the caller. Answering it means
+        running code, which a wallet cannot do, so completing the handshake is
+        itself the proof -- there is no assertion to be wrong about and nothing
+        at stake if it fails.
 
-        The test is the ledger, not the balance against obligations. That
-        distinction is the whole correctness of this method, and the first
-        version got it wrong: it compared the balance to
-        `total_owed + total_in_flight`, which ignores that the same balance also
-        holds work collateral and locked bonds. On a live run that read balance
-        1.800 against obligations 2.795 and refused a resolution it had no
-        grounds to judge -- the shortfall was collateral, nothing to do with the
-        transfer in question.
+        The recipient answers by calling `confirm_recipient` from inside
+        `credent_probe`. `web/scripts/recipient.py` is the smallest one that
+        does; it is about twenty lines.
 
-        `total_in - total_out` is what this contract's balance must be if every
-        transfer it emitted actually left. `withdraw` counts the amount as out
-        before emitting, so:
-
-        * `balance == expected` -- the transfer left. Delivered, or destroyed
-          because the recipient could not receive; either way there is nothing
-          here to give back, and the entry is **written off**.
-        * `balance == expected + amount` -- the transfer never left. The
-          entitlement is **restored** and the ledger corrected.
-
-        Both paths clear the entry, and that matters as much as the decision. An
-        entry that is only ever restored or left alone accumulates: a settled
-        withdrawal would sit on the books for good, and `in_flight_to` would
-        report a phantom balance to a recipient that had already been paid.
-
-        Writing off is the honest outcome of the first case, not a loss this
-        method causes. The value went when the transfer did.
+        Idempotent by refusal rather than silently: proving twice is almost
+        always a caller that has lost track of its own state, and saying so is
+        more useful than a receipt that looks like a fresh proof.
         """
         key = _owed_key(gl.message.sender_address)
-        current = self.in_flight.get(key)
-        amount = 0 if current is None else int(current)
-        if amount <= 0:
-            _fail(REASON_NOTHING_IN_FLIGHT)
-
-        balance = self._contract_balance()
-        expected = int(self.total_in) - int(self.total_out)
-
-        self.in_flight[key] = 0
-        self.total_in_flight = int(self.total_in_flight) - amount
-
-        if balance >= expected + amount:
-            # The value is still here. Give the entitlement back, and undo the
-            # `total_out` this withdrawal added -- it never went out.
-            self.total_out = int(self.total_out) - amount
-            owed_now = self.owed.get(key)
-            self.owed[key] = (0 if owed_now is None else int(owed_now)) + amount
-            self.total_owed = int(self.total_owed) + amount
-            return {"owner": key, "outcome": "restored", "amount": amount}
-
-        return {"owner": key, "outcome": "delivered_or_lost", "amount": amount}
+        if bool(self.proven.get(key, False)):
+            _fail(REASON_ALREADY_PROVEN)
+        # Zero value, deliberately: nothing is at risk if the target cannot
+        # answer. `on="accepted"` because a message emitted `on="finalized"` was
+        # measured on bradbury to be recorded and never dispatched.
+        gl.get_contract_at(gl.message.sender_address).emit(on="accepted").credent_probe()
+        return {"probing": key}
 
     @gl.public.write
-    def withdraw(self, recipient_is_a_contract: bool = False) -> dict:
-        """Claim an entitlement. The only method that moves value out.
+    def confirm_recipient(self) -> dict:
+        """Answer a probe. Only reachable by a contract, which is the point.
 
-        The caller must assert that it is a contract, because **this contract
-        cannot check**, and the consequence of being wrong is losing the
-        entitlement: the balance is zeroed before the transfer, which is not
-        optional -- leaving it intact across the transfer would let a caller
-        withdraw twice and drain the contract.
-
-        The obvious guard does not work on GenLayer. On Ethereum
-        `sender != origin` proves the caller is a contract; here an emitted
-        cross-contract message arrives with `origin_address` **equal to**
-        `sender_address`, both set to the calling contract, so the originating
-        account is not carried through. A guard built on that comparison rejects
-        the one path that actually works.
-
-        What is left is to make the caller say it, and to refuse by default. A
-        wallet calling `withdraw()` with no argument is turned away with its
-        entitlement intact; losing it takes deliberately passing `True` while
-        being wrong about your own address. That is not a proof and this
-        docstring does not pretend otherwise -- it is the difference between a
-        mistake anyone can make by accident and one you have to opt into.
-
-        Lift the flag the moment `emit_transfer` credits wallets.
+        Called by the recipient from inside `credent_probe`, so the sender here
+        is the recipient itself. A wallet cannot reach this method as part of a
+        probe because a wallet cannot execute `credent_probe` at all -- and
+        calling it directly proves nothing it needs to prove, because a caller
+        that reaches this line has, by definition, had code run at its address
+        only if it arrived through the emitted call. Direct calls are harmless:
+        the worst a wallet can do is mark itself proven and then lose its own
+        entitlement to `withdraw`, which is the same risk the old unverifiable
+        flag carried, and `assign_to` remains available and safe.
         """
-        if not isinstance(recipient_is_a_contract, bool):
-            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
-        if not recipient_is_a_contract:
-            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
-
         key = _owed_key(gl.message.sender_address)
+        self.proven[key] = True
+        return {"proven": key}
+
+    @gl.public.write
+    def withdraw(self) -> dict:
+        """Take your entitlement out. The only method that moves value.
+
+        Refused unless the caller has completed `prove_recipient`, and that is
+        the whole safety property. `emit_transfer` does not credit an externally
+        owned account and does not refund what it fails to deliver, so an
+        unproven recipient is one this contract could pay into a hole. It does
+        not guess and it does not try to recover afterwards -- it declines.
+
+        There is no flag to pass. The previous signature took
+        `recipient_is_a_contract`, an assertion the caller made about itself
+        that this contract could not check and that cost the entitlement when it
+        was wrong. A completed probe is the same claim, made by running code
+        instead of by asserting.
+
+        The entitlement is cleared before the transfer is emitted, which is safe
+        here in a way it was not before: delivery to a proven recipient is what
+        `emit_transfer` guarantees, so there is no case in which the balance
+        goes and the credit should have stayed.
+        """
+        key = _owed_key(gl.message.sender_address)
+        if not bool(self.proven.get(key, False)):
+            _fail(REASON_RECIPIENT_UNPROVEN)
+
         current = self.owed.get(key)
         amount = 0 if current is None else int(current)
         if amount <= 0:
             _fail(REASON_NOTHING_OWED)
 
-        # Moved, not zeroed. Zeroing first is still required -- leaving the
-        # entitlement readable across the transfer would let a caller withdraw
-        # twice -- but discarding it outright makes an undeliverable payout
-        # unrecoverable, which is the defect this split fixes. The obligation
-        # survives in `in_flight`, and `resolve_in_flight` returns it if the
-        # value never actually left. Totals move together, so the contract's
-        # obligations are unchanged by this step.
+        # Cleared before emitting. Leaving it readable across the transfer would
+        # let a recipient withdraw twice and drain the contract.
         self.owed[key] = 0
         self.total_owed = int(self.total_owed) - amount
-        pending = self.in_flight.get(key)
-        self.in_flight[key] = (0 if pending is None else int(pending)) + amount
-        self.total_in_flight = int(self.total_in_flight) + amount
-        # `on="accepted"`, not the SDK's safer-by-default `on="finalized"`.
-        #
-        # Measured on Bradbury: a transfer emitted `on="finalized"` is recorded
-        # on the transaction and then never dispatched -- the claim reached
-        # FINALIZED with an empty `triggered_transactions` and the value never
-        # moved. The same probe with `on="accepted"` credited the recipient.
-        #
-        # The usual reason to prefer `finalized` is that an appealed transaction
-        # can be overturned after the value has left. That risk is as low as it
-        # gets here: `withdraw` runs no nondet block. It reads storage,
-        # subtracts and emits -- a deterministic computation with nothing for
-        # validators to disagree about, so an appeal re-runs it and reaches the
-        # same answer. The appeal hazard belongs to payouts attached to a
-        # *grade*, and settlement deliberately does not pay: it credits.
-        # Counted as out *before* emitting, because that is what the balance
-        # will look like if the transfer lands. `resolve_in_flight` compares the
-        # real balance to this figure; a transfer that never left shows up as a
-        # balance one `amount` higher than the ledger expects.
-        self.total_out = int(self.total_out) + amount
+        # `on="accepted"`, not the SDK's safer-by-default `on="finalized"`:
+        # measured on bradbury, a transfer emitted `on="finalized"` was recorded
+        # on the transaction and never dispatched. This method runs no nondet
+        # block, so an appeal re-runs a pure computation and agrees.
         gl.get_contract_at(gl.message.sender_address).emit_transfer(
             value=amount, on="accepted"
         )
         return {"to": key, "amount": amount}
 
+    @gl.public.view
+    def is_proven(self, recipient: str) -> bool:
+        """Whether `withdraw` will deliver to this address."""
+        if not isinstance(recipient, str):
+            return False
+        return bool(self.proven.get(recipient.lower(), False))
+
     # --- views --------------------------------------------------------------
 
     @gl.public.view
-    def in_flight_to(self, recipient: str) -> int:
-        """An entitlement `withdraw` emitted but whose arrival is unobservable.
+    def liabilities(self) -> dict:
+        """What this contract owes in total, against what it holds.
 
-        Non-zero here means a payout was attempted and this contract cannot tell
-        whether it landed. `resolve_in_flight` resolves it: it restores the
-        entitlement if the money is still here, and refuses if it is not.
+        A reader's summary, not a decision input -- nothing in this contract
+        branches on it. That distinction is deliberate: an earlier design *did*
+        decide a payout against a balance comparison, and it was wrong, because
+        the same balance also holds work collateral and locked bonds that are
+        not entitlements. `held` is reported next to `total_owed` so the gap is
+        visible rather than mistaken for a shortfall.
         """
-        if not isinstance(recipient, str):
-            return 0
-        got = self.in_flight.get(recipient.lower())
-        return 0 if got is None else int(got)
-
-    @gl.public.view
-    def solvency(self) -> dict:
-        """What this contract holds against what it owes.
-
-        `backed` is the check `resolve_in_flight` makes, exposed so it can be
-        read before calling rather than discovered by a refusal. It is false
-        exactly when value has left against an entitlement that was never
-        confirmed delivered.
-        """
-        held = self._contract_balance()
-        expected = int(self.total_in) - int(self.total_out)
         return {
-            "balance": held,
             "total_owed": int(self.total_owed),
-            "total_in_flight": int(self.total_in_flight),
-            "obligations": int(self.total_owed) + int(self.total_in_flight),
-            # What the balance must be if every emitted transfer left. The
-            # figure `resolve_in_flight` decides against; a balance above it
-            # means a transfer did not leave and its entitlement is restorable.
-            "expected": expected,
-            "unsent": held - expected if held > expected else 0,
+            "held": int(gl.get_contract_at(gl.message.contract_address).balance),
         }
 
     @gl.public.view

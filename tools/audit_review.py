@@ -24,17 +24,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Read from deployments.json, never repeated. See the note in that file.
+_MANIFEST = json.loads((ROOT / "deployments.json").read_text(encoding="utf-8"))
 DEPLOYMENTS = {
-    "studionet": (
-        "https://studio.genlayer.com/api",
-        "0x395A0E1b81778b69Dd128183412C1738BddD1E4F",
-        "bare",
-    ),
-    "testnet-bradbury": (
-        "https://rpc-bradbury.genlayer.com",
-        "0xeeAa76953b8E6e83CD83633A0E06f57BDC653155",
-        "object",
-    ),
+    net: (spec["rpc"], spec["address"], spec["params"])
+    for net, spec in _MANIFEST.items()
+    if not net.startswith("_")
 }
 
 
@@ -72,21 +67,30 @@ def code(fn: ast.FunctionDef) -> str:
     return "\n".join(ast.unparse(node) for node in statements(fn))
 
 
-def emits(fn: ast.FunctionDef) -> bool:
-    return any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in ("emit_transfer", "emit")
-        for node in ast.walk(ast.Module(body=statements(fn), type_ignores=[]))
-    )
+def emits_value(fn: ast.FunctionDef) -> bool:
+    """Does this function send value anywhere?
+
+    `emit_transfer` always does. `emit(...)` only does when a `value=` keyword
+    is present -- `prove_recipient` uses a zero-value `emit(...).credent_probe()`
+    to ask a recipient to identify itself, and counting that as a value transfer
+    would flag the one method whose whole point is that it risks nothing.
+    """
+    for node in ast.walk(ast.Module(body=statements(fn), type_ignores=[])):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr == "emit_transfer":
+            return True
+        if node.func.attr == "emit" and any(k.arg == "value" for k in node.keywords):
+            return True
+    return False
 
 
 def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
     fns = {n.name: n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)}
     agree = code(fns["grades_agree"]) if "grades_agree" in fns else ""
-    resolve = code(fns["resolve_in_flight"]) if "resolve_in_flight" in fns else ""
+    probe = code(fns["prove_recipient"]) if "prove_recipient" in fns else ""
     withdraw = code(fns["withdraw"]) if "withdraw" in fns else ""
-    emitters = sorted(n for n, f in fns.items() if emits(f))
+    emitters = sorted(n for n, f in fns.items() if emits_value(f))
 
     return [
         # 1. "make validator agreement preserve the same bond and collateral outcomes"
@@ -103,38 +107,40 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
         # 3/4. "redesign the transfer step to avoid clearing owed value irreversibly"
         (
             "assign_to exists and emits no value",
-            "assign_to" in fns and not emits(fns["assign_to"]),
-            "the wallet payout path must move an entitlement, never push value",
+            "assign_to" in fns and not emits_value(fns["assign_to"]),
+            "the safe payout path must move an entitlement, never push value",
         ),
         (
-            "withdraw is the only emitter",
+            "withdraw is the only method that emits value",
             emitters == ["withdraw"],
             f"emitters: {emitters}",
         ),
         (
-            "withdraw parks the entitlement instead of discarding it",
-            "self.in_flight[key]" in withdraw and "self.total_out" in withdraw,
-            "a transfer it cannot observe must not clear owed irreversibly",
+            "withdraw refuses an unproven recipient",
+            "self.proven" in withdraw,
+            "emitting at an address that cannot receive destroys the value",
         ),
         (
-            "resolve_in_flight decides against the ledger",
-            "self.total_in" in resolve and "self.total_out" in resolve,
-            "balance vs obligations is unsound: the balance also holds collateral",
+            "withdraw takes no caller-supplied claim",
+            [a.arg for a in fns["withdraw"].args.args if a.arg != "self"] == [],
+            "recipient_is_a_contract was unverifiable and cost the entitlement",
         ),
         (
-            "resolve_in_flight clears the entry either way",
-            "self.in_flight[key] = 0" in resolve,
-            "a settled withdrawal left on the books poisons later recoveries",
+            "the probe carries no value",
+            "emit_transfer" not in probe and "value=" not in probe,
+            "a probe that risks value reintroduces the problem in miniature",
         ),
         (
-            "resolve_in_flight restores only above the ledger",
-            "expected + amount" in resolve,
-            "restoring a delivered payout would create an unbacked claim",
+            "recipients are validated and classified",
+            "_clean_recipient" in fns
+            and "REASON_BAD_RECIPIENT" in code(fns["_clean_recipient"])
+            and "REASON_ZERO_RECIPIENT" in code(fns["_clean_recipient"]),
+            "a bare Address() raises unclassified; the zero address strands funds",
         ),
         (
-            "the unsafe withdraw_to is gone",
-            "withdraw_to" not in fns,
-            "pushing value at a caller-named address can destroy the entitlement",
+            "no balance-inference machinery remains",
+            all(n not in fns for n in ("resolve_in_flight", "in_flight_to", "solvency")),
+            "two designs inferred delivery from the balance and both were wrong",
         ),
         (
             "no __on_errored_message__ is claimed",
@@ -144,8 +150,8 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
         # 2. "complete the main app's payout flow with the owed balance and withdrawal methods"
         (
             "the payout views exist",
-            all(v in fns for v in ("owed_to", "in_flight_to", "solvency")),
-            "the app reads these to show what is owed",
+            all(v in fns for v in ("owed_to", "is_proven", "liabilities")),
+            "the app reads these to show what is owed and whether it can be taken",
         ),
     ]
 
@@ -159,11 +165,11 @@ def audit_app() -> list[tuple[str, bool, str]]:
     page = web / "pages" / "Payouts.tsx"
     return [
         ("app reads owed_to", "'owed_to'" in oracle, ""),
-        ("app reads in_flight_to", "'in_flight_to'" in oracle, ""),
-        ("app reads solvency", "'solvency'" in oracle, ""),
+        ("app reads is_proven", "'is_proven'" in oracle, ""),
+        ("app reads liabilities", "'liabilities'" in oracle, ""),
         ("app can assign_to", "'assign_to'" in wallet, ""),
         ("app can withdraw", "'withdraw'" in wallet, ""),
-        ("app can resolve_in_flight", "'resolve_in_flight'" in wallet, ""),
+        ("app gates withdraw on the proof", "proven" in (web / "pages" / "Payouts.tsx").read_text(encoding="utf-8"), ""),
         ("the payouts page exists", page.exists(), ""),
         ("the payouts route is wired", 'path="payouts"' in app, ""),
     ]
@@ -201,7 +207,8 @@ def main() -> int:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     known_external = {
         "emit_transfer", "connect", "get", "pytest", "npm", "curl", "python",
-        "node", "ast", "dump", "view", "call", "withdraw_to",
+        "node", "ast", "dump", "view", "call", "withdraw_to", "credent_probe",
+        "normalizeAddress", "resolve_in_flight", "solvency", "in_flight_to",
     }
     named = sorted(set(re.findall(r"`([a-z_][a-z0-9_]*)\(\)?[^`]*`", readme)))
     unknown = [n for n in named if n not in fns and n not in known_external]

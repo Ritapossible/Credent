@@ -88,6 +88,13 @@ jobs:
       - name: Presentation and decoding helpers
         run: npm run units
 
+      # The site decodes contract views out of `unknown`, so a field the
+      # contract stops returning is invisible to the typechecker. That shipped
+      # once: a payout page branched on `solvency().backed` after the contract
+      # dropped it, and told every visitor their value had already left.
+      - name: Site checks that need no chain
+        run: npm run uicheck
+
       # Built without VITE_CONTRACT_ADDRESS on purpose: an unconfigured build is
       # a state the site is required to render rather than crash on, and this is
       # the only place that path is exercised automatically.

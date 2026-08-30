@@ -25,20 +25,20 @@ import { readFileSync } from 'node:fs'
 
 type Target = { net: string; rpc: string; address: string; file: string }
 
-const DEPLOYMENTS: Target[] = [
-  {
-    net: 'studionet',
-    rpc: 'https://studio.genlayer.com/api',
-    address: '0x395A0E1b81778b69Dd128183412C1738BddD1E4F',
-    file: 'reputation_oracle.py',
-  },
-  {
-    net: 'testnet-bradbury',
-    rpc: 'https://rpc-bradbury.genlayer.com',
-    address: '0xeeAa76953b8E6e83CD83633A0E06f57BDC653155',
-    file: 'reputation_oracle.min.py',
-  },
-]
+/**
+ * Read from `deployments.json` rather than repeated here.
+ *
+ * These addresses lived in three files once and drifted apart; a review then
+ * read the stale pair as proof a deployed fix was missing. One file is the
+ * only arrangement in which that cannot recur.
+ */
+const MANIFEST = JSON.parse(
+  readFileSync(new URL('../../deployments.json', import.meta.url), 'utf8'),
+) as Record<string, { address: string; rpc: string; artifact: string }>
+
+const DEPLOYMENTS: Target[] = Object.entries(MANIFEST)
+  .filter(([net]) => !net.startsWith('_'))
+  .map(([net, spec]) => ({ net, rpc: spec.rpc, address: spec.address, file: spec.artifact }))
 
 const sha256 = (buf: Buffer): string => createHash('sha256').update(buf).digest('hex')
 

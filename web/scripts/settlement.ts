@@ -211,6 +211,46 @@ if (!Number.isFinite(SETTLE_TIMEOUT_MS) || SETTLE_TIMEOUT_MS <= 0) {
  * minutes of silence is indistinguishable from a hang, and someone watching this
  * needs to be able to tell those apart.
  */
+/**
+ * Have a recipient contract prove it can receive, and wait until it has.
+ *
+ * `withdraw` refuses an unproven address, so this is a required step rather
+ * than a nicety. The oracle emits a zero-value call to the recipient, which
+ * answers by calling back -- nothing is at stake if it cannot, which is the
+ * point of proving before paying instead of paying and hoping.
+ */
+async function proveRecipient(client: Role, oracle: string, recipient: string): Promise<boolean> {
+  if ((await view(oracle, 'is_proven', [recipient])) === true) return true
+  await send(client, recipient, 'prove', [])
+  const proven = await settleTo(
+    async () => ((await view(oracle, 'is_proven', [recipient])) === true ? 1n : 0n),
+    (value) => value === 1n,
+  ).catch(() => 0n)
+  return proven === 1n
+}
+
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
+
+/**
+ * Run a call that must be rejected, and say whether it was rejected for the
+ * stated reason.
+ *
+ * A guard that is never exercised is a comment. These calls are supposed to
+ * fail, so `send` throwing is the pass condition -- and the reason is checked
+ * too, because "it failed" is also what a typo in the method name looks like.
+ */
+async function expectRejection(act: () => Promise<Sent>, reason: string): Promise<boolean> {
+  try {
+    await act()
+    return false
+  } catch (err) {
+    const text = err instanceof Error ? err.message : String(err)
+    if (text.includes(reason)) return true
+    console.log(`    rejected, but for a different reason: ${text.slice(0, 120)}`)
+    return false
+  }
+}
+
 async function settleTo(
   read: (() => Promise<bigint>) | string,
   settled: (value: bigint) => boolean,
@@ -991,6 +1031,10 @@ async function main(): Promise<void> {
   const total3 = required3 + overpay + reclaimed3
   const covered = reclaimed3 > 0n ? 'release, refund and bond reclaim' : 'release and refund'
   console.log(`\n  owed from ${covered}: ${gen(total3)}`)
+  check(
+    await proveRecipient(client, oracle, claimant),
+    `claimant proved it can receive`,
+  )
   await withdrawal(
     `withdraw: ${covered} all leave the contract`,
     oracle,
@@ -1126,6 +1170,13 @@ async function main(): Promise<void> {
       "the wallet's entitlement is spent, not duplicated",
     )
 
+    // Against `strict`, not `oracle`: the sink is a recipient of the
+    // strict-policy oracle, and proving it to the wrong one would leave the
+    // withdrawal below refused for a reason that looks like a contract bug.
+    check(
+      await proveRecipient(client, strict, sink),
+      `sink proved it can receive`,
+    )
     await withdrawal(
       'withdraw: the contract collects the collateral the wallet assigned it',
       strict,
@@ -1174,6 +1225,10 @@ async function main(): Promise<void> {
     console.log(`  recipient ${walletSink}`)
 
     await send(client, oracle, 'assign_to', [addressArg(walletSink, 'assign_to.recipient')])
+    check(
+      await proveRecipient(client, oracle, walletSink),
+      `walletSink proved it can receive`,
+    )
     await withdrawal(
       'assign_to + withdraw: the wallet takes out its refund and reclaimed bond',
       oracle,
@@ -1183,56 +1238,38 @@ async function main(): Promise<void> {
     )
   }
 
-  // --- the recovery path, exercised rather than described -----------------
+  // --- the safety property, exercised rather than described ----------------
   //
-  // `withdraw` emits a transfer it cannot observe, so it parks the entitlement
-  // in `in_flight`. Something has to settle that, and until this ran, nothing
-  // did on-chain: the mechanism was unit-tested and never called against a live
-  // contract.
+  // `withdraw` emits value and cannot observe whether it arrived, so this
+  // contract does not try to find out afterwards -- it refuses to emit at an
+  // address that has not proven, by running code, that it can receive.
   //
-  // The claimant has just withdrawn successfully, so its entry is the
-  // delivered case: the value really did leave, and resolving must clear the
-  // entry rather than restore it. That direction is the one that matters. An
-  // entry that is only ever restored or left alone accumulates, obligations
-  // grow past the balance, and every later owner's recovery is refused as
-  // unbacked -- which is exactly what a first version of this did.
-  console.log(`\n=== resolving the claimant's in-flight entry ===`)
-  const inFlightBefore = asBig(await view(oracle, 'in_flight_to', [claimant]), 'in_flight_to')
-  console.log(`  in_flight_to(claimant) ${gen(inFlightBefore)}`)
-  check(inFlightBefore > 0n, 'a successful withdrawal left an entry to settle')
+  // Two earlier designs tried to recover after the fact and both were wrong.
+  // One compared the balance to obligations, ignoring that the balance also
+  // holds collateral and bonds. The other used a `total_in - total_out` ledger
+  // that a single untracked transfer into the contract silently broke,
+  // crediting a delivered payout a second time. Proving first removes the
+  // question rather than answering it badly, so what is checked here is that
+  // the refusal actually holds on-chain.
+  console.log(`\n=== the payout guard ===`)
 
-  if (inFlightBefore > 0n) {
-    const solvencyBefore = await view(oracle, 'solvency', [])
-    console.log(`  expected balance before ${gen(asBig(field(solvencyBefore, 'expected'), 'expected'))}`)
+  const walletProven = await view(oracle, 'is_proven', [client.address])
+  check(walletProven === false, 'an ordinary wallet is not a proven recipient')
 
-    await send(client, claimant, 'settle', [])
+  const refused = await expectRejection(
+    () => send(client, oracle, 'withdraw', []),
+    'recipient_has_not_proven',
+  )
+  check(refused, 'withdraw from an unproven wallet is refused, not attempted')
 
-    const inFlightAfter = await settleTo(
-      async () => asBig(await view(oracle, 'in_flight_to', [claimant]), 'in_flight_to'),
-      (value) => value === 0n,
-    ).catch(() => inFlightBefore)
-    const owedAfter = asBig(await view(oracle, 'owed_to', [claimant]), 'owed_to')
-    const solvencyAfter = await view(oracle, 'solvency', [])
+  const badAddress = await expectRejection(
+    () => send(client, oracle, 'assign_to', [addressArg(ZERO_ADDRESS, 'assign_to.recipient')]),
+    'zero_address',
+  )
+  check(badAddress, 'assigning to the zero address is refused')
 
-    console.log(`  in_flight_to(claimant) ${gen(inFlightBefore)} -> ${gen(inFlightAfter)}`)
-    console.log(`  expected balance after  ${gen(asBig(field(solvencyAfter, 'expected'), 'expected'))}`)
-
-    check(inFlightAfter === 0n, 'the settled entry was cleared')
-    check(
-      owedAfter === 0n,
-      `a delivered payout was not restored as a new entitlement (owed ${gen(owedAfter)})`,
-    )
-    // The *delta*, not the total. Another recipient on this oracle has its own
-    // unresolved entry -- correctly, since nothing has settled it yet -- so
-    // asserting the global total is zero asserts something this step does not
-    // do, and failed on a run where the contract behaved perfectly.
-    const inFlightTotalBefore = asBig(field(solvencyBefore, 'total_in_flight'), 'total_in_flight')
-    const inFlightTotalAfter = asBig(field(solvencyAfter, 'total_in_flight'), 'total_in_flight')
-    check(
-      inFlightTotalBefore - inFlightTotalAfter === inFlightBefore,
-      `obligations fell by exactly the settled entry (${gen(inFlightTotalBefore - inFlightTotalAfter)})`,
-    )
-  }
+  const claimantProven = await view(oracle, 'is_proven', [claimant])
+  check(claimantProven === true, 'the claimant contract proved it can receive')
 
   console.log(`\ncontract holds ${gen(await balanceOf(oracle))} at the end`)
   console.log(`oracle ${oracle}`)

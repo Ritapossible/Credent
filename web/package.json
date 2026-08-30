@@ -14,7 +14,8 @@
     "settlement": "esbuild scripts/settlement.ts --bundle --format=esm --platform=node --packages=external --define:import.meta.env.VITE_CONTRACT_ADDRESS=process.env.VITE_CONTRACT_ADDRESS --define:import.meta.env.VITE_GENLAYER_NETWORK=process.env.VITE_GENLAYER_NETWORK --outfile=.tmp/settlement.mjs && node .tmp/settlement.mjs",
     "payprobe": "esbuild scripts/payprobe.ts --bundle --format=esm --platform=node --packages=external --outfile=.tmp/payprobe.mjs && cp scripts/payprobe.py .tmp/payprobe.py && node .tmp/payprobe.mjs",
     "seed": "esbuild scripts/seed.ts --bundle --format=esm --platform=node --packages=external --define:import.meta.env.VITE_CONTRACT_ADDRESS=process.env.VITE_CONTRACT_ADDRESS --define:import.meta.env.VITE_GENLAYER_NETWORK=process.env.VITE_GENLAYER_NETWORK --outfile=.tmp/seed.mjs && node .tmp/seed.mjs",
-    "verify-deployment": "esbuild scripts/verifyDeployment.ts --bundle --format=esm --platform=node --packages=external --outfile=.tmp/verifyDeployment.mjs && node .tmp/verifyDeployment.mjs"
+    "verify-deployment": "esbuild scripts/verifyDeployment.ts --bundle --format=esm --platform=node --packages=external --outfile=.tmp/verifyDeployment.mjs && node .tmp/verifyDeployment.mjs",
+    "uicheck": "esbuild scripts/uicheck.ts --bundle --format=esm --platform=node --outfile=.tmp/uicheck.mjs && node .tmp/uicheck.mjs"
   },
   "dependencies": {
     "genlayer-js": "^1.2.0",

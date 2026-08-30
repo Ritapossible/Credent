@@ -152,8 +152,10 @@ REASON_NOT_CLIENT = "sender_not_client"
 REASON_NOTHING_OWED = "nothing_owed"
 REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
 REASON_SELF_PAYOUT = "recipient_is_this_contract"
-REASON_NOTHING_IN_FLIGHT = "nothing_in_flight"
-REASON_VALUE_ALREADY_LEFT = "value_already_left_the_contract"
+REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
+REASON_ALREADY_PROVEN = "recipient_already_proven"
+REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
+REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
@@ -176,8 +178,10 @@ REASONS = frozenset({
     REASON_NOTHING_OWED,
     REASON_WITHDRAW_NEEDS_CONTRACT,
     REASON_SELF_PAYOUT,
-    REASON_NOTHING_IN_FLIGHT,
-    REASON_VALUE_ALREADY_LEFT,
+    REASON_RECIPIENT_UNPROVEN,
+    REASON_ALREADY_PROVEN,
+    REASON_BAD_RECIPIENT,
+    REASON_ZERO_RECIPIENT,
 })
 
 

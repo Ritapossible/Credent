@@ -116,17 +116,23 @@ class Claimant(gl.Contract):
         )
 
     @gl.public.write
-    def settle(self) -> None:
-        """Ask the oracle to settle this contract's unconfirmed withdrawal.
+    def prove(self) -> None:
+        """Ask the oracle to verify this contract can receive.
 
-        `withdraw` cannot see whether its transfer arrived, so it parks the
-        entitlement. This closes the loop: the oracle compares its own balance
-        against its obligations and either restores the entitlement or writes
-        the entry off. A recipient that never calls this leaves a settled
-        withdrawal on the oracle's books, which is not neutral -- it inflates
-        obligations and makes the next owner's recovery look unbacked.
+        The oracle answers with a zero-value call to `credent_probe` below.
+        Nothing is at stake: a target that cannot answer simply never becomes
+        eligible to withdraw.
         """
-        gl.get_contract_at(self.oracle).emit(on="accepted").resolve_in_flight()
+        gl.get_contract_at(self.oracle).emit(on="accepted").prove_recipient()
+
+    @gl.public.write
+    def credent_probe(self) -> None:
+        """The oracle's probe. Answering it is the proof.
+
+        A wallet cannot execute this method, which is exactly why completing the
+        handshake demonstrates what an assertion could not.
+        """
+        gl.get_contract_at(self.oracle).emit(on="accepted").confirm_recipient()
 
     @gl.public.write
     def claim(self) -> None:
@@ -140,4 +146,4 @@ class Claimant(gl.Contract):
         `on="finalized"` was measured on Bradbury reaching FINALIZED with an
         empty `triggered_transactions` and no value moved.
         """
-        gl.get_contract_at(self.oracle).emit(on="accepted").withdraw(True)
+        gl.get_contract_at(self.oracle).emit(on="accepted").withdraw()

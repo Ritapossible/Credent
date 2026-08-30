@@ -635,28 +635,15 @@ export function assignTo(account: string, recipient: string): Promise<WriteResul
 }
 
 /**
- * Pull your own entitlement out of the contract. Contracts only.
+ * Pull your own entitlement out of the contract.
  *
- * The only call that emits value, and it pays `gl.message.sender_address` --
- * so it delivers only when the caller is a contract that can receive. The flag
- * is the caller asserting that about itself; the contract cannot check it.
- * A wallet should use `assignTo` instead.
+ * The only call that emits value. Refused unless the caller has answered the
+ * contract's probe, so a browser wallet can never reach the delivering path --
+ * it should use `assignTo` instead. There is no flag: the previous signature
+ * took an unverifiable claim about the caller's own address.
  */
 export function withdraw(account: string): Promise<WriteResult> {
-  return submit(account, 'withdraw', [true])
-}
-
-/**
- * Settle a withdrawal whose outcome the contract could not observe.
- *
- * Decides both ways and clears the entry either way: the entitlement is
- * restored if the value never left, and written off if it did. Writing off is
- * not a loss this call causes -- the value has already gone -- it is what stops
- * a settled withdrawal sitting on the books and making every later owner's
- * recovery look unbacked.
- */
-export function resolveInFlight(account: string): Promise<WriteResult> {
-  return submit(account, 'resolve_in_flight', [])
+  return submit(account, 'withdraw', [])
 }
 
 export function reclaimBond(account: string, attestationId: number): Promise<WriteResult> {
