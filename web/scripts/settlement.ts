@@ -423,7 +423,7 @@ async function withdrawal(
   act: () => Promise<Sent>,
   // Whose entitlement is being spent. The same address as the recipient when a
   // contract withdraws its own credit, and a *wallet* when that wallet uses
-  // `withdraw_to` to send its credit to a contract it names - the case that
+  // `assign_to` to hand its credit to a contract, which then withdraws - the
   // exists because a wallet cannot receive at all, so its entitlement would
   // otherwise be recorded correctly and be immovable.
   owner: string = claimant,
@@ -1016,7 +1016,7 @@ async function main(): Promise<void> {
   // contract credits are ordinarily wallets. `withdraw` pays
   // `gl.message.sender_address`, so a wallet calling it achieves nothing:
   // `emit_transfer` does not credit an externally-owned account. Without
-  // `withdraw_to` a wallet's entitlement is accounted for, visible through
+  // `assign_to` a wallet's entitlement is accounted for, visible through
   // `owed_to`, and permanently immobile - the same settlement defect the review
   // caught, moved one step down the pipe.
   const fourth = `settlement-forfeit-${Date.now()}`
@@ -1063,6 +1063,20 @@ async function main(): Promise<void> {
     bond4,
   )
 
+  // Polled, not read once. `send` returns when the attestation is ACCEPTED, and
+  // on bradbury the collateral settlement it performs becomes readable a beat
+  // later -- so an immediate read returns `held`, the pre-grade state, and looks
+  // exactly like a grade that never happened. It is the same read-after-write
+  // lag the entitlement checks already poll around; this path was the one that
+  // did not, and it reported a working contract as broken.
+  await settleTo(
+    async () => {
+      const seen = String(field(await view(strict, 'get_engagement', [fourth]), 'collateral_state'))
+      return seen === 'held' ? 0n : 1n
+    },
+    (graded) => graded === 1n,
+  ).catch(() => 0n)
+
   const engagement4 = await view(strict, 'get_engagement', [fourth])
   const state4 = String(field(engagement4, 'collateral_state'))
   const held4 = asBig(field(engagement4, 'collateral'), 'get_engagement.collateral')
@@ -1098,18 +1112,26 @@ async function main(): Promise<void> {
     if (!sink) throw new Error('sink claimant deploy returned no address')
     console.log(`  recipient ${sink}`)
 
+    // Two steps, and the split is the fix. The wallet *assigns* its
+    // entitlement, which moves no value and so cannot fail; the contract then
+    // withdraws for itself, which is the only call that emits. The earlier
+    // design collapsed these into one method that pushed value at an address
+    // the contract could not verify -- and an undeliverable transfer is not
+    // refunded, so that method could destroy the entitlement it was moving.
+    await send(client, strict, 'assign_to', [addressArg(sink, 'assign_to.recipient')])
+    const assigned = asBig(await view(strict, 'owed_to', [sink]), 'owed_to')
+    check(assigned === held4, `the entitlement moved to the contract (${gen(assigned)})`)
+    check(
+      asBig(await view(strict, 'owed_to', [client.address]), 'owed_to') === 0n,
+      "the wallet's entitlement is spent, not duplicated",
+    )
+
     await withdrawal(
-      'withdraw_to: a wallet moves its own claimed collateral to a contract',
+      'withdraw: the contract collects the collateral the wallet assigned it',
       strict,
       sink,
       held4,
-      () =>
-        send(client, strict, 'withdraw_to', [
-          addressArg(sink, 'withdraw_to.recipient'),
-          true,
-        ]),
-      // The entitlement belongs to the wallet; the money lands at the contract.
-      client.address,
+      () => send(client, sink, 'claim', []),
     )
   }
 
@@ -1119,7 +1141,7 @@ async function main(): Promise<void> {
   // stuck in the contract. Release leaves in engagement three, taken out by the
   // contract provider. The other two were credited to the **client's wallet**
   // in engagement two - the attest overpayment and the bond the grade did not
-  // slash - and nothing took them out, because until `withdraw_to` existed
+  // slash - and nothing took them out, because until `assign_to` existed
   // nothing could.
   //
   // This is deliberately not folded into engagement three's withdrawal. That
@@ -1151,17 +1173,13 @@ async function main(): Promise<void> {
     if (!walletSink) throw new Error('wallet sink deploy returned no address')
     console.log(`  recipient ${walletSink}`)
 
+    await send(client, oracle, 'assign_to', [addressArg(walletSink, 'assign_to.recipient')])
     await withdrawal(
-      'withdraw_to: the wallet takes out its refund and its reclaimed bond',
+      'assign_to + withdraw: the wallet takes out its refund and reclaimed bond',
       oracle,
       walletSink,
       walletOwed,
-      () =>
-        send(client, oracle, 'withdraw_to', [
-          addressArg(walletSink, 'withdraw_to.recipient'),
-          true,
-        ]),
-      client.address,
+      () => send(client, walletSink, 'claim', []),
     )
   }
 

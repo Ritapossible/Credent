@@ -56,15 +56,18 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         "attestation_count",
         "bond_for_next",
         "collateral_quote",
-        # Settlement credits an entitlement; these two are the only methods that
-        # move value out, and `owed_to` is how a recipient reads what is due.
-        # `withdraw` pays the caller, so only a contract can use it; a wallet
-        # entitlement owner uses `withdraw_to` to send its own credit to a
-        # contract it names. Without the second, a wallet's credit is recorded
-        # correctly and can never be moved.
+        # Settlement credits an entitlement. `withdraw` is the only method that
+        # emits value, and it is for a contract collecting its own credit.
+        # `assign_to` is how anyone else moves an entitlement: it rewrites two
+        # storage slots and pushes nothing, so it cannot destroy money the way a
+        # transfer to an unverifiable address can. `reclaim_in_flight` takes back
+        # an entitlement whose payout never left, and refuses when the value did.
         "withdraw",
-        "withdraw_to",
+        "assign_to",
+        "reclaim_in_flight",
         "owed_to",
+        "in_flight_to",
+        "solvency",
     }
 )
 
@@ -426,30 +429,29 @@ def test_owed_key_helper_lowercases(artifact_source: str) -> None:
 
 
 def test_every_credited_party_can_move_its_credit(artifact_source: str) -> None:
-    """A wallet's entitlement must not be recorded correctly and then stranded.
+    """A wallet's entitlement must be movable, and moving it must not risk it.
 
-    `withdraw` pays `gl.message.sender_address`, so it can only ever deliver to
-    a contract that calls it itself. Every party this contract credits may be an
+    `withdraw` pays `gl.message.sender_address`, so only a contract collecting
+    its own credit can use it. Every other party this contract credits may be an
     ordinary wallet -- a provider taking back collateral, a client claiming
     forfeited collateral, an attester reclaiming a bond, anyone refunded an
-    overpayment -- and `emit_transfer` does not credit an externally-owned
-    account. With only `withdraw`, all five of those credits are unspendable.
+    overpayment -- and `emit_transfer` does not credit an externally owned
+    account.
 
-    That is a settlement defect rather than a missing convenience: the money is
-    accounted for, visible through `owed_to`, and permanently immobile. The
-    companion `withdraw_to` closes it by letting the entitlement's owner name a
-    contract to receive it.
+    The first version of this fix let a wallet name a recipient and pushed the
+    value there. That was wrong in a way worth stating: a transfer to an address
+    that cannot receive is not refunded. Measured on studionet, an
+    `on="accepted"` transfer to a wallet left the sending contract's balance,
+    arrived nowhere, and `__on_errored_message__` never fired. A method that
+    pushes value at an address it cannot verify can therefore destroy money.
 
-    What is asserted here is the property, not the wording:
+    `assign_to` moves the entitlement instead of the value. Asserted here as a
+    property rather than by name:
 
-    1. `withdraw_to` exists and is a public write.
-    2. It spends the **caller's** balance -- the key comes from
-       `sender_address` -- so naming a recipient decides where value goes and
-       never whose value it is.
-    3. It transfers to the **named** recipient, not to the sender; a copy of
-       `withdraw` that ignored its argument would pass every other check here.
-    4. It zeroes before transferring, so a transfer that cannot credit is not
-       retryable into a drain.
+    1. it exists and is a public write;
+    2. it debits the **caller's** key, so a caller can only move its own credit;
+    3. it emits nothing at all -- the whole point, and the one line that would
+       silently reintroduce the hazard if it were added back.
     """
     tree = ast.parse(artifact_source)
     fns = {
@@ -458,57 +460,72 @@ def test_every_credited_party_can_move_its_credit(artifact_source: str) -> None:
         if isinstance(node, ast.FunctionDef)
     }
 
-    assert "withdraw_to" in fns, (
-        "withdraw_to is missing: every wallet this contract credits would be "
-        "unable to move its entitlement"
+    assert "assign_to" in fns, (
+        "assign_to is missing: every wallet this contract credits would be "
+        "unable to move its entitlement without risking it on a push transfer"
     )
-    fn = fns["withdraw_to"]
+    fn = fns["assign_to"]
 
     decorators = {ast.unparse(d) for d in fn.decorator_list}
     assert "gl.public.write" in decorators, (
-        f"withdraw_to must be a public write, got {decorators}"
+        f"assign_to must be a public write, got {decorators}"
     )
 
     body = ast.unparse(fn)
-
     assert "gl.message.sender_address" in body, (
-        "withdraw_to must key the entitlement by the caller, or it would let "
-        "one account spend another's credit"
+        "assign_to must debit the caller, or it would let one account move "
+        "another's entitlement"
     )
 
-    # The transfer target must be the parsed recipient. Naming `sender_address`
-    # inside the emit is the exact bug this method exists to avoid.
     emits = [
         node
         for node in ast.walk(fn)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "emit_transfer"
+        and node.func.attr in ("emit_transfer", "emit")
     ]
-    assert len(emits) == 1, f"expected exactly one emit_transfer, found {len(emits)}"
-    target = ast.unparse(emits[0].func.value)
-    assert "sender_address" not in target, (
-        f"withdraw_to transfers to the sender ({target}); it must transfer to "
-        "the recipient the caller named, or it is just withdraw again"
+    assert not emits, (
+        "assign_to pushes value; it must only rewrite storage. A transfer to an "
+        "address this contract cannot verify is not recoverable if it fails."
     )
 
-    # Zero before transferring, never after. Compared by source position of the
-    # statements themselves rather than by searching the unparsed text: the
-    # docstring above says "emit_transfer" too, and a check that matched it
-    # would pass whatever the code did.
-    zeroed = [
-        node.lineno
-        for node in ast.walk(fn)
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(t, ast.Subscript)
-            and isinstance(t.value, ast.Attribute)
-            and t.value.attr == "owed"
-            for t in node.targets
-        )
-    ]
-    assert zeroed, "withdraw_to never writes to self.owed"
-    assert max(zeroed) < emits[0].lineno, (
-        "withdraw_to must zero the entitlement before emitting the transfer, "
-        "or a transfer that cannot credit is retryable into a drain"
+
+def test_a_failed_payout_leaves_the_entitlement_recoverable(artifact_source: str) -> None:
+    """`withdraw` must not discard an entitlement it cannot confirm delivered.
+
+    It emits a transfer and cannot observe the result, so clearing `owed`
+    outright made an undeliverable payout unrecoverable. The entitlement now
+    moves to `in_flight`, and `reclaim_in_flight` restores it -- but only while
+    the contract still holds the money, checked against its own balance rather
+    than assumed.
+
+    Restoring unconditionally would be worse than the original bug: it would let
+    one owner reclaim a credit whose value has gone, paying them out of balance
+    that backs everybody else's entitlements. So the solvency comparison is part
+    of the property, not an implementation detail.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+
+    for name in ("withdraw", "reclaim_in_flight"):
+        assert name in fns, f"{name} is missing"
+
+    withdraw = ast.unparse(fns["withdraw"])
+    assert "self.in_flight[key]" in withdraw, (
+        "withdraw discards the entitlement instead of moving it to in_flight, "
+        "so a payout that never lands cannot be recovered"
+    )
+
+    reclaim = ast.unparse(fns["reclaim_in_flight"])
+    assert "_contract_balance()" in reclaim, (
+        "reclaim_in_flight does not consult the contract's balance, so it would "
+        "restore entitlements whose value has already left"
+    )
+    assert "total_owed" in reclaim and "total_in_flight" in reclaim, (
+        "reclaim_in_flight must weigh the restoration against every obligation, "
+        "not just its own"
     )

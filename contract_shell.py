@@ -245,6 +245,15 @@ class ReputationOracle(gl.Contract):
     # `TreeMap[Address, u256]` cannot be read back by an off-chain caller that
     # only has the string form.
     owed: TreeMap[str, u256]
+    # Value that `withdraw` has emitted but whose arrival this contract cannot
+    # observe. Held separately from `owed` so a payout that never lands is
+    # recoverable instead of simply gone. See `withdraw` and `reclaim_in_flight`.
+    in_flight: TreeMap[str, u256]
+    # Running totals of both maps, so solvency can be checked in constant time.
+    # Without them `reclaim_in_flight` would have to walk every entitlement to
+    # decide whether restoring one is backed by real balance.
+    total_owed: u256
+    total_in_flight: u256
 
     # Indexes.
     subject_atts: TreeMap[Address, DynArray[u256]]
@@ -311,6 +320,11 @@ class ReputationOracle(gl.Contract):
         self.p_collateral_ceiling_bp = collateral_ceiling_bp
         self.p_collateral_floor_bp = collateral_floor_bp
         self.p_collateral_forfeit_bp = collateral_forfeit_bp
+
+        # Plain `0`, never `u256(0)`: on this runner the integer aliases are
+        # `typing.Annotated[int, ...]`, so they annotate and do not call.
+        self.total_owed = 0
+        self.total_in_flight = 0
 
     def _policy(self) -> Policy:
         """Rebuild the in-memory policy from storage."""
@@ -782,6 +796,107 @@ class ReputationOracle(gl.Contract):
         # they are annotations and not callables -- the wrapping still reads
         # as correct and still parses, and raises a TypeError once live.
         self.owed[key] = total
+        self.total_owed = int(self.total_owed) + int(amount)
+
+    def _contract_balance(self) -> int:
+        """What this contract actually holds, as the chain sees it.
+
+        The number `reclaim_in_flight` is decided against. Read rather than
+        tracked, because a tracked figure is only as good as every path that
+        touches value, and this one is the ground truth those paths are checked
+        against.
+        """
+        return int(gl.get_contract_at(gl.message.contract_address).balance)
+
+    @gl.public.write
+    def assign_to(self, recipient: str) -> dict:
+        """Hand your entitlement to another address. Moves no value.
+
+        The safe half of the payout path, and the one a wallet should use.
+
+        `emit_transfer` does not credit an externally owned account, and a
+        transfer that cannot be delivered is not returned either -- measured on
+        studionet, an `on="accepted"` transfer to a wallet left this contract's
+        balance and arrived nowhere, and `__on_errored_message__` never fired.
+        So any method that pushes value at an address it cannot verify is a
+        method that can destroy money.
+
+        This one pushes nothing. It debits `owed[caller]` and credits
+        `owed[recipient]`, both pure storage, and the contract's balance does
+        not change. If the recipient turns out to be unable to collect, the
+        entitlement is still sitting there under its address, still readable
+        through `owed_to`, still assignable onward. Nothing is destroyed, which
+        is the property `withdraw` cannot offer.
+
+        Authorisation is preserved by construction: the debited key is
+        `gl.message.sender_address`, so the only entitlement a caller can move
+        is its own. Naming a recipient decides where it goes, never whose it is.
+        """
+        to = recipient if isinstance(recipient, Address) else Address(recipient)
+        if _owed_key(to) == _owed_key(gl.message.contract_address):
+            _fail(REASON_SELF_PAYOUT)
+
+        key = _owed_key(gl.message.sender_address)
+        if _owed_key(to) == key:
+            # A self-assignment is a no-op that would still emit a receipt
+            # implying something happened. Refuse rather than mislead.
+            _fail(REASON_SELF_PAYOUT)
+
+        current = self.owed.get(key)
+        amount = 0 if current is None else int(current)
+        if amount <= 0:
+            _fail(REASON_NOTHING_OWED)
+
+        self.owed[key] = 0
+        target = self.owed.get(_owed_key(to))
+        total = (0 if target is None else int(target)) + amount
+        if total > U256_MAX:
+            _fail("entitlement_overflow")
+        self.owed[_owed_key(to)] = total
+        # `total_owed` is unchanged: this moves an obligation, it does not
+        # create or discharge one.
+        return {"from": key, "to": _owed_key(to), "amount": amount}
+
+    @gl.public.write
+    def reclaim_in_flight(self) -> dict:
+        """Take back an entitlement whose payout never left this contract.
+
+        `withdraw` cannot observe whether its emitted transfer arrived, so it
+        does not pretend to: it moves the entitlement to `in_flight` and emits.
+        This is the other half. It restores `in_flight` to `owed`, but only when
+        the money is demonstrably still here.
+
+        The test is solvency, and it is exact rather than heuristic. Obligations
+        are `total_owed + total_in_flight` and do not change when `withdraw`
+        moves an amount between them. So:
+
+        * the transfer was never dispatched -- balance untouched, obligations
+          still fully backed, and the entitlement is restored;
+        * the transfer left, whether it arrived or was destroyed -- balance fell
+          by exactly that amount, obligations are no longer backed, and this
+          refuses with `value_already_left_the_contract`.
+
+        Refusing the second case is the point, not a limitation. Value that has
+        left cannot be conjured back by rewriting a ledger, and restoring the
+        entitlement anyway would hand its owner a claim on money belonging to
+        everyone else the contract owes.
+        """
+        key = _owed_key(gl.message.sender_address)
+        current = self.in_flight.get(key)
+        amount = 0 if current is None else int(current)
+        if amount <= 0:
+            _fail(REASON_NOTHING_IN_FLIGHT)
+
+        obligations = int(self.total_owed) + int(self.total_in_flight)
+        if self._contract_balance() < obligations:
+            _fail(REASON_VALUE_ALREADY_LEFT)
+
+        self.in_flight[key] = 0
+        self.total_in_flight = int(self.total_in_flight) - amount
+        owed_now = self.owed.get(key)
+        self.owed[key] = (0 if owed_now is None else int(owed_now)) + amount
+        self.total_owed = int(self.total_owed) + amount
+        return {"owner": key, "restored": amount}
 
     @gl.public.write
     def withdraw(self, recipient_is_a_contract: bool = False) -> dict:
@@ -820,7 +935,18 @@ class ReputationOracle(gl.Contract):
         if amount <= 0:
             _fail(REASON_NOTHING_OWED)
 
+        # Moved, not zeroed. Zeroing first is still required -- leaving the
+        # entitlement readable across the transfer would let a caller withdraw
+        # twice -- but discarding it outright makes an undeliverable payout
+        # unrecoverable, which is the defect this split fixes. The obligation
+        # survives in `in_flight`, and `reclaim_in_flight` returns it if the
+        # value never actually left. Totals move together, so the contract's
+        # obligations are unchanged by this step.
         self.owed[key] = 0
+        self.total_owed = int(self.total_owed) - amount
+        pending = self.in_flight.get(key)
+        self.in_flight[key] = (0 if pending is None else int(pending)) + amount
+        self.total_in_flight = int(self.total_in_flight) + amount
         # `on="accepted"`, not the SDK's safer-by-default `on="finalized"`.
         #
         # Measured on Bradbury: a transfer emitted `on="finalized"` is recorded
@@ -840,61 +966,39 @@ class ReputationOracle(gl.Contract):
         )
         return {"to": key, "amount": amount}
 
-    @gl.public.write
-    def withdraw_to(
-        self, recipient: str, recipient_is_a_contract: bool = False
-    ) -> dict:
-        """Send your own entitlement to a contract you name.
-
-        `withdraw` pays `gl.message.sender_address`, so it can only ever deliver
-        to a contract that calls it itself. Every party this contract credits
-        may be an ordinary wallet -- a provider taking back collateral, a client
-        claiming forfeited collateral, an attester reclaiming a bond, anyone
-        refunded an overpayment -- and a wallet cannot call `withdraw` to any
-        effect: `emit_transfer` does not credit an externally-owned account, so
-        the value would leave and arrive nowhere. Without this method a wallet's
-        credit is recorded correctly and can never be moved.
-
-        Authorisation is preserved by construction rather than by a check. The
-        entitlement is keyed by `gl.message.sender_address`, so the only balance
-        a caller can spend is its own; naming a different recipient decides
-        where that balance goes, never whose balance it is. A wallet therefore
-        assigns its own credit to a contract it controls, and nobody else's.
-
-        `recipient_is_a_contract` carries the same warning as `withdraw`: this
-        contract cannot verify it, the balance is zeroed before the transfer,
-        and being wrong loses the entitlement. It is refused by default so that
-        losing it takes deliberately passing `True`.
-
-        Paying this contract is refused outright. It would zero a real
-        entitlement and return the value to the pool it came from, which is
-        indistinguishable from a burn for the caller and unattributable for
-        everyone else.
-        """
-        if not isinstance(recipient_is_a_contract, bool):
-            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
-        if not recipient_is_a_contract:
-            _fail(REASON_WITHDRAW_NEEDS_CONTRACT)
-
-        to = recipient if isinstance(recipient, Address) else Address(recipient)
-        if _owed_key(to) == _owed_key(gl.message.contract_address):
-            _fail(REASON_SELF_PAYOUT)
-
-        key = _owed_key(gl.message.sender_address)
-        current = self.owed.get(key)
-        amount = 0 if current is None else int(current)
-        if amount <= 0:
-            _fail(REASON_NOTHING_OWED)
-
-        self.owed[key] = 0
-        # `on="accepted"` for the reason spelled out in `withdraw` above: a
-        # transfer emitted `on="finalized"` was measured on Bradbury to be
-        # recorded and never dispatched. This method runs no nondet block
-        # either, so an appeal re-runs a pure computation and agrees.
-        gl.get_contract_at(to).emit_transfer(value=amount, on="accepted")
-        return {"owner": key, "to": _owed_key(to), "amount": amount}
-
     # --- views --------------------------------------------------------------
+
+    @gl.public.view
+    def in_flight_to(self, recipient: str) -> int:
+        """An entitlement `withdraw` emitted but whose arrival is unobservable.
+
+        Non-zero here means a payout was attempted and this contract cannot tell
+        whether it landed. `reclaim_in_flight` resolves it: it restores the
+        entitlement if the money is still here, and refuses if it is not.
+        """
+        if not isinstance(recipient, str):
+            return 0
+        got = self.in_flight.get(recipient.lower())
+        return 0 if got is None else int(got)
+
+    @gl.public.view
+    def solvency(self) -> dict:
+        """What this contract holds against what it owes.
+
+        `backed` is the check `reclaim_in_flight` makes, exposed so it can be
+        read before calling rather than discovered by a refusal. It is false
+        exactly when value has left against an entitlement that was never
+        confirmed delivered.
+        """
+        obligations = int(self.total_owed) + int(self.total_in_flight)
+        held = self._contract_balance()
+        return {
+            "balance": held,
+            "total_owed": int(self.total_owed),
+            "total_in_flight": int(self.total_in_flight),
+            "obligations": obligations,
+            "backed": held >= obligations,
+        }
 
     @gl.public.view
     def owed_to(self, recipient: str) -> int:

@@ -152,6 +152,8 @@ REASON_NOT_CLIENT = "sender_not_client"
 REASON_NOTHING_OWED = "nothing_owed"
 REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
 REASON_SELF_PAYOUT = "recipient_is_this_contract"
+REASON_NOTHING_IN_FLIGHT = "nothing_in_flight"
+REASON_VALUE_ALREADY_LEFT = "value_already_left_the_contract"
 
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
@@ -174,6 +176,8 @@ REASONS = frozenset({
     REASON_NOTHING_OWED,
     REASON_WITHDRAW_NEEDS_CONTRACT,
     REASON_SELF_PAYOUT,
+    REASON_NOTHING_IN_FLIGHT,
+    REASON_VALUE_ALREADY_LEFT,
 })
 
 
@@ -860,6 +864,29 @@ def grades_agree(mine: dict, theirs: dict, policy: Policy) -> bool:
         # times too tight a bound.
         if abs(a - b) > (tol * scale) // 100:
             return False
+
+    # Numbers within tolerance is not agreement if they settle the money
+    # differently, and on their own they can.
+    #
+    # Both payouts are threshold functions of the numbers above, and the default
+    # tolerance is wide enough to straddle either threshold. `bond_outcome` turns
+    # on `substantiated < slash_floor`, a floor of 20 on a 0-100 scale against a
+    # tolerance of 20: a leader reporting 10 and a validator computing 30 are
+    # "within tolerance" while one confiscates the attester's bond and the other
+    # returns it. `collateral_outcome` turns on `fulfilled < collateral_forfeit_bp`,
+    # 2500bp against a tolerance of 2000bp: 1500 and 3500 agree by the numbers
+    # while one hands the provider's collateral to the client and the other hands
+    # it back.
+    #
+    # Tolerance exists because two models reading the same evidence will not land
+    # on the same integer, and that is fine as long as they land on the same side
+    # of every line that moves money. So the derived outcomes are compared too,
+    # and a pair that crosses a threshold is a disagreement no matter how close
+    # the numbers are.
+    if bond_outcome(mine, policy) != bond_outcome(theirs, policy):
+        return False
+    if collateral_outcome(mine, policy) != collateral_outcome(theirs, policy):
+        return False
     return True
 
 

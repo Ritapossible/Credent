@@ -19,9 +19,9 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on **GenLayer Studio** at `0x8B7B9bd431F61dE6c7B2294c57fd7a820777775c`,
+Deployed on **GenLayer Studio** at `0xBAE6e4F58e5aD4677ae0F4930E1DA169602fB76e`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
-and on **Testnet Bradbury** at `0x335A1b98729CA924014227E7B8238d76C8A09Cb3` — the
+and on **Testnet Bradbury** at `0x621aAdC6A53831697249fC1e7d7d6E74EDB74E87` — the
 minified artifact there, since bradbury refuses the full-size source on
 transaction pubdata rather than on gas.
 
@@ -139,13 +139,28 @@ dead end.** This section used to end by concluding the opposite, and the
 conclusion was wrong. It is left corrected rather than deleted, because the
 mistake is more instructive than the finding.
 
-Emitting value toward an **externally owned account** does not work. The message
-a contract emits becomes a call to the recipient; a wallet holds no code, the
-call errors with `Contract 0x… not found`, and `__on_errored_message__` refunds
-the value to the sender. The parent transaction still reports success, because
+Emitting value toward an **externally owned account** does not work, **and the
+value is not returned**. The message a contract emits becomes a call to the
+recipient; a wallet holds no code, and the call errors with
+`Contract 0x… not found`. The parent transaction still reports success, because
 from the contract's side emitting the message *is* the whole operation, so
 nothing surfaces until you read the triggered transaction or notice the balance
-never moved. Seven routes were tried -- both `on` modes, `gl.Account`,
+never moved.
+
+An earlier revision of this section said `__on_errored_message__` refunds the
+value. That was wrong, and it mattered, because it was the justification for a
+payout path that could destroy money. Measured on studionet with a probe that
+implements the handler explicitly:
+
+| `on` | sender's balance | handler fired | value returned |
+|---|---|---|---|
+| `accepted` | **0.200 → 0.190 GEN** | **no** (150s) | **no** |
+| `finalized` | 0.190 → 0.190 | no | n/a — never dispatched |
+
+So an `accepted` transfer at a wallet leaves the sender and arrives nowhere, and
+the documented refund hook does not run. There is no recovery after the fact;
+the only safe design is not to push value at an address the contract cannot
+verify. That is why the payout path below moves entitlements rather than value. Seven routes were tried -- both `on` modes, `gl.Account`,
 `gl.chain.Account`, and `wasi.gl_call({'PostMessage': …})` with three different
 calldata shapes -- and all seven end in the same place.
 
@@ -178,30 +193,64 @@ caller say it, and refusing unless they do, is not a proof -- it is the
 difference between a mistake anyone can make by accident and one you have to opt
 into.
 
-**`withdraw_to()` is the half that stops a wallet's credit from being stranded**,
-and it was missing for longer than it should have been. `withdraw()` pays
+**`assign_to()` is the half that stops a wallet's credit from being stranded**,
+and it replaced a worse answer to the same problem. `withdraw()` pays
 `gl.message.sender_address`, so it can only ever deliver to a contract that calls
 it itself. But four of the five parties this contract credits are ordinarily
 wallets -- a provider taking back collateral, a client claiming forfeited
 collateral, an attester reclaiming a bond, anyone refunded an overpayment -- and
 a wallet calling `withdraw()` achieves nothing. Their entitlement was recorded
-correctly, readable through `owed_to`, and permanently immobile: the settlement
-defect this section is about, moved one step down the pipe.
+correctly, readable through `owed_to`, and permanently immobile.
 
-`withdraw_to(recipient, recipient_is_a_contract)` lets an entitlement's owner
-send its own credit to a contract it names. Authorisation is preserved by
-construction rather than by a check: the entitlement is keyed by
-`gl.message.sender_address`, so naming a recipient decides *where* the value
-goes and never *whose* value it is. Paying this contract is refused outright,
-and the balance is zeroed before the transfer for the same reason `withdraw()`
-zeroes first.
+The first fix for that was a `withdraw_to(recipient, ...)` which pushed the value
+at an address the caller named. It is gone, and the reason is the table above: a
+transfer that cannot be delivered is **not** refunded. Handing a wallet a method
+that emits value at an unverifiable address replaced a stranded entitlement with
+a destroyed one, which is worse — the money was at least still in the contract
+before.
+
+`assign_to(recipient)` moves the **entitlement** instead. It debits
+`owed[caller]` and credits `owed[recipient]`, both pure storage, and the
+contract's balance does not change; there is no transfer to fail. If the
+recipient turns out to be unable to collect, the credit is still sitting under
+its address, readable and assignable onward. Authorisation is preserved by
+construction: the debited key is `gl.message.sender_address`, so naming a
+recipient decides *where* an entitlement goes and never *whose* it is.
+
+**The site carries this too, and did not before.** Every payout in the protocol
+lands in `owed_to(you)`, and the app could open engagements, grade them and
+settle them without ever showing a visitor the money. `/payouts` closes that: it
+reads `owed_to`, `in_flight_to` and `solvency` for the connected account, and
+offers the two ways out with the difference stated rather than implied —
+`assign_to` as the default, `withdraw` marked contracts-only, and
+`reclaim_in_flight` surfaced only when there is something unconfirmed to
+recover. When the value has already left, the page says the reclaim will be
+refused and why, instead of letting a visitor spend gas to find out.
 
 **What that means for an integrator.** A party that expects to be paid has to
 name something that can receive, and receiving means being a contract. It does
-not have to *be* one: a wallet can hold an entitlement and hand it to a contract
-with `withdraw_to`. What no party can do is take value at an externally owned
-address, on any network, because that is a property of `emit_transfer` rather
-than of this contract.
+not have to *be* one: a wallet holds its entitlement and assigns it to a contract
+with `assign_to`, which then calls `withdraw()` for itself. What no party can do
+is take value at an externally owned address, on any network, because that is a
+property of `emit_transfer` rather than of this contract.
+
+**`withdraw()` no longer discards what it cannot confirm.** It emits a transfer
+and cannot observe the result, so clearing `owed` outright made an undeliverable
+payout unrecoverable. The entitlement now moves to `in_flight`, and
+`reclaim_in_flight()` restores it — but only while the contract still holds the
+money, checked against its own balance rather than assumed:
+
+* the transfer was never dispatched — the balance is untouched, obligations are
+  still fully backed, and the entitlement comes back;
+* the transfer left, whether it arrived or was destroyed — the balance fell by
+  exactly that amount, and the call is refused with
+  `value_already_left_the_contract`.
+
+Refusing the second case is the design, not a shortfall. Value that has left
+cannot be conjured back by rewriting a ledger, and restoring the entitlement
+anyway would hand its owner a claim on the balance backing everybody else. The
+`solvency()` view reports that comparison so a caller can see which case it is
+in before spending gas to find out.
 `web/scripts/claimant.py` is the smallest one that works: it accepts an
 engagement as the provider (forwarding its own collateral, so the oracle sees
 the contract as the provider), implements `__receive__`, and calls `withdraw`.
@@ -221,7 +270,7 @@ entitlement to the wei, and then withdraws twice: once as a contract collecting
 its own credit, and once as a *wallet* moving its credit to a contract it names.
 It passes on **studionet and on testnet-bradbury**, every check on both. The
 *number* of checks moves a little between runs -- 29 on the studionet run quoted
-below, 27 on the bradbury one -- because engagement three's bond reclaim only
+below, 31 on the bradbury one -- because engagement three's bond reclaim only
 happens when the grade leaves that bond releasable. Nothing is skipped silently:
 the withdrawal's label and total change with it, and the bond-reclaim payout is
 proven separately either way, further down.
@@ -265,8 +314,8 @@ alone and prints `0.925 GEN` under a label that says so. Which is why proving
   owed_to(client wallet) 0.06 GEN
     ok   the wallet holds its refund plus its reclaimed bond (0.06 GEN)
 
-withdraw_to: the wallet takes out its refund and its reclaimed bond
-  contract  1.86 GEN -> 1.8 GEN  (-0.06 GEN)
+assign_to + withdraw: the wallet takes out its refund and reclaimed bond
+  contract  1.87 GEN -> 1.81 GEN  (-0.06 GEN)
   claimant  0 GEN    -> 0.06 GEN  (+0.06 GEN)
   owed_to   0.06 GEN -> 0 GEN
   ok   the contract paid out exactly 0.06 GEN
@@ -274,29 +323,34 @@ withdraw_to: the wallet takes out its refund and its reclaimed bond
 ```
 
 That bond was reclaimed in engagement two, by the client, whose account is an
-ordinary wallet. Every run reaches it, and before `withdraw_to` nothing could
+ordinary wallet. Every run reaches it, and before `assign_to` nothing could
 have moved it.
 
 And the fourth engagement is the one that answers *whose* money can move. The
-collateral is forfeited by the grade, claimed by the client -- an ordinary
-wallet, not a contract -- and then moved out by that wallet with `withdraw_to`:
+collateral is forfeited by the grade and claimed by the client -- an ordinary
+wallet, not a contract -- which then assigns the entitlement to a contract that
+collects it. Two calls, and the split is the safety property: the first moves no
+value and so cannot fail, the second is made by the party that can actually
+receive.
 
 ```text
 claim_collateral: the client takes collateral the grade forfeited
   owed 0.875 GEN to client wallet 0xaA34e14a0e0B2fdD8Ad10F06bC0907fA0b1D02Bd
   ok   the entitlement rose by exactly 0.875 GEN
+  ok   the entitlement moved to the contract (0.875 GEN)
+  ok   the wallet's entitlement is spent, not duplicated
 
-withdraw_to: a wallet moves its own claimed collateral to a contract
+withdraw: the contract collects the collateral the wallet assigned it
   contract  0.885 GEN -> 0.01 GEN   (-0.875 GEN)
   claimant  0 GEN     -> 0.875 GEN  (+0.875 GEN)
   owed_to   0.875 GEN -> 0 GEN
-  ok   the claimant's balance rose (+0.875 GEN)
   ok   the contract paid out exactly 0.875 GEN
   ok   the entitlement was zeroed
 ```
 
-Without `withdraw_to` that 0.875 GEN stays in the contract for good, and
-`owed_to` reports it accurately forever.
+Without `assign_to` that 0.875 GEN stays in the contract for good, and `owed_to`
+reports it accurately forever. With the `withdraw_to` that preceded it, the
+wallet could have destroyed it by naming an address that could not receive.
 
 One timing note for anyone re-running this. `attest` makes an LLM call inside
 the consensus round, and a contract-emitted one adds a hop; on bradbury it has
@@ -315,16 +369,16 @@ the top of this file.
 
 | Network | Oracle (test policy) | Claimant | Strict oracle (100% forfeit) | Wallet's recipient |
 |---|---|---|---|---|
-| Studionet | `0x12464272DBA6b5A2eA6eD444dAe2f66217a615E9` | `0xcb0B8E2C6d5173f928Dd5B3025Aa6586934060a0` | `0x39f6dDfEB821EA4413c60B1a534c7b393842e6a0` | `0xa0F2Dc1Ac3563cE5e8B1fd454E5378D88624fC0A` |
-| Testnet Bradbury | `0x6A2096C655A4C2784620e9E2BCcF3713ec48fD34` | `0x7a6B56D8656671C743DBB33C23E3cBB575dF7bb9` | `0x63210cFA12a1d84c42AF8560C081ea97ff272d65` | `0xAc7C9E09B5001C1c6f3a64e083614A637B8Ee008` |
+| Studionet | `0x9A666f3CE597E74F26609fCADc4A8255B4F4B89B` | `0x675C21011c3DF6489F574d6C23668c908C384c28` | `0xEEc554e2CAAD4d84f287dB4085FC6BA5612D26e4` | `0x880a52c63DC86Af30005ce892c73c97481a9226f` |
+| Testnet Bradbury | `0xbf736B4B539483D69DFbEEF14696146C4c01FDEE` | `0xc90705E6ba774bAee58C46961DE0b6c8Aa982cCA` | `0x5aFE7771AC30f2B55aFe84AfB5D3592EBB1fF280` | `0x4FD6589D234ea793A7B7b247C586B0C8b8c6a2Cf` |
 
 The wallet's own refund and reclaimed bond went to
-`0xc81EAf9a00401D634bC1cefbeC39cBEA4dB9bC95` on studionet and
-`0x45943C977A7CBAde01C6e08112fDa09C79b92a36` on bradbury.
+`0x5abD46d9733462110829008c7DDc2EE2a8302E71` on studionet and
+`0x6c956E0701A4f6EC8077Fe470A043f866A4cc6aB` on bradbury.
 
 The last two columns are the fourth engagement: the oracle whose forfeit
 threshold is raised so `claim_collateral` is reachable, and the contract the
-client's **wallet** sent its claimed collateral to with `withdraw_to`.
+client's **wallet** assigned its claimed collateral to.
 
 
 ```text
@@ -413,11 +467,11 @@ not.
 
 `release_collateral`, `claim_collateral`, the acceptance refund and
 `reclaim_bond` now credit an entitlement, which is pure storage and cannot fail,
-and `withdraw()`/`withdraw_to()` move the value in a separate call the recipient
+and `withdraw()` moves the value in a separate call the recipient
 makes. The *recipient* must be a contract, because that is the only kind of
 address this runner credits — `web/scripts/claimant.py` is the sixty-line
 reference. The *entitlement owner* need not be: a wallet holds its credit and
-hands it to a contract it names with `withdraw_to`, which is what stops the four
+assigns it to a contract with `assign_to`, which is what stops the four
 wallet-facing payouts from being recorded correctly and left immobile. Run
 `npm run settlement` to watch a contract's balance fall by exactly what the
 recipient's rises by, on both counts.
@@ -441,14 +495,14 @@ two hostnames, not two chains, so there is one testnet here rather than two.
 Localnet is a loopback node and was never exercised; nothing in this repository
 depends on its behaviour, and a claim about it would be a guess.
 
-The studionet `accepted` row is the sharpest version of the hazard. The probe
-holds no `__on_errored_message__`, and its balance fell by exactly the amount
-emitted while the recipient's did not rise -- so the value did not bounce, it
-simply did not arrive. This contract does implement that handler, which is why
-a failed payout here refunds rather than burns; a contract written without one
-loses the money. Naming a network would have been
+The studionet `accepted` row is the sharpest version of the hazard: the sender's
+balance fell by exactly the amount emitted while the recipient's did not rise, so
+the value did not bounce, it simply did not arrive. It behaves that way whether
+or not the sender implements `__on_errored_message__` -- the handler is not
+called for this failure at all, which is why this contract does not rely on one.
+Naming a network would have been
 the wrong fix. The right one was to stop requiring a wallet to receive at all —
-settlement credits, and value moves contract to contract, with `withdraw_to` as
+settlement credits, and value moves contract to contract, with `assign_to` as
 the bridge that lets a wallet direct its own credit into one. That is proven
 with balances on studionet **and** on testnet-bradbury, which is the closest
 thing to "a target network where settlement completes" that this platform

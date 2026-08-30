@@ -526,6 +526,48 @@ export async function collateralQuote(provider: string, stake: bigint): Promise<
   }
 }
 
+/** What the contract owes an address and has not yet paid out. */
+export async function owedTo(recipient: string): Promise<bigint> {
+  return scalar(await call('owed_to', [recipient]), 'owed_to')
+}
+
+/**
+ * An entitlement `withdraw` emitted but whose arrival the contract cannot see.
+ *
+ * Non-zero means a payout was attempted and its outcome is unknown to the
+ * chain. `reclaim_in_flight` settles it: the entitlement comes back if the
+ * money is still in the contract, and the call is refused if it is not.
+ */
+export async function inFlightTo(recipient: string): Promise<bigint> {
+  return scalar(await call('in_flight_to', [recipient]), 'in_flight_to')
+}
+
+export interface Solvency {
+  balance: bigint
+  totalOwed: bigint
+  totalInFlight: bigint
+  obligations: bigint
+  /** False exactly when value has left against an unconfirmed entitlement. */
+  backed: boolean
+}
+
+/**
+ * What the contract holds against what it owes.
+ *
+ * Read before offering `reclaim_in_flight` so the page can say whether it will
+ * work, rather than letting a user discover a refusal.
+ */
+export async function solvency(): Promise<Solvency> {
+  const source = asDict(await call('solvency', []), 'solvency')
+  return {
+    balance: big(source, 'balance', 'solvency'),
+    totalOwed: big(source, 'total_owed', 'solvency'),
+    totalInFlight: big(source, 'total_in_flight', 'solvency'),
+    obligations: big(source, 'obligations', 'solvency'),
+    backed: source.backed === true,
+  }
+}
+
 /** What the next attestation from this attester about this subject would cost. */
 export async function bondForNext(attester: string, subject: string): Promise<bigint> {
   const raw = await call('bond_for_next', [

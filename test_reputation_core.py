@@ -1086,3 +1086,92 @@ class TestReasonCodes:
             if name.startswith("REASON_") and isinstance(value, str)
         ]
         assert len(declared) == len(set(declared))
+
+
+class TestAgreementPreservesTheMoneyOutcome:
+    """Two grades within tolerance must settle the money the same way.
+
+    `grades_agree` allows the three numbers to differ, and has to: two models
+    reading the same evidence do not land on the same integer, and demanding it
+    would fail every consensus round. But both payouts are *threshold* functions
+    of those numbers, and the default tolerance is wide enough to straddle
+    either threshold.
+
+    That was the defect. Validators could agree while disagreeing about who ends
+    up with the money -- which is the one thing agreement is supposed to settle.
+    """
+
+    @staticmethod
+    def _grade(**over):
+        base = {
+            "verdict": core.VERDICT_PARTIAL,
+            "fulfilled": 5000,
+            "substantiated": 60,
+            "confidence": 80,
+        }
+        base.update(over)
+        return base
+
+    def test_bond_threshold_cannot_be_straddled(self):
+        """`substantiated` 10 vs 30: one slashes the attester's bond, one does not."""
+        mine = self._grade(substantiated=10)
+        theirs = self._grade(substantiated=30)
+
+        # Within tolerance by the numbers: the floor is 20 on a 0-100 scale and
+        # so is the tolerance, so the pair is exactly the hard case.
+        assert abs(10 - 30) <= POLICY.confidence_tol
+        assert core.bond_outcome(mine, POLICY) == core.BOND_SLASHED
+        assert core.bond_outcome(theirs, POLICY) == core.BOND_RELEASABLE
+
+        assert not core.grades_agree(mine, theirs, POLICY)
+        assert not core.grades_agree(theirs, mine, POLICY)
+
+    def test_collateral_threshold_cannot_be_straddled(self):
+        """`fulfilled` 1500 vs 3500: the provider's collateral changes hands."""
+        mine = self._grade(fulfilled=1500)
+        theirs = self._grade(fulfilled=3500)
+
+        # 2000bp apart, which is exactly the tolerance once widened to the basis
+        # point scale, and it crosses the 2500bp forfeit line.
+        assert abs(1500 - 3500) <= (POLICY.confidence_tol * core.BP) // 100
+        assert core.collateral_outcome(mine, POLICY) == core.COLLATERAL_FORFEIT
+        assert core.collateral_outcome(theirs, POLICY) == core.COLLATERAL_RELEASABLE
+
+        assert not core.grades_agree(mine, theirs, POLICY)
+        assert not core.grades_agree(theirs, mine, POLICY)
+
+    def test_tolerance_still_works_on_the_same_side_of_a_line(self):
+        """The fix must not make every round fail: only threshold crossings do.
+
+        Both of these are comfortably inside the same outcome, and differ by the
+        full tolerance, so they still agree. Without this the change would be a
+        denial of service dressed up as a correctness fix.
+        """
+        mine = self._grade(fulfilled=7000, substantiated=60, confidence=70)
+        theirs = self._grade(fulfilled=8999, substantiated=80, confidence=90)
+
+        assert core.bond_outcome(mine, POLICY) == core.bond_outcome(theirs, POLICY)
+        assert core.collateral_outcome(mine, POLICY) == core.collateral_outcome(theirs, POLICY)
+        assert core.grades_agree(mine, theirs, POLICY)
+
+    def test_agreement_is_symmetric_across_every_threshold_pair(self):
+        """Swept rather than spot-checked, because a one-sided rule is a bug.
+
+        Any pair whose outcomes differ must disagree in both directions; any pair
+        within tolerance on the same side must agree in both.
+        """
+        for a in range(0, 10001, 250):
+            for b in (a, a + (POLICY.confidence_tol * core.BP) // 100):
+                if b > 10000:
+                    continue
+                mine, theirs = self._grade(fulfilled=a), self._grade(fulfilled=b)
+                forward = core.grades_agree(mine, theirs, POLICY)
+                assert forward == core.grades_agree(theirs, mine, POLICY)
+                if core.collateral_outcome(mine, POLICY) != core.collateral_outcome(theirs, POLICY):
+                    assert not forward, f"fulfilled {a} vs {b} agreed across the forfeit line"
+
+    def test_ungraded_pairs_are_unaffected(self):
+        """Two unreadable responses still agree; both outcomes are lenient there."""
+        mine = {"verdict": core.VERDICT_UNGRADED}
+        theirs = {"verdict": core.VERDICT_UNGRADED}
+        assert core.grades_agree(mine, theirs, POLICY)

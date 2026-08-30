@@ -12,6 +12,7 @@ const NAV = [
   { to: '/attack', label: 'Attack cost', end: false },
   { to: '/scope', label: 'Scope builder', end: false },
   { to: '/attest', label: 'Attest', end: false },
+  { to: '/payouts', label: 'Payouts', end: false },
   { to: '/policy', label: 'Policy', end: false },
 ]
 

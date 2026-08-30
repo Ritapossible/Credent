@@ -619,6 +619,44 @@ export function attest(
 }
 
 /** Return a releasable bond once its lock has elapsed. Attester only. */
+/**
+ * Hand your entitlement to another address. Moves no value.
+ *
+ * The payout path for anyone who is not a contract, and the safe one for
+ * everybody. `emit_transfer` does not credit an externally owned account, and a
+ * transfer that cannot be delivered is not returned either -- measured on
+ * studionet, the value left the contract and arrived nowhere. So this pushes
+ * nothing: it debits the caller's entitlement and credits the recipient's, and
+ * the contract's balance does not move. If the recipient cannot collect, the
+ * entitlement is still there to reassign.
+ */
+export function assignTo(account: string, recipient: string): Promise<WriteResult> {
+  return submit(account, 'assign_to', [addressArg(recipient, 'assign_to.recipient')])
+}
+
+/**
+ * Pull your own entitlement out of the contract. Contracts only.
+ *
+ * The only call that emits value, and it pays `gl.message.sender_address` --
+ * so it delivers only when the caller is a contract that can receive. The flag
+ * is the caller asserting that about itself; the contract cannot check it.
+ * A wallet should use `assignTo` instead.
+ */
+export function withdraw(account: string): Promise<WriteResult> {
+  return submit(account, 'withdraw', [true])
+}
+
+/**
+ * Take back an entitlement whose payout never left the contract.
+ *
+ * Refused when the value has already gone, because restoring it then would pay
+ * one owner out of the balance backing everybody else's entitlements. Read
+ * `solvency().backed` first to know which case this is.
+ */
+export function reclaimInFlight(account: string): Promise<WriteResult> {
+  return submit(account, 'reclaim_in_flight', [])
+}
+
 export function reclaimBond(account: string, attestationId: number): Promise<WriteResult> {
   return submit(account, 'reclaim_bond', [attestationId])
 }
