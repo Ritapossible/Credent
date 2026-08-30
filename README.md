@@ -289,6 +289,36 @@ still arrives -- crediting and executing are separate outcomes -- but every
 inbound transfer leaves `ValueError: call to private method ...` in its receipt,
 which reads exactly like a failed payout and is not one.
 
+**Check the review's four items yourself, in one command.** `python
+tools/audit_review.py` needs no key and no gas. It reads both *deployed*
+contracts over `gen_getContractCode`, parses them, and checks each item against
+the bytes that are live rather than the ones that are committed — the two have
+come apart in this project before. It also checks the site carries the payout
+flow and that the README names no contract method that does not exist, which is
+what let a false claim about an error handler survive here.
+
+```text
+studionet  0x395A0E1b81778b69Dd128183412C1738BddD1E4F
+  ok   agreement preserves the bond outcome
+  ok   agreement preserves the collateral outcome
+  ok   assign_to exists and emits no value
+  ok   withdraw is the only emitter
+  ok   withdraw parks the entitlement instead of discarding it
+  ok   resolve_in_flight decides against the ledger
+  ok   resolve_in_flight clears the entry either way
+  ok   resolve_in_flight restores only above the ledger
+  ok   the unsafe withdraw_to is gone
+  ok   no __on_errored_message__ is claimed
+  ok   the payout views exist
+...
+every item in the review is satisfied, on-chain and in the repository
+```
+
+Every check is structural and judged on code with docstrings stripped. That is
+not fussiness: three guards in this repository have passed against a
+deliberately broken contract because the term they searched for appeared in the
+prose explaining the rule.
+
 **Proven end to end, with balances, on both networks.** `npm run settlement`
 runs release, claim, both refund paths and bond reclaim, asserting each
 entitlement to the wei, and then withdraws twice: once as a contract collecting
