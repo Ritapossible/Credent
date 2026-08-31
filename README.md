@@ -92,6 +92,13 @@ npm run verify-deployment        # the deployed bytes are this repository's, has
 npm run agreement                # agreement preserves the bond and collateral outcomes
 ```
 
+And one that needs a funded key, because it settles a real engagement against
+the deployed contract rather than a throwaway:
+
+```bash
+CREDENT_KEYDIR=/path/to/keys npm run livedemo
+```
+
 CI runs all of it on every push. Neither of the two failures this project hit in
 deployment would have been caught by it — both were green locally and broken on
 chain — but everything checkable without a network is now checked without anyone
@@ -629,6 +636,71 @@ earlier draft of this repository concluded from one such timeout that the path
 could not settle on bradbury at all, which was wrong and is the same shape of
 error as the one this whole section corrects.
 
+
+**The submitted contracts have been used, not just deployed.** `npm run
+settlement` deploys a throwaway oracle every run, which is right for a test and
+leaves the addresses at the top of this file carrying nothing but view reads.
+Anyone opening the submitted contract in an explorer would see one that has
+never been touched — a fair reason to doubt every claim made about it. So
+`npm run livedemo` settles a real engagement against whatever is in
+`deployments.json`, under the production policy, and prints every hash:
+
+```text
+=== livedemo — a settlement on the deployed contract ===
+    open_engagement — the client commits scope and stake
+    quoted 0.875 GEN collateral at 8750bp for an agent with no record
+    accept — the provider posts collateral through its contract
+    ok   the contract took exactly 0.875 GEN of collateral
+    close_engagement — the client marks the work delivered
+  the attestation — an LLM grades the work, in consensus
+    attest — the client posts a 1 GEN bond and 0.05 GEN over
+    ok   the client wallet was credited the 0.05 GEN it overpaid
+    collateral_state = releasable
+  the payout
+    release_collateral — the grade cleared, so the provider reclaims it
+    ok   the entitlement rose by 0.875 GEN
+    ok   and the contract holds exactly what it held before — crediting moves no value
+    prove_recipient — the oracle probes the recipient, which answers
+    ok   the claimant is a proven recipient
+    withdraw — the only method that moves value
+    claimant  0 GEN -> 0.875 GEN
+    ok   the claimant received the whole entitlement (0.875 GEN)
+    ok   the entitlement was zeroed
+  the client wallet's own credit — 0.05 GEN
+    assign_to — moves the entitlement, not the money
+    ok   the wallet entitlement is spent, not duplicated
+    withdraw — the contract collects what the wallet assigned it
+    ok   the claimant received the wallet's 0.05 GEN
+  the payout guard, on the deployed contract
+    ok   an ordinary wallet is not a proven recipient
+      refused: caller_is_the_transaction_origin
+    ok   withdraw from an unproven wallet is refused, not attempted
+      refused: recipient_is_the_zero_address
+    ok   assigning to the zero address is refused
+
+livedemo ok — a settlement completed on the submitted deployment
+```
+
+The transactions from the runs quoted here:
+
+| | Studionet | Testnet Bradbury |
+|---|---|---|
+| claimant | [`0xBc03cF3c`](https://explorer-studio.genlayer.com/address/0xBc03cF3c752739dD1b5C82c1e164E9Fa2500AD3A) | [`0x44eFd1CF`](https://explorer-bradbury.genlayer.com/address/0x44eFd1CF21b146Bb8676A3Cde89caEC6Fbd75490) |
+| `attest` (graded in consensus) | [`0x9752e2c1`](https://explorer-studio.genlayer.com/tx/0x9752e2c1e2827d2b5d4613781cd39ba8148c8c2f53149bb937ca104b3aa07d4b) | [`0x51e7fdd1`](https://explorer-bradbury.genlayer.com/tx/0x51e7fdd1bcce30e12e8756970a7d35f853c5ca418831763da2d5b1307f094aea) |
+| `withdraw` — 0.875 GEN delivered | [`0x2b3f3b0e`](https://explorer-studio.genlayer.com/tx/0x2b3f3b0e6208a269d8d2ea093d91519da0fbf03c587e76c546d557cc765b4daf) | [`0x45b85e71`](https://explorer-bradbury.genlayer.com/tx/0x45b85e71a2735c29e62de753f5344c0bbed821eb05ec12db41cf205406e538a1) |
+| `assign_to` — the wallet's credit | [`0xbfc4f2a8`](https://explorer-studio.genlayer.com/tx/0xbfc4f2a8ccb2c9e8cb3dd73de39c27c1ff16e691763fbe0f599d5da2358da080) | [`0x234f28fe`](https://explorer-bradbury.genlayer.com/tx/0x234f28fe09fe7151c9ba7db24d70df77223ae791fd0db2393be7afa2b91c4d9a) |
+| `withdraw` — 0.05 GEN delivered | [`0x3f89401a`](https://explorer-studio.genlayer.com/tx/0x3f89401a39e211a95e2b03e376e352611711e482544bbef1a12f4f0bbb2baee6) | [`0x9e0a266c`](https://explorer-bradbury.genlayer.com/tx/0x9e0a266c638a59bf781c43335be2d35be73f4a1c91651bd09b27e43775561f08) |
+| wallet `withdraw`, refused | [`0x4e94f7d0`](https://explorer-studio.genlayer.com/tx/0x4e94f7d0df0d031deccf36bc4a47a7425e2464813dd55ef27d37c5cfb70caef1) | [`0x8f6e0bf5`](https://explorer-bradbury.genlayer.com/tx/0x8f6e0bf5c169d47f842ad977991614e11594633a1c9af1f59d05a9a888047a7a) |
+
+Two things the production policy puts out of reach of a single run, and neither
+is a defect. `min_bond` is 1 GEN rather than the test policy's 0.01, so
+attesting costs real balance — that is the anti-sybil price the design argues
+for. And `bond_lock_seconds` is fourteen days, so `reclaim_bond` cannot be
+exercised here; `npm run settlement` covers it against a zero-lock instance.
+That lock is also why this run attests before releasing: an *ungraded*
+engagement only frees its collateral after the dispute window, and a first draft
+of the script that skipped straight to `release_collateral` was correctly
+refused with `collateral_held`.
 
 **These are the suite's own throwaway contracts, not the deployments.** Each run
 deploys a fresh oracle with the bond lock at zero so one pass can reach every
