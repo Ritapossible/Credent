@@ -536,7 +536,12 @@ async function submit(
     throw new Error(
       outcome.reason
         ? `${functionName} was rejected by the contract: ${outcome.reason}`
-        : `${functionName} was rejected by the contract.`,
+        : // Not every network carries the reason. Bradbury's receipt reports
+          // only `FINISHED_WITH_ERROR`, where studio returns the contract's
+          // `[EXPECTED] …` message. Saying which is which beats a bare
+          // "rejected", which reads like the site failed to ask properly.
+          `${functionName} was rejected by the contract. This network does not ` +
+          `report the reason; the contract's own refusal codes are listed in the README.`,
     )
   }
 

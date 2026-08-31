@@ -264,6 +264,19 @@ instead of answered:
 
 `web/scripts/claimant.py` shows both halves; the probe answer is four lines.
 
+**One operational difference worth knowing before you debug a refusal.**
+Studio returns the contract's own reason on a rejected call — `[EXPECTED]
+recipient_has_not_proven_it_can_receive` and the rest — and **bradbury does
+not**. Its receipt carries `txExecutionResultName: "FINISHED_WITH_ERROR"` and
+nothing else; the reason string is not in it anywhere. So the same refusal is
+legible on one network and opaque on the other, through no fault of the caller.
+
+That cost a test run: the settlement suite asserted the reason text on both, and
+reported three failures on a run where the contract refused exactly as it
+should. The suite now asserts the refusal everywhere and the reason only where
+the network provides one, and the site says which case it is in rather than
+showing a bare "rejected".
+
 Proven on-chain rather than argued. The suite exercises the refusal, because a
 guard that is never triggered is a comment:
 
