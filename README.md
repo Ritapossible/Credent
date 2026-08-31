@@ -638,8 +638,8 @@ the top of this file.
 
 | Network | Oracle (test policy) | Claimant | Strict oracle (100% forfeit) | Wallet's recipient |
 |---|---|---|---|---|
-| Studionet | `0xEF9A5C49690479AC5e098e27D77ca4aD522d87f3` | `0x5d6df82bDd832f09b323256DD7dddC94265Ca324` | `0xAE17BdE91144eA7d4b8971463500DC7832118654` | `0xeCFd428341e91a285BD8414Afd65515e9A833cb6` |
-| Testnet Bradbury | `0x75838Fe47B4e1f1FE1c0E9884302A8afa9e58b4F` | `0xD2dB78576a2CD9E44e60F957c49D4A435759A46E` | `0x1A5a50fBF5712255C5DAeC3aaE7E59EFC8Ca3F94` | `0xB9c5c79833fF657b80Ec6f0D10C2522c00bD6C55` |
+| Studionet | `0xB522b908d789cE1F4c2F2394D897ab67D69638e9` | `0x541B8620a5f5C4B11Df263d752E54be6cADDe983` | `0xB7d3471cEAde5995364afcD8a57c70474995989A` | `0x44A5Fe0b6620024A31eD5A06526feD7B928F3947` |
+| Testnet Bradbury | `0x10C74C74A4ED444422AE9C0964a519d2Fc29530F` | `0x0ea8f2B288ad02625428C6609D9E63a671f4D489` | `0xFDFe6BcAdDee6BC1f6bBa93F74E0CA8cc6827d81` | `0xB87D4F6526d166CF25821B6a875D6969Aa0E1b22` |
 
 The last two columns are the fourth engagement: the oracle whose forfeit
 threshold is raised so `claim_collateral` is reachable, and the contract the
@@ -652,7 +652,7 @@ are deployed:
 ```text
 contract holds 1.81 GEN at the end
 
-settlement ok - 39 checks, every payout reached its recipient   (studionet)
+settlement ok - 41 checks, every payout reached its recipient   (studionet)
 settlement ok - 38 checks, every payout reached its recipient   (bradbury)
 ```
 
