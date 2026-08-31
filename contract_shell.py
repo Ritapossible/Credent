@@ -1004,8 +1004,29 @@ class ReputationOracle(gl.Contract):
         entitlement between storage slots, emits nothing, and cannot fail. A
         wallet should use it and never reach this method.
 
-        The entitlement is cleared before the transfer is emitted. Leaving it
-        readable across the transfer would let a recipient withdraw twice.
+        The entitlement is cleared before the transfer is emitted. Two things
+        make that safe rather than reckless, and both are measured rather than
+        assumed:
+
+        1. Every contract is credited by `emit_transfer`, whatever its code
+           does. Measured on studionet against three recipients in one run --
+           a working `__receive__`, one that raises, and none at all -- all
+           three received the full amount. An externally owned account, by the
+           same mechanism, receives nothing and the sender is debited anyway.
+           So *being a contract* is the entire condition for delivery, and
+           nothing in the recipient's code can defeat it.
+        2. This method emits only at an address established to be a contract,
+           by the two guards above.
+
+        Together those mean a recipient that gets past this line is credited, so
+        there is no case where clearing the entitlement loses it. That is why
+        this design has no recovery path: not because recovery was too hard, but
+        because the failure it would recover from cannot occur here. Pushing
+        value at an *unverified* address is the thing that destroys money, and
+        this method does not do it.
+
+        Leaving the entitlement readable across the transfer would instead let a
+        recipient withdraw twice, which is why the clear comes first.
         """
         # Checked here as well as at `confirm_recipient`, on the call that
         # actually spends the entitlement rather than only on the one that

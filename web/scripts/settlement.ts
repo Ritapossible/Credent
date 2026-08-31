@@ -353,6 +353,47 @@ interface Sent {
  * decoding is how the "accepted therefore fine" bug comes back on the side
  * nobody re-tested.
  */
+/**
+ * Submit a transaction, waiting out the node's own rate limiter.
+ *
+ * Bradbury answers `-32005 transaction gas rate limit exceeded: node is at
+ * capacity, retry in ~1190ms` when a run submits faster than it will accept.
+ * That is the node saying "later", not the contract saying "no", and viem
+ * surfaces it as a thrown `LimitExceededRpcError` that killed a whole
+ * settlement run mid-way. The error even carries the delay to wait, so honour
+ * it rather than guessing, and fall back to exponential backoff when it does
+ * not.
+ *
+ * Only this one condition is retried. Anything else -- a contract rejection
+ * above all -- is rethrown immediately, because silently retrying a refusal
+ * would turn a working guard into a hang.
+ */
+async function submitWithBackoff<T>(submit: () => Promise<T>, attempts = 25): Promise<T> {
+  let wait = 2_000
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await submit()
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err)
+      const rateLimited =
+        text.includes('-32005') ||
+        text.includes('node is at capacity') ||
+        text.includes('gas rate limit exceeded')
+      if (!rateLimited || attempt >= attempts) throw err
+      const advised = Number(/retryAfterMs"?\s*:\s*(\d+)/.exec(text)?.[1] ?? 0)
+      const delay = Math.max(advised + 250, wait)
+      console.log(`         node at capacity; waiting ${Math.round(delay / 1000)}s (attempt ${attempt}/${attempts})`)
+      await sleep(delay)
+      // Many modest retries rather than a few long ones. Bradbury advises
+      // delays in the hundreds of milliseconds while staying busy for minutes,
+      // so an aggressively doubling wait spends the whole budget sleeping and
+      // gets few actual attempts. Capping at 15s gives roughly five minutes of
+      // persistent retrying across twenty-five tries instead of three.
+      wait = Math.min(wait * 2, 15_000)
+    }
+  }
+}
+
 async function send(
   who: Role,
   address: string,
@@ -360,12 +401,14 @@ async function send(
   args: unknown[],
   value = 0n,
 ): Promise<Sent> {
-  const hash = await who.client.writeContract({
-    address: address as `0x${string}`,
-    functionName,
-    args: args as never[],
-    value,
-  })
+  const hash = await submitWithBackoff(() =>
+    who.client.writeContract({
+      address: address as `0x${string}`,
+      functionName,
+      args: args as never[],
+      value,
+    }),
+  )
   const receipt = await who.client.waitForTransactionReceipt({
     hash,
     status: TransactionStatus.ACCEPTED,
@@ -706,7 +749,7 @@ async function deployOracle(client: Role, policy: bigint[]): Promise<string> {
   const artifact = new URL('../../reputation_oracle.min.py', import.meta.url)
   const code = readFileSync(artifact, 'utf8')
   console.log(`artifact  reputation_oracle.min.py (${code.length.toLocaleString()} bytes)`)
-  const deployHash = await client.client.deployContract({ code, args: policy as never[] })
+  const deployHash = await submitWithBackoff(() => client.client.deployContract({ code, args: policy as never[] }))
   const deployReceipt = await client.client.waitForTransactionReceipt({
     // `deployContract` is typed as returning a plain `0x${string}` while the
     // waiter wants the SDK's branded `Hash`. Same value, narrower type.
@@ -915,10 +958,10 @@ async function main(): Promise<void> {
   // `../scripts/`, not `./`: esbuild bundles this into `web/.tmp/`, so
   // `import.meta.url` resolves relative to that directory and not to the
   // source file. The oracle artifact above climbs out the same way.
-  const claimantHash = await client.client.deployContract({
+  const claimantHash = await submitWithBackoff(() => client.client.deployContract({
     code: claimantSource,
     args: [oracle] as never[],
-  })
+  }))
   const claimantReceipt = await client.client.waitForTransactionReceipt({
     hash: claimantHash as Parameters<typeof client.client.waitForTransactionReceipt>[0]['hash'],
     status: TransactionStatus.ACCEPTED,
@@ -1201,10 +1244,10 @@ async function main(): Promise<void> {
 
     // A second Claimant, pointed at the strict oracle, purely as somewhere the
     // wallet can send its credit. It is not a party to the engagement.
-    const sinkHash = await client.client.deployContract({
+    const sinkHash = await submitWithBackoff(() => client.client.deployContract({
       code: claimantSource,
       args: [strict] as never[],
-    })
+    }))
     const sinkReceipt = await client.client.waitForTransactionReceipt({
       hash: sinkHash as Parameters<typeof client.client.waitForTransactionReceipt>[0]['hash'],
       status: TransactionStatus.ACCEPTED,
@@ -1269,10 +1312,10 @@ async function main(): Promise<void> {
   )
 
   if (walletOwed > 0n) {
-    const walletSinkHash = await client.client.deployContract({
+    const walletSinkHash = await submitWithBackoff(() => client.client.deployContract({
       code: claimantSource,
       args: [oracle] as never[],
-    })
+    }))
     const walletSinkReceipt = await client.client.waitForTransactionReceipt({
       hash: walletSinkHash as Parameters<typeof client.client.waitForTransactionReceipt>[0]['hash'],
       status: TransactionStatus.ACCEPTED,

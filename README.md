@@ -19,7 +19,7 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on **GenLayer Studio** at `0x81Ff839D9A703F0a8a5102e55f492556650A2705`,
+Deployed on **GenLayer Studio** at `0x10B19063c1F03E91103c6cb9E1845D66eeE08bC5`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
 and on **Testnet Bradbury** at `0x791852F8571481EA503D0863660A9Cb8fBD6c940` — the
 minified artifact there, since bradbury refuses the full-size source on
@@ -407,15 +407,37 @@ About a hundred lines of code, and rather more comment than that.
 One snag worth knowing before you write your own: **`genvm-lint` rejects
 `__receive__`.** E019 demands a `@gl.public.write` decorator on it and E106 then
 refuses any public name beginning with `__`, so a recipient contract can be
-lint-clean or receive value quietly, not both. Implement it anyway. An earlier
-version of this paragraph claimed a recipient *without* the handler is still
-credited, on the reasoning that crediting and executing are separate outcomes.
-That was never measured here, an attempt to measure it produced a void result,
-and it is not the sort of thing to assert about the step that moves the money.
-What is measured is the recipient that does implement it: the settlement suite
-pays `claimant.py` on both networks and checks the balance on both sides of the
-transfer. Write the handler, and the rest of this file is about a path that has
-been run rather than argued.
+lint-clean or receive value quietly, not both. Implement it anyway, for the
+clean receipt -- but the value arrives either way, and that is measured rather
+than reasoned:
+
+```text
+payer 0xC6078BAbe6C9a8AAb7682Cf0C6dc1685d99B6BEB   funded 0.050000 GEN
+  working __receive__   0x1f7FB150fd9c9F4312af5EfC702ae60755dd49d4   -> 0.010000  credited
+  __receive__ raises    0xDF69E01C58bd6430B104B256c07D2364187D4819   -> 0.010000  credited
+  no __receive__        0x53507C4c26dAb57E8B8EB2b2739713997c7a8b61   -> 0.010000  credited
+payer ends with 0.020000 GEN
+```
+
+Three transfers of 0.01 GEN, three arrivals, and the payer down exactly 0.03.
+**Crediting and executing are separate outcomes**: a recipient without the
+handler still receives, and one whose handler raises still receives. Without the
+handler the inbound message leaves `ValueError: call to private method ...` in
+its receipt, which reads exactly like a failed payout and is not one.
+
+**This is the fact the payout design rests on, so it is worth stating as a
+rule.** Set beside the wallet measurement above, the behaviour is exact:
+
+| recipient | credited | sender debited |
+|---|---|---|
+| any contract — handler working, raising, or absent | **yes** | yes |
+| externally owned account | **no** | yes |
+
+So *being a contract* is the entire condition, and nothing about the recipient's
+code can defeat it. That is why `withdraw` may clear the entitlement before it
+emits: it emits only at an address established to be a contract, and every
+contract is credited. There is no case where a proven recipient loses its
+entitlement to a failed transfer.
 
 **Item one is a view now, so it can be checked instead of read.** Validator
 agreement runs inside `gl.vm.run_nondet`, which is only entered when two
@@ -427,7 +449,7 @@ a deployment at all. `agreement_check` is a view that answers it directly, and
 `deployments.json`:
 
 ```text
-studionet  0x81Ff839D9A703F0a8a5102e55f492556650A2705
+studionet  0x10B19063c1F03E91103c6cb9E1845D66eeE08bC5
   substantiated 10 vs 30 (tolerance 20, slash_floor 20)
     bond: slashed vs releasable
   ok   the two grades settle the bond differently
@@ -486,7 +508,7 @@ flow and that the README names no contract method that does not exist, which is
 what let a false claim about an error handler survive here.
 
 ```text
-studionet  0x81Ff839D9A703F0a8a5102e55f492556650A2705
+studionet  0x10B19063c1F03E91103c6cb9E1845D66eeE08bC5
   ok   agreement preserves the bond outcome
   ok   agreement preserves the collateral outcome
   ok   assign_to exists and emits no value
