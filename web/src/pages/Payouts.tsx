@@ -16,17 +16,24 @@
  *               leaves the entitlement sitting there to reassign. This is the
  *               path for a wallet.
  *
- *   withdraw    emits the value to `gl.message.sender_address`. It delivers
- *               only when the caller is a contract that can receive, and the
- *               contract cannot check that -- so a wallet calling it is betting
- *               real money on an assertion about itself. The card says so.
+ *   withdraw    emits the value to `gl.message.sender_address`, and is refused
+ *               unless that address has completed the probe handshake --
+ *               `prove_recipient`, then `confirm_recipient` from inside the
+ *               callback. Answering the probe means having executed code, so
+ *               the ordinary recipient is verified rather than asserted.
  *
- * `reclaim_in_flight` is the recovery path. `withdraw` cannot observe whether
- * its transfer arrived, so it parks the entitlement in `in_flight` rather than
- * discarding it; reclaim restores it when the contract still holds the money,
- * and refuses when it does not. That refusal is correct: value that has left
- * cannot be recovered by rewriting a ledger, and restoring the entitlement
- * anyway would pay one owner out of the balance backing everyone else's.
+ * The handshake is a bar, not a proof of contract-hood, and this page does not
+ * sell it as one: a wallet can drive both calls itself, in two deliberate
+ * transactions, and no contract on this platform can tell the difference. What
+ * it removes is the single wrong flag on the payout call that the previous
+ * `withdraw(recipient_is_a_contract)` allowed. `assign_to` carries no claim at
+ * all, which is why the button above is the default and this one is not.
+ *
+ * There is no recovery path, deliberately. `emit_transfer` does not refund what
+ * it fails to deliver and delivery is not observable from inside the contract,
+ * so a "reclaim" method could only guess -- two earlier designs guessed from
+ * the balance and from a ledger, and both were wrong. Refusing to emit at an
+ * unverified address is the honest version of the same guarantee.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -216,9 +223,11 @@ export default function Payouts() {
             <h2 className="card__title">Withdraw to yourself</h2>
             <p className="muted">
               Emits the value to the caller, and is refused unless this address has answered the
-              contract&rsquo;s zero-value probe. A browser wallet cannot answer it — running code is
-              the proof — so this button stays disabled here and the safe path above is the one to
-              use. It is offered because a contract driving this site&rsquo;s calls can use it.
+              contract&rsquo;s zero-value probe. Answering it from a browser wallet means signing two
+              deliberate transactions and claiming something about yourself that the contract cannot
+              check — so this button stays disabled here, and the safe path above is the one to use.
+              It is offered because a contract driving this site&rsquo;s calls can answer the probe
+              by running code, which is the case it is for.
             </p>
             <button
               type="button"

@@ -492,10 +492,38 @@ async function withdrawal(
   console.log(`    tx   ${sent.hash}`)
   if (EXPLORER_URL) console.log(`         ${EXPLORER_URL}/tx/${sent.hash}`)
 
-  const claimantAfter = await settleTo(
-    () => balanceOf(claimant),
-    (value) => value > claimantBefore,
+  // Wait for the *whole* payout, not for any movement at all. `value >
+  // claimantBefore` looked equivalent and was not: on bradbury a 0.01 GEN bond
+  // came back to this same contract from an unrelated attestation that never
+  // recorded, the poll saw the balance rise, stopped 150s before the withdrawal
+  // actually landed, and the run reported that the contract had underpaid and
+  // left the entitlement standing. Both claims were false -- re-driving the
+  // same withdraw against the same state settled in full -- and a false payout
+  // failure on this path is the most expensive kind of wrong this suite can be.
+  //
+  // The entitlement is checked alongside the balance because neither alone is
+  // sufficient: `withdraw` zeroes the entitlement *before* it emits, so storage
+  // settles first, and any inbound value moves the balance whether this payout
+  // caused it or not.
+  //
+  // The two polls are bounded differently on purpose. Zeroing the entitlement
+  // is pure contract storage with no epoch involved, so it gets the attest
+  // budget: if it has not happened in twenty minutes, `withdraw` did not run
+  // and there is nothing to wait for. The balance is the emitted transfer,
+  // which genuinely can straddle an epoch boundary, so it keeps the long
+  // settle budget -- but only once storage says the payout was actually made.
+  // Waiting 26 hours for a transfer that was never emitted is how a fast
+  // failure turns into an abandoned run.
+  const wanted = claimantBefore + expected
+  const owedSettled = await settleTo(
+    async () => asBig(await view(oracle, 'owed_to', [owner]), 'owed_to'),
+    (value) => value === 0n,
+    ATTEST_TIMEOUT_MS,
   )
+  const claimantAfter =
+    owedSettled === 0n
+      ? await settleTo(() => balanceOf(claimant), (value) => value >= wanted)
+      : await balanceOf(claimant)
   const contractAfter = await balanceOf(oracle)
   const owedAfter = asBig(await view(oracle, 'owed_to', [owner]), 'owed_to')
 
@@ -503,7 +531,10 @@ async function withdrawal(
   console.log(`    claimant  ${gen(claimantBefore)} -> ${gen(claimantAfter)}  (${delta(claimantAfter - claimantBefore)})`)
   console.log(`    owed_to   ${gen(owedBefore)} -> ${gen(owedAfter)}`)
 
-  const arrived = check(claimantAfter > claimantBefore, `the claimant's balance rose (${delta(claimantAfter - claimantBefore)})`)
+  const arrived = check(
+    claimantAfter - claimantBefore >= expected,
+    `the claimant received the whole entitlement (${delta(claimantAfter - claimantBefore)})`,
+  )
   check(contractAfter === contractBefore - expected, `the contract paid out exactly ${gen(expected)}`)
   check(owedAfter === 0n, 'the entitlement was zeroed')
   if (!arrived) {
@@ -1289,6 +1320,19 @@ async function main(): Promise<void> {
 
   const claimantProven = await view(oracle, 'is_proven', [claimant])
   check(claimantProven === true, 'the claimant contract proved it can receive')
+
+  // A confirmation that answers nothing must be refused. Without this the
+  // handshake is decorative: any address could call `confirm_recipient` once
+  // and mark itself proven, which is exactly what an earlier build allowed --
+  // measured against a throwaway oracle, a wallet went from unproven to proven
+  // in a single direct call.
+  const unrequested = await expectRejection(
+    () => send(client, oracle, 'confirm_recipient', []),
+    'no_probe_outstanding',
+  )
+  check(unrequested, 'a confirmation with no outstanding probe is refused')
+  const stillUnproven = await view(oracle, 'is_proven', [client.address])
+  check(stillUnproven === false, 'the refused confirmation left the wallet unproven')
 
   console.log(`\ncontract holds ${gen(await balanceOf(oracle))} at the end`)
   console.log(`oracle ${oracle}`)

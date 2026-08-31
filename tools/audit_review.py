@@ -89,6 +89,7 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
     fns = {n.name: n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)}
     agree = code(fns["grades_agree"]) if "grades_agree" in fns else ""
     probe = code(fns["prove_recipient"]) if "prove_recipient" in fns else ""
+    confirm = code(fns["confirm_recipient"]) if "confirm_recipient" in fns else ""
     withdraw = code(fns["withdraw"]) if "withdraw" in fns else ""
     emitters = sorted(n for n, f in fns.items() if emits_value(f))
 
@@ -129,6 +130,16 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             "the probe carries no value",
             "emit_transfer" not in probe and "value=" not in probe,
             "a probe that risks value reintroduces the problem in miniature",
+        ),
+        (
+            "a confirmation must answer an outstanding probe",
+            "self.probing" in confirm and "REASON_NO_PROBE_OUTSTANDING" in confirm,
+            "an unrequested confirmation would mark any caller proven",
+        ),
+        (
+            "the probe is consumed by the confirmation",
+            "self.probing[key] = False" in confirm,
+            "an unspent probe makes the confirmation replayable",
         ),
         (
             "recipients are validated and classified",

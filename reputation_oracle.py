@@ -234,6 +234,7 @@ REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
 REASON_SELF_PAYOUT = "recipient_is_this_contract"
 REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
+REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
@@ -260,6 +261,7 @@ REASONS = frozenset({
     REASON_SELF_PAYOUT,
     REASON_RECIPIENT_UNPROVEN,
     REASON_ALREADY_PROVEN,
+    REASON_NO_PROBE_OUTSTANDING,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })
@@ -1483,6 +1485,9 @@ class ReputationOracle(gl.Contract):
     # recoverable, and credited its owner twice. Proving the recipient first
     # removes the question instead of answering it badly.
     proven: TreeMap[str, bool]
+    # Addresses with a probe outstanding. `confirm_recipient` consumes one, so a
+    # confirmation cannot be replayed and cannot arrive unrequested.
+    probing: TreeMap[str, bool]
     total_owed: u256
 
     # Indexes.
@@ -2071,14 +2076,15 @@ class ReputationOracle(gl.Contract):
     def prove_recipient(self) -> dict:
         """Ask this contract to check that you can receive, at no risk.
 
-        A zero-value call is emitted back to the caller. Answering it means
-        running code, which a wallet cannot do, so completing the handshake is
-        itself the proof -- there is no assertion to be wrong about and nothing
-        at stake if it fails.
+        A zero-value call is emitted back to the caller and an outstanding probe
+        is recorded. Answering it from inside the callback means running code,
+        so a recipient that answers that way is verified rather than asserted.
+        It is not a proof -- `confirm_recipient` says exactly what it can and
+        cannot establish -- but nothing is at stake if it fails.
 
         The recipient answers by calling `confirm_recipient` from inside
-        `credent_probe`. `web/scripts/recipient.py` is the smallest one that
-        does; it is about twenty lines.
+        `credent_probe`. `web/scripts/claimant.py` is the reference; the
+        answer itself is a single emitted call.
 
         Idempotent by refusal rather than silently: proving twice is almost
         always a caller that has lost track of its own state, and saying so is
@@ -2087,6 +2093,7 @@ class ReputationOracle(gl.Contract):
         key = _owed_key(gl.message.sender_address)
         if bool(self.proven.get(key, False)):
             _fail(REASON_ALREADY_PROVEN)
+        self.probing[key] = True
         # Zero value, deliberately: nothing is at risk if the target cannot
         # answer. `on="accepted"` because a message emitted `on="finalized"` was
         # measured on bradbury to be recorded and never dispatched.
@@ -2095,19 +2102,32 @@ class ReputationOracle(gl.Contract):
 
     @gl.public.write
     def confirm_recipient(self) -> dict:
-        """Answer a probe. Only reachable by a contract, which is the point.
+        """Answer an outstanding probe.
 
-        Called by the recipient from inside `credent_probe`, so the sender here
-        is the recipient itself. A wallet cannot reach this method as part of a
-        probe because a wallet cannot execute `credent_probe` at all -- and
-        calling it directly proves nothing it needs to prove, because a caller
-        that reaches this line has, by definition, had code run at its address
-        only if it arrived through the emitted call. Direct calls are harmless:
-        the worst a wallet can do is mark itself proven and then lose its own
-        entitlement to `withdraw`, which is the same risk the old unverifiable
-        flag carried, and `assign_to` remains available and safe.
+        **This is not a proof that the caller is a contract, and this contract
+        does not claim it is.** A wallet can call `prove_recipient` and then this
+        method directly, in two deliberate transactions, and mark itself proven.
+        Nothing on this platform can prevent that: an address's code cannot be
+        inspected from inside a contract, `origin_address` equals
+        `sender_address` on an emitted call so the two are indistinguishable,
+        and anything the probe carries is public calldata that a wallet can
+        read and repeat.
+
+        What the handshake does buy is worth having, and is all it is sold as:
+        a recipient that *does* answer the probe has demonstrably executed code,
+        so the ordinary case is verified rather than asserted, and the failure
+        case takes two deliberate calls rather than a single flag on the payout
+        itself. A caller that lies here loses only its own entitlement, and
+        `assign_to` -- which moves no value and cannot fail -- is the path that
+        needs no claim of any kind.
+
+        The probe is consumed, so a confirmation cannot be replayed and cannot
+        arrive unrequested.
         """
         key = _owed_key(gl.message.sender_address)
+        if not bool(self.probing.get(key, False)):
+            _fail(REASON_NO_PROBE_OUTSTANDING)
+        self.probing[key] = False
         self.proven[key] = True
         return {"proven": key}
 
@@ -2115,22 +2135,23 @@ class ReputationOracle(gl.Contract):
     def withdraw(self) -> dict:
         """Take your entitlement out. The only method that moves value.
 
-        Refused unless the caller has completed `prove_recipient`, and that is
-        the whole safety property. `emit_transfer` does not credit an externally
-        owned account and does not refund what it fails to deliver, so an
-        unproven recipient is one this contract could pay into a hole. It does
-        not guess and it does not try to recover afterwards -- it declines.
+        Refused unless the caller has completed the probe handshake. That is a
+        bar, not a proof -- see `confirm_recipient`, which says plainly what it
+        can and cannot establish -- but it means the ordinary recipient is
+        verified by having executed code rather than by asserting anything, and
+        a caller that wants to be wrong has to say so twice.
 
         There is no flag to pass. The previous signature took
-        `recipient_is_a_contract`, an assertion the caller made about itself
-        that this contract could not check and that cost the entitlement when it
-        was wrong. A completed probe is the same claim, made by running code
-        instead of by asserting.
+        `recipient_is_a_contract`, a claim made about the caller's own address
+        on the very call that spends the entitlement; being wrong cost the money
+        in one step.
 
-        The entitlement is cleared before the transfer is emitted, which is safe
-        here in a way it was not before: delivery to a proven recipient is what
-        `emit_transfer` guarantees, so there is no case in which the balance
-        goes and the credit should have stayed.
+        `assign_to` is the path that carries no claim at all: it moves the
+        entitlement between storage slots, emits nothing, and cannot fail. A
+        wallet should use it and never reach this method.
+
+        The entitlement is cleared before the transfer is emitted. Leaving it
+        readable across the transfer would let a recipient withdraw twice.
         """
         key = _owed_key(gl.message.sender_address)
         if not bool(self.proven.get(key, False)):
@@ -2141,8 +2162,6 @@ class ReputationOracle(gl.Contract):
         if amount <= 0:
             _fail(REASON_NOTHING_OWED)
 
-        # Cleared before emitting. Leaving it readable across the transfer would
-        # let a recipient withdraw twice and drain the contract.
         self.owed[key] = 0
         self.total_owed = int(self.total_owed) - amount
         # `on="accepted"`, not the SDK's safer-by-default `on="finalized"`:

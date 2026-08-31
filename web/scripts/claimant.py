@@ -127,23 +127,33 @@ class Claimant(gl.Contract):
 
     @gl.public.write
     def credent_probe(self) -> None:
-        """The oracle's probe. Answering it is the proof.
+        """The oracle's probe. Answering it from here is what a contract can do.
 
-        A wallet cannot execute this method, which is exactly why completing the
-        handshake demonstrates what an assertion could not.
+        This is the ordinary case the handshake is for: the answer comes from
+        inside a method, so this recipient has demonstrably executed code rather
+        than asserted anything. It is not proof that *every* proven address is a
+        contract -- the oracle's own `confirm_recipient` says why not -- but it
+        is how a contract recipient clears the bar without making a claim.
         """
         gl.get_contract_at(self.oracle).emit(on="accepted").confirm_recipient()
 
     @gl.public.write
     def claim(self) -> None:
-        """Call `withdraw` on the oracle, asserting that this caller is a contract.
+        """Call `withdraw` on the oracle and take this contract's entitlement.
 
-        `True` is honest here in a way it would not be from a wallet: this is a
-        contract, so the assertion the oracle cannot verify is one this caller
-        can make truthfully.
+        No argument is passed, because there is nothing to assert. `withdraw`
+        used to take `recipient_is_a_contract` -- a claim the oracle could not
+        check, made on the call that spent the money. It now refuses anyone who
+        has not answered the probe above, so eligibility is established before
+        any value moves rather than asserted while it does.
 
         `on="accepted"` rather than the default: a transfer emitted
         `on="finalized"` was measured on Bradbury reaching FINALIZED with an
         empty `triggered_transactions` and no value moved.
+
+        Measured on Bradbury, the emitted transfer lands about 150 seconds after
+        this call returns. A harness that stops watching sooner will report a
+        working payout as a shortfall; the settlement suite waits on the
+        entitlement reaching zero and the full amount arriving, for that reason.
         """
         gl.get_contract_at(self.oracle).emit(on="accepted").withdraw()

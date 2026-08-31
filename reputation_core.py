@@ -154,6 +154,7 @@ REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
 REASON_SELF_PAYOUT = "recipient_is_this_contract"
 REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
+REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
@@ -180,6 +181,7 @@ REASONS = frozenset({
     REASON_SELF_PAYOUT,
     REASON_RECIPIENT_UNPROVEN,
     REASON_ALREADY_PROVEN,
+    REASON_NO_PROBE_OUTSTANDING,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })

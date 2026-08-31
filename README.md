@@ -19,9 +19,9 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on **GenLayer Studio** at `0xF00796De139528f5Bc9E01876b2F4fAEE6988295`,
+Deployed on **GenLayer Studio** at `0x421419F58D583a7E031Fb33e0870f2c0f38A8453`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
-and on **Testnet Bradbury** at `0x8E06e232086d095906C8f2C43D38DCC27757483c` — the
+and on **Testnet Bradbury** at `0xE36f8195aEc759BFFA87bA14A6D9dDF9f398DE98` — the
 minified artifact there, since bradbury refuses the full-size source on
 transaction pubdata rather than on gas.
 
@@ -57,7 +57,7 @@ web/                    the site: reads the chain, and writes to it with your wa
 
 GenLayer's runner takes a **single** Python file, so the engine has to live
 inside the contract rather than be imported by it. Concatenating by hand would
-mean two copies of arithmetic that 337 tests are pinned to, and the copy that
+mean two copies of arithmetic that 348 tests are pinned to, and the copy that
 drifts is always the one nobody runs. So `build_contract.py` inlines the engine
 verbatim — byte for byte, nothing reformatted — and `test_build_contract.py`
 fails the suite if the checked-in artifact is stale.
@@ -71,7 +71,7 @@ disagree, `npm run parity` fails the build.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                 # 337 tests: engine, prompts, contract, parity vectors
+python -m pytest                 # 348 tests: engine, prompts, contract, parity vectors
 python build_contract.py         # regenerate reputation_oracle.py after any engine change
 
 cd web
@@ -253,16 +253,37 @@ than by a reviewer.
 Delivery is not observable from inside the contract. So the question is removed
 instead of answered:
 
-* `prove_recipient()` emits a **zero-value** call back to the caller. Answering
-  it means running code, which a wallet cannot do, so completing the handshake
-  is itself the proof. Nothing is at stake if it fails.
+* `prove_recipient()` emits a **zero-value** call back to the caller and records
+  an outstanding probe. Nothing is at stake if it fails.
 * `confirm_recipient()` is what the recipient calls from inside `credent_probe`.
+  It requires an outstanding probe and consumes it, so a confirmation cannot be
+  replayed and cannot arrive unrequested.
 * `withdraw()` is refused unless the caller is proven, and takes **no arguments**
   — the previous `recipient_is_a_contract` was an assertion the caller made
   about itself that this contract could not check and that cost the entitlement
   when it was wrong.
 
-`web/scripts/claimant.py` shows both halves; the probe answer is four lines.
+**What the handshake is, and what it is not.** It is not a proof that the caller
+is a contract, and this contract does not claim it is. A wallet can call
+`prove_recipient` and then `confirm_recipient` directly, in two deliberate
+transactions, and mark itself proven; that was tested against a throwaway
+deployment and it works. Nothing on this platform prevents it: an address's code
+cannot be inspected from inside a contract, `origin_address` equals
+`sender_address` on an emitted call so the two are indistinguishable, and
+anything the probe carries is public calldata a wallet can read and repeat. A
+view call into an address that turns out to be a wallet takes the whole
+transaction down rather than raising something catchable, so it cannot be used
+as a test either.
+
+What the handshake does buy is the ordinary case: a recipient that answers the
+probe has demonstrably executed code, so it is verified rather than asserted,
+and the failure case now takes two deliberate calls instead of one wrong flag on
+the payout itself. A caller that lies here loses only its own entitlement. The
+path that carries no claim of any kind is `assign_to()`, which moves the
+entitlement between storage slots, emits nothing, and cannot fail — that is what
+a wallet should use, and the app offers it by default.
+
+`web/scripts/claimant.py` shows both halves; the probe answer is one statement.
 
 **One operational difference worth knowing before you debug a refusal.**
 Studio returns the contract's own reason on a rejected call — `[EXPECTED]
@@ -286,11 +307,24 @@ guard that is never triggered is a comment:
   ok   withdraw from an unproven wallet is refused, not attempted
   ok   assigning to the zero address is refused
   ok   the claimant contract proved it can receive
+  ok   a confirmation with no outstanding probe is refused
+  ok   the refused confirmation left the wallet unproven
 ```
-`web/scripts/claimant.py` is the smallest one that works: it accepts an
-engagement as the provider (forwarding its own collateral, so the oracle sees
-the contract as the provider), implements `__receive__`, and calls `withdraw`.
-Roughly sixty lines.
+
+The last two lines are there because the handshake was decorative once.
+`confirm_recipient` set `proven[sender]` without checking that a probe had ever
+been issued, so any address could mark itself proven in a single direct call —
+measured against a throwaway oracle, a wallet went from `false` to `true` that
+way. `prove_recipient` now records an outstanding probe and `confirm_recipient`
+requires and spends one, so a confirmation can neither arrive unrequested nor be
+replayed. That still does not make the handshake a proof, and the section above
+says so plainly; it makes it a bar that has to be cleared deliberately rather
+than a flag anyone can set.
+
+`web/scripts/claimant.py` is the reference: it accepts an engagement as the
+provider (forwarding its own collateral, so the oracle sees the contract as the
+provider), implements `__receive__`, answers the probe, and calls `withdraw`.
+About a hundred lines of code, and rather more comment than that.
 
 One snag worth knowing before you write your own: **`genvm-lint` rejects
 `__receive__`.** E019 demands a `@gl.public.write` decorator on it and E106 then
@@ -309,16 +343,18 @@ flow and that the README names no contract method that does not exist, which is
 what let a false claim about an error handler survive here.
 
 ```text
-studionet  0xF00796De139528f5Bc9E01876b2F4fAEE6988295
+studionet  0x421419F58D583a7E031Fb33e0870f2c0f38A8453
   ok   agreement preserves the bond outcome
   ok   agreement preserves the collateral outcome
   ok   assign_to exists and emits no value
-  ok   withdraw is the only emitter
-  ok   withdraw parks the entitlement instead of discarding it
+  ok   withdraw is the only method that emits value
   ok   withdraw refuses an unproven recipient
   ok   withdraw takes no caller-supplied claim
   ok   the probe carries no value
-  ok   recipients and entitlements are validated
+  ok   a confirmation must answer an outstanding probe
+  ok   the probe is consumed by the confirmation
+  ok   recipients are validated and classified
+  ok   no balance-inference machinery remains
   ok   no __on_errored_message__ is claimed
   ok   the payout views exist
 ...
@@ -361,7 +397,7 @@ withdraw: release, refund and bond reclaim all leave the contract
   contract  2.795 GEN -> 1.86 GEN   (-0.935 GEN)
   claimant  0 GEN     -> 0.935 GEN  (+0.935 GEN)
   owed_to   0.935 GEN -> 0 GEN
-  ok   the claimant's balance rose (+0.935 GEN)
+  ok   the claimant received the whole entitlement (+0.935 GEN)
   ok   the contract paid out exactly 0.935 GEN
   ok   the entitlement was zeroed
 ```
@@ -384,6 +420,7 @@ assign_to + withdraw: the wallet takes out its refund and reclaimed bond
   contract  1.87 GEN -> 1.81 GEN  (-0.06 GEN)
   claimant  0 GEN    -> 0.06 GEN  (+0.06 GEN)
   owed_to   0.06 GEN -> 0 GEN
+  ok   the claimant received the whole entitlement (+0.06 GEN)
   ok   the contract paid out exactly 0.06 GEN
   ok   the entitlement was zeroed
 ```
@@ -410,6 +447,7 @@ withdraw: the contract collects the collateral the wallet assigned it
   contract  0.885 GEN -> 0.01 GEN   (-0.875 GEN)
   claimant  0 GEN     -> 0.875 GEN  (+0.875 GEN)
   owed_to   0.875 GEN -> 0 GEN
+  ok   the claimant received the whole entitlement (+0.875 GEN)
   ok   the contract paid out exactly 0.875 GEN
   ok   the entitlement was zeroed
 ```
@@ -435,28 +473,29 @@ the top of this file.
 
 | Network | Oracle (test policy) | Claimant | Strict oracle (100% forfeit) | Wallet's recipient |
 |---|---|---|---|---|
-| Studionet | `0x53B4B16df87312085Ee85A978F555F04EaC8B8b9` | `0xdeA7e4Be1977B0139018b3602396d3bF3E764FAD` | — | — |
-| Testnet Bradbury | `0x38b464B3A1De193663748a94E025D310C946878C` | `0xe5c809F6E7F9ad2B62589CbF26281235Ce5B743c` | — | — |
-
-The strict-policy oracles and the recipients the wallet assigned to are named
-in the run logs; the two above are the ones the transcripts quote.
+| Studionet | `0x20a453B6C2FfE2F41378Dc21CF9eCf2f855A6D82` | `0x0db86De7C40Deb53735Fd98526e297ae5c7d2cff` | `0x35941bcE0924ba9921bf2000DB87ff4Bfe719715` | `0x5C1a30f7A907A2b7C7D2E539F57ddc0620Fb4948` |
+| Testnet Bradbury | `0xD7a88D414327029013a1D2a002E2B547494b9cAa` | `0x6a3eF13F5E2FEE816cBc6c1aF25E6e644e2B8961` | `0xDfb30d1b61DF5De7d7428AD397B56C93BfF70E4b` | `0xAC883728caf5BCd4F9bE8FE0bcB2367090CdA2a3` |
 
 The last two columns are the fourth engagement: the oracle whose forfeit
 threshold is raised so `claim_collateral` is reachable, and the contract the
 client's **wallet** assigned its claimed collateral to.
 
 
-```text
-withdraw: the claimant takes the money out of the contract
-  contract  2.735 GEN -> 1.86 GEN   (-0.875 GEN)
-  claimant  0 GEN     -> 0.875 GEN  (+0.875 GEN)
-  owed_to   0.875 GEN -> 0 GEN
-  ok   the claimant's balance rose (+0.875 GEN)
-  ok   the contract paid out exactly 0.875 GEN
-  ok   the entitlement was zeroed
+Both runs above end the same way, on the same code and the same artifacts that
+are deployed:
 
-settlement ok - 15 checks, every payout reached its recipient
+```text
+contract holds 1.81 GEN at the end
+
+settlement ok - 38 checks, every payout reached its recipient
 ```
+
+Thirty-eight rather than forty when the attestation in the third engagement does
+not record inside `ATTEST_TIMEOUT_MS`: the suite then excludes that claimant's
+bond reclaim from the withdrawal and says so in the run, rather than folding a
+timeout into a payout assertion. The bond payout type is still covered in the
+same run — the client reclaims one in engagement two and withdraws it through
+`assign_to`.
 
 **Integers are typed, and large ones arrive as strings.** An address argument is
 its own calldata type: passing the hex string encodes a `str`, the contract
@@ -521,7 +560,7 @@ against a 10 GEN stake at the neutral rate of 8750bp, the grade moved the
 provider to 6154, and the same job then quoted 7.308 GEN — one well-evidenced
 attestation freeing 1.44 GEN of working capital. Offline it carries 60 new tests
 and 266 new parity vectors, and `genvm-lint` validates the rebuilt schema: 21
-methods, 13 constructor parameters. The offline suite is 340 tests.
+methods, 13 constructor parameters. The offline suite is 348 tests.
 
 The payout leg works, and getting there was the most instructive part of this
 build. An earlier revision pushed value directly at providers, clients and
@@ -534,8 +573,8 @@ not.
 `reclaim_bond` now credit an entitlement, which is pure storage and cannot fail,
 and `withdraw()` moves the value in a separate call the recipient
 makes. The *recipient* must be a contract, because that is the only kind of
-address this runner credits — `web/scripts/claimant.py` is the sixty-line
-reference. The *entitlement owner* need not be: a wallet holds its credit and
+address this runner credits — `web/scripts/claimant.py` is the
+reference, about a hundred lines of code under twice as much comment. The *entitlement owner* need not be: a wallet holds its credit and
 assigns it to a contract with `assign_to`, which is what stops the four
 wallet-facing payouts from being recorded correctly and left immobile. Run
 `npm run settlement` to watch a contract's balance fall by exactly what the

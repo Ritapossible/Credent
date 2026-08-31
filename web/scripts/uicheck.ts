@@ -66,6 +66,19 @@ function returnedKeys(source: string, method: string): string[] {
   return [...body.matchAll(/["']([a-z_]+)["']\s*:/g)].map((m) => m[1])
 }
 
+// Names the site calls on-chain. Listed rather than inferred: a misspelled
+// method would otherwise fail the `def` test, be filtered out as "not a contract
+// method", and pass.
+const CONTRACT_CALLS = new Set([
+  'assign_to',
+  'withdraw',
+  'prove_recipient',
+  'confirm_recipient',
+  'is_proven',
+  'owed_to',
+  'liabilities',
+])
+
 const contract = readFileSync(new URL('../../reputation_oracle.py', import.meta.url), 'utf8')
 const oracleTs = readFileSync(new URL('../src/chain/oracle.ts', import.meta.url), 'utf8')
 
@@ -83,6 +96,31 @@ for (const gone of ['solvency', 'in_flight_to', 'resolve_in_flight', 'backed']) 
   check(`the site no longer references '${gone}'`, !oracleTs.includes(`'${gone}'`) && !oracleTs.includes(`${gone}:`))
 }
 
+// Prose drifts too. A comment describing `reclaim_in_flight` as "the recovery
+// path" survived the method's removal and read, to anyone auditing the page, as
+// a recovery mechanism the contract does not have -- the same shape of false
+// claim that got this project rejected once. So the sweep covers every file the
+// page is built from, not just the decoder, and it covers comments.
+const pageFiles = ['../src/pages/Payouts.tsx', '../src/chain/oracle.ts', '../src/chain/wallet.ts']
+const pageText = pageFiles
+  .map((f) => readFileSync(new URL(f, import.meta.url), 'utf8'))
+  .join('\n')
+const removedMethods = ['resolve_in_flight', 'reclaim_in_flight', 'withdraw_to', 'in_flight_to']
+for (const gone of removedMethods) {
+  check(
+    `no page text mentions '${gone}', which the contract does not have`,
+    !pageText.includes(gone),
+  )
+}
+
+// And every contract method the pages do name must actually exist on-chain.
+const named = [...pageText.matchAll(/'([a-z_]{4,})'/g)]
+  .map((m) => m[1])
+  .filter((n) => contract.includes(`def ${n}(`) || CONTRACT_CALLS.has(n))
+for (const method of new Set(named)) {
+  check(`'${method}' exists on the contract`, contract.includes(`def ${method}(`))
+}
+
 // `withdraw` takes no arguments now; a stale `[true]` would be silently wrong.
 const walletTs = readFileSync(new URL('../src/chain/wallet.ts', import.meta.url), 'utf8')
 check(
@@ -90,6 +128,43 @@ check(
   /submit\(account, 'withdraw', \[\]\)/.test(walletTs),
   'the contract dropped recipient_is_a_contract',
 )
+
+// Addresses drift. Three copies of the deployed pair came apart once and a
+// reviewer read the stale pair as proof the fix had never been deployed. This
+// is the offline half of that guard -- `verifyDeployment` proves the bytes
+// match the chain, and this proves every file naming an address names the same
+// one. It runs in CI, where the network checks cannot.
+const manifest = JSON.parse(
+  readFileSync(new URL('../../deployments.json', import.meta.url), 'utf8'),
+) as Record<string, { address?: string }>
+const expected = Object.entries(manifest)
+  .filter(([k]) => !k.startsWith('_'))
+  .map(([network, entry]) => [network, entry.address as string] as const)
+
+const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8')
+const envExample = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
+
+for (const [network, address] of expected) {
+  check(`README names the deployed ${network} address`, readme.includes(address), address)
+}
+check(
+  '.env.example points at the studionet deployment',
+  envExample.includes(manifest.studionet.address as string),
+  manifest.studionet.address,
+)
+
+// And no *other* address may be presented as a deployment. Throwaway contracts
+// from a suite run are fine -- they are labelled as such -- so this only checks
+// the lines that introduce the deployments.
+const deployLines = readme
+  .split('\n')
+  .filter((l) => /Deployed on|Testnet Bradbury\*\* at|GenLayer Studio\*\* at/.test(l))
+  .join('\n')
+const advertised = [...deployLines.matchAll(/0x[0-9a-fA-F]{40}/g)].map((m) => m[0])
+const known = new Set(expected.map(([, a]) => a))
+for (const address of advertised) {
+  check(`the README's deployment line names a current address`, known.has(address), address)
+}
 
 console.log()
 if (failures > 0) {

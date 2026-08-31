@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import itertools
 import json
+import re
 import shutil
 import subprocess
 import sysconfig
@@ -531,7 +532,11 @@ def test_value_is_never_emitted_at_an_unproven_recipient(artifact_source: str) -
     2. it consults `self.proven` before emitting;
     3. it clears the entitlement before the transfer, so a proven recipient
        cannot withdraw twice;
-    4. the probe carries **no value**, so a failed proof costs nothing.
+    4. the probe carries **no value**, so a failed proof costs nothing;
+    5. a confirmation answers an outstanding probe and spends it, so it can
+       neither arrive unrequested nor be replayed. This is a bar, not a
+       proof of contract-hood -- see `confirm_recipient`, which says so --
+       and the guard exists to keep the bar from quietly disappearing.
     """
     tree = ast.parse(artifact_source)
     fns = {
@@ -564,6 +569,29 @@ def test_value_is_never_emitted_at_an_unproven_recipient(artifact_source: str) -
     assert "emit_transfer" not in probe, "the probe must not transfer value"
     assert "value=" not in probe, "the probe must carry no value"
     assert "credent_probe" in probe, "the probe must call the recipient back"
+    assert "self.probing[key] = True" in probe, (
+        "prove_recipient must record the outstanding probe, or confirm_recipient "
+        "has nothing to check against"
+    )
+
+    # A confirmation must answer a probe this contract actually issued, and must
+    # spend it. Without both halves an unrequested confirmation is accepted, and
+    # one confirmation can be replayed forever.
+    confirm = _code_of(fns["confirm_recipient"])
+    assert "self.probing" in confirm, (
+        "confirm_recipient does not require an outstanding probe; it would accept "
+        "a confirmation that answers nothing"
+    )
+    assert "REASON_NO_PROBE_OUTSTANDING" in confirm, (
+        "an unrequested confirmation must be a classified refusal, not a bare "
+        "exception that rotates validators"
+    )
+    assert "self.probing[key] = False" in confirm, (
+        "confirm_recipient does not consume the probe; the confirmation is replayable"
+    )
+    set_true = confirm.index("self.proven[key] = True")
+    consumed = confirm.index("self.probing[key] = False")
+    assert consumed < set_true, "the probe must be spent before the proof is recorded"
 
 
 def test_recipients_and_entitlements_are_validated(artifact_source: str) -> None:
@@ -593,4 +621,29 @@ def test_recipients_and_entitlements_are_validated(artifact_source: str) -> None
     assert "_clean_recipient(" in assign, "assign_to does not validate its recipient"
     assert "Address(recipient)" not in assign, (
         "assign_to still constructs an Address directly, which raises unclassified"
+    )
+
+
+def test_the_readme_states_the_real_test_count(request: pytest.FixtureRequest) -> None:
+    """The README's test count must be the number of tests that actually run.
+
+    A small thing that goes stale silently: the count sat at 337 for three
+    rounds of new tests, so the one number a reader can check without running
+    anything was the one number that was wrong. Every other claim in that file
+    is now guarded by something; this closes the last unguarded one.
+
+    `testscollected` is the whole session, so this is only meaningful on a full
+    run -- a subset is skipped rather than failed, because failing `pytest
+    test_build_contract.py` for saying so would be useless noise.
+    """
+    collected = request.session.testscollected
+    full_suite = collected > 100
+    if not full_suite:
+        pytest.skip(f"only {collected} tests collected; run the whole suite")
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    stated = {int(n) for n in re.findall(r"(\d+) tests", readme)}
+    assert stated, "the README no longer states a test count"
+    assert stated == {collected}, (
+        f"the README says {sorted(stated)} tests and the suite collects {collected}"
     )

@@ -55,6 +55,7 @@ REASON_WITHDRAW_NEEDS_CONTRACT = "withdraw_recipient_must_be_a_contract"
 REASON_SELF_PAYOUT = "recipient_is_this_contract"
 REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
+REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 REASONS = frozenset({
@@ -80,6 +81,7 @@ REASONS = frozenset({
     REASON_SELF_PAYOUT,
     REASON_RECIPIENT_UNPROVEN,
     REASON_ALREADY_PROVEN,
+    REASON_NO_PROBE_OUTSTANDING,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })
@@ -616,6 +618,7 @@ class ReputationOracle(gl.Contract):
     att_bond_state: DynArray[str]
     owed: TreeMap[str, u256]
     proven: TreeMap[str, bool]
+    probing: TreeMap[str, bool]
     total_owed: u256
     subject_atts: TreeMap[Address, DynArray[u256]]
     pair_count: TreeMap[str, u256]
@@ -945,11 +948,15 @@ class ReputationOracle(gl.Contract):
         key = _owed_key(gl.message.sender_address)
         if bool(self.proven.get(key, False)):
             _fail(REASON_ALREADY_PROVEN)
+        self.probing[key] = True
         gl.get_contract_at(gl.message.sender_address).emit(on="accepted").credent_probe()
         return {"probing": key}
     @gl.public.write
     def confirm_recipient(self) -> dict:
         key = _owed_key(gl.message.sender_address)
+        if not bool(self.probing.get(key, False)):
+            _fail(REASON_NO_PROBE_OUTSTANDING)
+        self.probing[key] = False
         self.proven[key] = True
         return {"proven": key}
     @gl.public.write
