@@ -173,10 +173,30 @@ implements the handler explicitly:
 | `accepted` | **0.200 → 0.190 GEN** | **no** (150s) | **no** |
 | `finalized` | 0.190 → 0.190 | no | n/a — never dispatched |
 
-So an `accepted` transfer at a wallet leaves the sender and arrives nowhere, and
-the documented refund hook does not run. There is no recovery after the fact;
-the only safe design is not to push value at an address the contract cannot
-verify. That is why the payout path below moves entitlements rather than value. Seven routes were tried -- both `on` modes, `gl.Account`,
+So on studionet an `accepted` transfer at a wallet leaves the sender and arrives
+nowhere, and the documented refund hook does not run.
+
+**Bradbury does not behave the same way, and an earlier version of this section
+claimed it did.** That claim was a studionet measurement generalised to both
+networks without checking, which is the same mistake as the error-handler claim
+further down. Driven through the deployed oracle's own `withdraw` and then
+watched for fifteen minutes:
+
+```text
+t=0     oracle 1.063750  wallet 5.224358
+t=900s  oracle 1.063750  wallet 5.224358
+verdict: the emitted transfer to a wallet LEFT THE VALUE IN THE CONTRACT
+```
+
+The recipient is not credited on either network — that part holds everywhere and
+is what the payout design turns on. What differs is the sender: studionet debits
+it, bradbury does not. So a failed payout destroys value on one network and
+strands it in the contract on the other, and neither is a case worth reaching.
+
+There is no recovery after the fact on either: the contract cannot see the
+outcome of a message it emitted, so it cannot tell a delivered payout from a
+failed one, and a "reclaim" that guessed would pay a recipient twice. The only
+safe design is not to push value at an address the contract cannot verify. That is why the payout path below moves entitlements rather than value. Seven routes were tried -- both `on` modes, `gl.Account`,
 `gl.chain.Account`, and `wasi.gl_call({'PostMessage': …})` with three different
 calldata shapes -- and all seven end in the same place.
 
@@ -303,6 +323,30 @@ instead of answered:
   — the previous `recipient_is_a_contract` was an assertion the caller made
   about itself that this contract could not check and that cost the entitlement
   when it was wrong.
+
+**What the residual actually costs, measured rather than argued.** The bradbury
+gap below is only worth accepting if the damage is bounded, so it was driven
+deliberately against the submitted deployment: a wallet took a 0.02 GEN
+entitlement, raised a probe for itself, answered it directly, and withdrew.
+
+```text
+  the bypass: the wallet raises a probe and answers it itself
+  ok   the wallet marked itself proven — the documented bradbury residual
+  it withdraws, and the value is destroyed
+    total_owed 0.020000 -> 0.000000
+    held       1.063750 -> 1.063750
+  ok   the lying wallet lost its own entitlement
+  ok   and it did NOT receive the value — a wallet cannot be credited
+  ok   total_owed fell by exactly the 0.020000 destroyed
+  ok   the contract still holds at least everything it owes everyone else
+```
+
+One wallet's own entitlement, and nothing else: no other party's credit moved,
+`held >= total_owed` still holds so everyone else stays payable, and the value
+did not even leave the contract on this network. A caller has to lie about
+itself, in two deliberate transactions, to reach a state that costs only itself.
+`assign_to` is the path that makes no claim at all, and it is what the app
+offers a wallet by default.
 
 **Two guards, and they are not equally strong.** The stronger one is stated
 first, along with where it does not hold, because quoting only the strong half
