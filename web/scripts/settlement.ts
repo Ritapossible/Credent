@@ -239,13 +239,22 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
  * fail, so `send` throwing is the pass condition -- and the reason is checked
  * too, because "it failed" is also what a typo in the method name looks like.
  */
-async function expectRejection(act: () => Promise<Sent>, reason: string): Promise<boolean> {
+async function expectRejection(
+  act: () => Promise<Sent>,
+  // One or more acceptable reasons. More than one where the contract has two
+  // guards on the same call and which fires first depends on the network: a
+  // wallet calling `confirm_recipient` is stopped by the origin check on
+  // studionet and by the missing probe on bradbury. Both are correct refusals,
+  // so pinning either one alone would fail a run that behaved perfectly.
+  reason: string | string[],
+): Promise<boolean> {
+  const reasons = typeof reason === 'string' ? [reason] : reason
   try {
     await act()
     return false
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err)
-    if (text.includes(reason)) return true
+    if (reasons.some((r) => text.includes(r))) return true
 
     // Bradbury does not carry the contract's reason string in the receipt at
     // all -- the whole of what it reports is
@@ -255,7 +264,7 @@ async function expectRejection(act: () => Promise<Sent>, reason: string): Promis
     // run where the contract refused exactly as it should, which is a test
     // reporting a platform difference as a contract defect.
     if (/FINISHED_WITH_ERROR|rejected by the contract$/.test(text)) {
-      console.log(`    refused; this network reports no reason string (expected "${reason}")`)
+      console.log(`    refused; this network reports no reason string (expected "${reasons.join('" or "')}")`)
       return true
     }
 
@@ -1306,9 +1315,12 @@ async function main(): Promise<void> {
   const walletProven = await view(oracle, 'is_proven', [client.address])
   check(walletProven === false, 'an ordinary wallet is not a proven recipient')
 
+  // Either refusal is correct and which one fires is a property of the network,
+  // not of the contract: a wallet trips the origin check first where
+  // `origin_address` is the initiator, and the missing proof where it is not.
   const refused = await expectRejection(
     () => send(client, oracle, 'withdraw', []),
-    'recipient_has_not_proven',
+    ['recipient_has_not_proven', 'caller_is_the_transaction_origin'],
   )
   check(refused, 'withdraw from an unproven wallet is refused, not attempted')
 
@@ -1328,11 +1340,36 @@ async function main(): Promise<void> {
   // in a single direct call.
   const unrequested = await expectRejection(
     () => send(client, oracle, 'confirm_recipient', []),
-    'no_probe_outstanding',
+    ['no_probe_outstanding', 'caller_is_the_transaction_origin'],
   )
   check(unrequested, 'a confirmation with no outstanding probe is refused')
   const stillUnproven = await view(oracle, 'is_proven', [client.address])
   check(stillUnproven === false, 'the refused confirmation left the wallet unproven')
+
+  // The harder case, and the one that decides how much `is_proven` is worth: a
+  // wallet that *does* raise a probe for itself and then answers it directly.
+  // Consuming the probe does not stop this; only the origin check does, and
+  // that check is exact on studionet and inert on bradbury. Both outcomes are
+  // recorded rather than asserted uniformly, because claiming a guarantee on
+  // the network that does not provide it is the failure this whole rework
+  // exists to correct.
+  await send(client, oracle, 'prove_recipient', [])
+  const selfAnswered = await expectRejection(
+    () => send(client, oracle, 'confirm_recipient', []),
+    'caller_is_the_transaction_origin',
+  )
+  const selfProven = await view(oracle, 'is_proven', [client.address])
+  if (selfAnswered) {
+    check(selfProven === false, 'a wallet cannot answer its own probe on this network')
+  } else {
+    console.log(
+      `    a wallet answered its own probe and is_proven is now ${selfProven}.\n` +
+        `    This network does not report origin_address as the transaction\n` +
+        `    initiator, so the origin check cannot fire and the handshake is a\n` +
+        `    bar rather than a proof here. Documented, not a regression -- and\n` +
+        `    a wallet that does this spends only its own entitlement.`,
+    )
+  }
 
   console.log(`\ncontract holds ${gen(await balanceOf(oracle))} at the end`)
   console.log(`oracle ${oracle}`)

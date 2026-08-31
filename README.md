@@ -19,9 +19,9 @@ substantiated attestation that the work went undelivered forfeits that collatera
 to the client; anything else returns it. The attester's bond is a separate,
 smaller mechanism that prices *reviewing*, and it is not what the score feeds.
 
-Deployed on **GenLayer Studio** at `0x421419F58D583a7E031Fb33e0870f2c0f38A8453`,
+Deployed on **GenLayer Studio** at `0x81Ff839D9A703F0a8a5102e55f492556650A2705`,
 inspectable through the [GenLayer Studio explorer](https://explorer-studio.genlayer.com/),
-and on **Testnet Bradbury** at `0xE36f8195aEc759BFFA87bA14A6D9dDF9f398DE98` — the
+and on **Testnet Bradbury** at `0x791852F8571481EA503D0863660A9Cb8fBD6c940` — the
 minified artifact there, since bradbury refuses the full-size source on
 transaction pubdata rather than on gas.
 
@@ -57,7 +57,7 @@ web/                    the site: reads the chain, and writes to it with your wa
 
 GenLayer's runner takes a **single** Python file, so the engine has to live
 inside the contract rather than be imported by it. Concatenating by hand would
-mean two copies of arithmetic that 348 tests are pinned to, and the copy that
+mean two copies of arithmetic that 349 tests are pinned to, and the copy that
 drifts is always the one nobody runs. So `build_contract.py` inlines the engine
 verbatim — byte for byte, nothing reformatted — and `test_build_contract.py`
 fails the suite if the checked-in artifact is stale.
@@ -71,7 +71,7 @@ disagree, `npm run parity` fails the build.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                 # 348 tests: engine, prompts, contract, parity vectors
+python -m pytest                 # 349 tests: engine, prompts, contract, parity vectors
 python build_contract.py         # regenerate reputation_oracle.py after any engine change
 
 cd web
@@ -80,7 +80,16 @@ cp .env.example .env.local       # then set the contract address
 npm run dev
 npm run parity                   # the TS port still agrees with the Python engine
 npm run units                    # formatting, error text, calldata encoding
+npm run uicheck                  # the site and the contract still speak the same names
 npm run build
+```
+
+Two more need a network but no key, no gas and no setup — they read the
+deployments named in `deployments.json`:
+
+```bash
+npm run verify-deployment        # the deployed bytes are this repository's, hashed
+npm run agreement                # agreement preserves the bond and collateral outcomes
 ```
 
 CI runs all of it on every push. Neither of the two failures this project hit in
@@ -263,25 +272,56 @@ instead of answered:
   about itself that this contract could not check and that cost the entitlement
   when it was wrong.
 
-**What the handshake is, and what it is not.** It is not a proof that the caller
-is a contract, and this contract does not claim it is. A wallet can call
-`prove_recipient` and then `confirm_recipient` directly, in two deliberate
-transactions, and mark itself proven; that was tested against a throwaway
-deployment and it works. Nothing on this platform prevents it: an address's code
-cannot be inspected from inside a contract, `origin_address` equals
-`sender_address` on an emitted call so the two are indistinguishable, and
-anything the probe carries is public calldata a wallet can read and repeat. A
-view call into an address that turns out to be a wallet takes the whole
-transaction down rather than raising something catchable, so it cannot be used
-as a test either.
+**Two guards, and they are not equally strong.** The stronger one is stated
+first, along with where it does not hold, because quoting only the strong half
+is the mistake this section exists to correct.
 
-What the handshake does buy is the ordinary case: a recipient that answers the
-probe has demonstrably executed code, so it is verified rather than asserted,
-and the failure case now takes two deliberate calls instead of one wrong flag on
-the payout itself. A caller that lies here loses only its own entitlement. The
-path that carries no claim of any kind is `assign_to()`, which moves the
-entitlement between storage slots, emits nothing, and cannot fail — that is what
-a wallet should use, and the app offers it by default.
+`withdraw` and `confirm_recipient` both refuse a caller that is its own
+transaction's entry point. Only an entry point can have an externally owned
+account as `sender_address` — every deeper frame is one contract calling
+another — so where `origin_address` really carries the initiator, `sender !=
+origin` *proves* the caller is a contract. That is exactly the question the
+payout turns on, and it is the question `withdraw(recipient_is_a_contract)` used
+to ask the caller to answer about itself.
+
+The field is not portable, which is the whole reason this is written as a
+refusal and never consulted as a proof. Measured with a reporter contract called
+once directly and once through a relay:
+
+```text
+studionet  direct   sender 0xaA34…02Bd   origin 0xaA34…02Bd      equal
+           relayed  sender <relay>       origin 0xaA34…02Bd      differ
+bradbury   direct   sender 0xaA34…02Bd   origin 0x9F6aa736…      differ
+           direct   sender 0xaA34…02Bd   origin 0x2d012a29…      differ
+           direct   sender 0xaA34…02Bd   origin 0xB93a46B8…      differ
+```
+
+On studionet the equality holds for a wallet and the check is exact: a wallet
+cannot get past it at all. On bradbury every transaction reports a different
+unrelated origin, so the equality never holds and the check cannot fire. Inert
+is the right failure mode for a refusal — it never admits a caller that would
+otherwise be rejected — but it means bradbury is guarded only by the second
+thing.
+
+**The probe is that second thing, and it is a bar rather than a proof.** A
+wallet on bradbury can call `prove_recipient` and then `confirm_recipient`
+directly, in two deliberate transactions, and mark itself proven; that was
+tested against a throwaway deployment and it works. An address's code cannot be
+inspected from inside a contract, anything the probe carries is public calldata
+a wallet can read and repeat, and a view call into an address that turns out to
+be a wallet takes the whole transaction down rather than raising something
+catchable. Nothing available closes it there.
+
+What the bar buys is the ordinary case: a recipient that answers the probe from
+inside `credent_probe` has demonstrably executed code, so it is verified rather
+than asserted, and getting it wrong takes two deliberate calls instead of one
+wrong flag on the payout itself. A caller that lies spends only its own
+entitlement. The path that carries no claim of any kind is `assign_to()`, which
+moves the entitlement between storage slots, emits nothing, and cannot fail —
+that is what a wallet should use, and the app offers it by default.
+
+The settlement suite drives both cases on both networks, and prints which one it
+got rather than asserting a guarantee the network does not provide.
 
 `web/scripts/claimant.py` shows both halves; the probe answer is one statement.
 
@@ -309,6 +349,19 @@ guard that is never triggered is a comment:
   ok   the claimant contract proved it can receive
   ok   a confirmation with no outstanding probe is refused
   ok   the refused confirmation left the wallet unproven
+  ok   a wallet cannot answer its own probe on this network
+```
+
+That last line is studionet. The same step on bradbury prints this instead, and
+the run still passes, because the suite records what the network does rather
+than asserting a guarantee it does not provide:
+
+```text
+  a wallet answered its own probe and is_proven is now true.
+  This network does not report origin_address as the transaction
+  initiator, so the origin check cannot fire and the handshake is a
+  bar rather than a proof here. Documented, not a regression -- and
+  a wallet that does this spends only its own entitlement.
 ```
 
 The last two lines are there because the handshake was decorative once.
@@ -329,10 +382,46 @@ About a hundred lines of code, and rather more comment than that.
 One snag worth knowing before you write your own: **`genvm-lint` rejects
 `__receive__`.** E019 demands a `@gl.public.write` decorator on it and E106 then
 refuses any public name beginning with `__`, so a recipient contract can be
-lint-clean or receive value quietly, not both. Without the handler the value
-still arrives -- crediting and executing are separate outcomes -- but every
-inbound transfer leaves `ValueError: call to private method ...` in its receipt,
-which reads exactly like a failed payout and is not one.
+lint-clean or receive value quietly, not both. Implement it anyway. An earlier
+version of this paragraph claimed a recipient *without* the handler is still
+credited, on the reasoning that crediting and executing are separate outcomes.
+That was never measured here, an attempt to measure it produced a void result,
+and it is not the sort of thing to assert about the step that moves the money.
+What is measured is the recipient that does implement it: the settlement suite
+pays `claimant.py` on both networks and checks the balance on both sides of the
+transfer. Write the handler, and the rest of this file is about a path that has
+been run rather than argued.
+
+**Item one is a view now, so it can be checked instead of read.** Validator
+agreement runs inside `gl.vm.run_nondet`, which is only entered when two
+validators genuinely produce different grades — nothing a caller can arrange. So
+the rule that agreement must preserve the bond and collateral outcomes could be
+read in the source and pinned by unit tests, and could not be exercised against
+a deployment at all. `agreement_check` is a view that answers it directly, and
+`npm run agreement` runs the interesting cases against every address in
+`deployments.json`:
+
+```text
+studionet  0x81Ff839D9A703F0a8a5102e55f492556650A2705
+  substantiated 10 vs 30 (tolerance 20, slash_floor 20)
+    bond: slashed vs releasable
+  ok   the two grades settle the bond differently
+  ok   so they do not count as agreement
+  fulfilled 1500 vs 3500 (forfeit at 2500bp)
+    collateral: forfeit vs releasable
+  ok   the two grades settle the collateral differently
+  ok   so they do not count as agreement
+  substantiated 60 vs 70, fulfilled 5000 vs 5400 (same side of both lines)
+  ok   both outcomes match
+  ok   so they do count as agreement
+  ok   a differing verdict is not agreement, whatever the numbers
+```
+
+Ten and thirty are within the tolerance and on opposite sides of `slash_floor`:
+by the arithmetic they agree, and one confiscates the attester's bond while the
+other returns it. The control matters as much — two grades that differ and
+settle identically still agree, because a rule that rejected those would fail
+every honest round.
 
 **Check the review's four items yourself, in one command.** `python
 tools/audit_review.py` needs no key and no gas. It reads both *deployed*
@@ -343,7 +432,7 @@ flow and that the README names no contract method that does not exist, which is
 what let a false claim about an error handler survive here.
 
 ```text
-studionet  0x421419F58D583a7E031Fb33e0870f2c0f38A8453
+studionet  0x81Ff839D9A703F0a8a5102e55f492556650A2705
   ok   agreement preserves the bond outcome
   ok   agreement preserves the collateral outcome
   ok   assign_to exists and emits no value
@@ -473,8 +562,8 @@ the top of this file.
 
 | Network | Oracle (test policy) | Claimant | Strict oracle (100% forfeit) | Wallet's recipient |
 |---|---|---|---|---|
-| Studionet | `0x20a453B6C2FfE2F41378Dc21CF9eCf2f855A6D82` | `0x0db86De7C40Deb53735Fd98526e297ae5c7d2cff` | `0x35941bcE0924ba9921bf2000DB87ff4Bfe719715` | `0x5C1a30f7A907A2b7C7D2E539F57ddc0620Fb4948` |
-| Testnet Bradbury | `0xD7a88D414327029013a1D2a002E2B547494b9cAa` | `0x6a3eF13F5E2FEE816cBc6c1aF25E6e644e2B8961` | `0xDfb30d1b61DF5De7d7428AD397B56C93BfF70E4b` | `0xAC883728caf5BCd4F9bE8FE0bcB2367090CdA2a3` |
+| Studionet | `0xEF9A5C49690479AC5e098e27D77ca4aD522d87f3` | `0x5d6df82bDd832f09b323256DD7dddC94265Ca324` | `0xAE17BdE91144eA7d4b8971463500DC7832118654` | `0xeCFd428341e91a285BD8414Afd65515e9A833cb6` |
+| Testnet Bradbury | `0x75838Fe47B4e1f1FE1c0E9884302A8afa9e58b4F` | `0xD2dB78576a2CD9E44e60F957c49D4A435759A46E` | `0x1A5a50fBF5712255C5DAeC3aaE7E59EFC8Ca3F94` | `0xB9c5c79833fF657b80Ec6f0D10C2522c00bD6C55` |
 
 The last two columns are the fourth engagement: the oracle whose forfeit
 threshold is raised so `claim_collateral` is reachable, and the contract the
@@ -487,15 +576,15 @@ are deployed:
 ```text
 contract holds 1.81 GEN at the end
 
-settlement ok - 38 checks, every payout reached its recipient
+settlement ok - 39 checks, every payout reached its recipient   (studionet)
+settlement ok - 38 checks, every payout reached its recipient   (bradbury)
 ```
 
-Thirty-eight rather than forty when the attestation in the third engagement does
-not record inside `ATTEST_TIMEOUT_MS`: the suite then excludes that claimant's
-bond reclaim from the withdrawal and says so in the run, rather than folding a
-timeout into a payout assertion. The bond payout type is still covered in the
-same run — the client reclaims one in engagement two and withdraws it through
-`assign_to`.
+The counts differ by the two checks in the third engagement's bond reclaim,
+which the suite excludes when the attestation does not record inside
+`ATTEST_TIMEOUT_MS` — it says so in the run rather than folding a timeout into a
+payout assertion. The bond payout type is still covered in both runs: the client
+reclaims one in engagement two and withdraws it through `assign_to`.
 
 **Integers are typed, and large ones arrive as strings.** An address argument is
 its own calldata type: passing the hex string encodes a `str`, the contract
@@ -559,8 +648,8 @@ with `collateral_below_required`, the correctly funded one posted 8.75 GEN
 against a 10 GEN stake at the neutral rate of 8750bp, the grade moved the
 provider to 6154, and the same job then quoted 7.308 GEN — one well-evidenced
 attestation freeing 1.44 GEN of working capital. Offline it carries 60 new tests
-and 266 new parity vectors, and `genvm-lint` validates the rebuilt schema: 21
-methods, 13 constructor parameters. The offline suite is 348 tests.
+and 266 new parity vectors, and `genvm-lint` validates the rebuilt schema: 26
+methods, 13 constructor parameters. The offline suite is 349 tests.
 
 The payout leg works, and getting there was the most instructive part of this
 build. An earlier revision pushed value directly at providers, clients and

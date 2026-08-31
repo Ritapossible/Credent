@@ -155,6 +155,7 @@ REASON_SELF_PAYOUT = "recipient_is_this_contract"
 REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
+REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
@@ -182,6 +183,7 @@ REASONS = frozenset({
     REASON_RECIPIENT_UNPROVEN,
     REASON_ALREADY_PROVEN,
     REASON_NO_PROBE_OUTSTANDING,
+    REASON_CALLER_IS_ORIGIN,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })

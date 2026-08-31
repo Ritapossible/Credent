@@ -235,6 +235,7 @@ REASON_SELF_PAYOUT = "recipient_is_this_contract"
 REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
+REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
@@ -262,6 +263,7 @@ REASONS = frozenset({
     REASON_RECIPIENT_UNPROVEN,
     REASON_ALREADY_PROVEN,
     REASON_NO_PROBE_OUTSTANDING,
+    REASON_CALLER_IS_ORIGIN,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })
@@ -1376,6 +1378,38 @@ def _fail(reason: str) -> None:
     raise gl.vm.UserError(f"{ERROR_EXPECTED} {reason}")
 
 
+def _refuse_the_transaction_origin() -> None:
+    """Refuse a caller that is its own transaction's entry point.
+
+    Only the entry point of a transaction can have an externally owned account
+    as `sender_address`; every deeper frame is a contract calling another. So
+    where `origin_address` really carries the initiator, `sender != origin`
+    proves the caller is a contract -- which is the one thing this contract
+    needs to know before it emits value, and the thing it previously asked
+    callers to assert about themselves.
+
+    It is written as a refusal and never consulted as a proof, because the field
+    is not portable. Measured on both networks with a reporter contract called
+    once directly and once through a relay:
+
+        studionet  direct  sender 0xaA34..02Bd  origin 0xaA34..02Bd  (equal)
+                   relayed sender <relay>       origin 0xaA34..02Bd
+        bradbury   direct  sender 0xaA34..02Bd  origin 0x9F6aa736..
+                   direct  sender 0xaA34..02Bd  origin 0x2d012a29..
+                   direct  sender 0xaA34..02Bd  origin 0xB93a46B8..
+
+    On studionet the field is the initiator and this check is exact. On bradbury
+    every transaction reports a different unrelated origin, so the equality
+    never holds and the check cannot fire. Inert is the right failure mode for a
+    refusal: it never admits a caller that would otherwise be rejected, and
+    nothing downstream is allowed to conclude that it ran. What guards the
+    bradbury case is the probe handshake, and `confirm_recipient` says plainly
+    how far that goes.
+    """
+    if gl.message.sender_address.as_hex.lower() == gl.message.origin_address.as_hex.lower():
+        _fail(REASON_CALLER_IS_ORIGIN)
+
+
 def _now_seconds() -> int:
     """Consensus time as whole epoch seconds, UTC.
 
@@ -2104,26 +2138,37 @@ class ReputationOracle(gl.Contract):
     def confirm_recipient(self) -> dict:
         """Answer an outstanding probe.
 
-        **This is not a proof that the caller is a contract, and this contract
-        does not claim it is.** A wallet can call `prove_recipient` and then this
-        method directly, in two deliberate transactions, and mark itself proven.
-        Nothing on this platform can prevent that: an address's code cannot be
-        inspected from inside a contract, `origin_address` equals
-        `sender_address` on an emitted call so the two are indistinguishable,
-        and anything the probe carries is public calldata that a wallet can
-        read and repeat.
+        Two independent checks, and they are not equally strong. Say so in that
+        order rather than quoting the stronger one and leaving the reader to
+        discover where it does not hold.
 
-        What the handshake does buy is worth having, and is all it is sold as:
-        a recipient that *does* answer the probe has demonstrably executed code,
-        so the ordinary case is verified rather than asserted, and the failure
-        case takes two deliberate calls rather than a single flag on the payout
-        itself. A caller that lies here loses only its own entitlement, and
+        **`_refuse_the_transaction_origin`** is a real proof where it fires: a
+        caller whose `sender_address` differs from `origin_address` cannot be
+        the transaction's entry point, and only an entry point can be an
+        externally owned account. Measured, that field carries the initiator on
+        studionet and does not on bradbury, so on studionet a wallet cannot get
+        past this line at all, and on bradbury the line cannot fire. See that
+        helper for the transcripts.
+
+        **The probe** is what is left on bradbury, and it is a bar rather than a
+        proof. A wallet there can call `prove_recipient` and then this method
+        directly, in two deliberate transactions, and mark itself proven. An
+        address's code cannot be inspected from inside a contract, and anything
+        the probe carries is public calldata that a wallet can read and repeat,
+        so nothing available here closes it.
+
+        What the bar buys is still worth having: a recipient that answers the
+        probe from inside `credent_probe` has demonstrably executed code, so the
+        ordinary case is verified rather than asserted, and getting it wrong
+        takes two deliberate calls instead of one wrong flag on the payout
+        itself. A caller that lies here spends only its own entitlement, and
         `assign_to` -- which moves no value and cannot fail -- is the path that
         needs no claim of any kind.
 
         The probe is consumed, so a confirmation cannot be replayed and cannot
         arrive unrequested.
         """
+        _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
         if not bool(self.probing.get(key, False)):
             _fail(REASON_NO_PROBE_OUTSTANDING)
@@ -2135,11 +2180,15 @@ class ReputationOracle(gl.Contract):
     def withdraw(self) -> dict:
         """Take your entitlement out. The only method that moves value.
 
-        Refused unless the caller has completed the probe handshake. That is a
-        bar, not a proof -- see `confirm_recipient`, which says plainly what it
-        can and cannot establish -- but it means the ordinary recipient is
-        verified by having executed code rather than by asserting anything, and
-        a caller that wants to be wrong has to say so twice.
+        Refused unless the caller is not its own transaction's entry point and
+        has completed the probe handshake. The first is a proof that the caller
+        is a contract on a network that reports `origin_address` faithfully, and
+        cannot fire on one that does not; the second is a bar rather than a
+        proof anywhere. `confirm_recipient` and
+        `_refuse_the_transaction_origin` say which is which, with the
+        measurements. Between them the ordinary recipient is verified by having
+        executed code rather than by asserting anything, and a caller that wants
+        to be wrong has to say so twice and cannot say it at all on studionet.
 
         There is no flag to pass. The previous signature took
         `recipient_is_a_contract`, a claim made about the caller's own address
@@ -2153,6 +2202,11 @@ class ReputationOracle(gl.Contract):
         The entitlement is cleared before the transfer is emitted. Leaving it
         readable across the transfer would let a recipient withdraw twice.
         """
+        # Checked here as well as at `confirm_recipient`, on the call that
+        # actually spends the entitlement rather than only on the one that
+        # recorded the eligibility. Costs nothing and does not depend on the
+        # proof having been recorded correctly.
+        _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
         if not bool(self.proven.get(key, False)):
             _fail(REASON_RECIPIENT_UNPROVEN)
@@ -2500,6 +2554,39 @@ class ReputationOracle(gl.Contract):
             "collateral_state": self.eng_collateral_state.get(engagement_id, _COL_NONE),
             "collateral_rate_bp": int(self.eng_collateral_rate_bp.get(engagement_id, 0)),
             "score_bp": int(self.eng_score_bp.get(engagement_id, 0)),
+        }
+
+    @gl.public.view
+    def agreement_check(self, mine: dict, theirs: dict) -> dict:
+        """Would this contract treat these two grades as agreement, and why?
+
+        The review asked that validator agreement preserve the same bond and
+        collateral outcomes. That comparison runs inside `gl.vm.run_nondet`,
+        which is only reached when two validators actually produce different
+        grades -- so before this view existed the fix could be read in the
+        source and pinned by tests, but not *exercised* against a deployment.
+        Anyone can now check it in one call, against the same policy the
+        deployment settles money with.
+
+        The case worth trying: two grades within `confidence_tol` that land on
+        opposite sides of `slash_floor`. `substantiated` 10 and 30 differ by 20,
+        the default tolerance is 20, and yet one confiscates the attester's bond
+        and the other returns it. `agree` is False, and the two `bond_*` fields
+        show it is the outcome, not the arithmetic, that separates them.
+
+        A view: it reads the deployed policy, decides nothing, and stores
+        nothing.
+        """
+        policy = self._policy()
+        return {
+            "agree": grades_agree(mine, theirs, policy),
+            "bond_mine": bond_outcome(mine, policy),
+            "bond_theirs": bond_outcome(theirs, policy),
+            "collateral_mine": collateral_outcome(mine, policy),
+            "collateral_theirs": collateral_outcome(theirs, policy),
+            "confidence_tol": policy.confidence_tol,
+            "slash_floor": policy.slash_floor,
+            "collateral_forfeit_bp": policy.collateral_forfeit_bp,
         }
 
     @gl.public.view

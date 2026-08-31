@@ -90,6 +90,7 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
     agree = code(fns["grades_agree"]) if "grades_agree" in fns else ""
     probe = code(fns["prove_recipient"]) if "prove_recipient" in fns else ""
     confirm = code(fns["confirm_recipient"]) if "confirm_recipient" in fns else ""
+    origin = code(fns["_refuse_the_transaction_origin"]) if "_refuse_the_transaction_origin" in fns else ""
     withdraw = code(fns["withdraw"]) if "withdraw" in fns else ""
     emitters = sorted(n for n, f in fns.items() if emits_value(f))
 
@@ -142,6 +143,18 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             "an unspent probe makes the confirmation replayable",
         ),
         (
+            "the transaction's own entry point is refused",
+            "sender_address" in origin and "origin_address" in origin
+            and "REASON_CALLER_IS_ORIGIN" in origin,
+            "only an entry point can have a wallet as its sender",
+        ),
+        (
+            "both the proof and the payout are guarded by it",
+            "_refuse_the_transaction_origin()" in confirm
+            and "_refuse_the_transaction_origin()" in withdraw,
+            "the call that spends the entitlement must check for itself",
+        ),
+        (
             "recipients are validated and classified",
             "_clean_recipient" in fns
             and "REASON_BAD_RECIPIENT" in code(fns["_clean_recipient"])
@@ -159,6 +172,14 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             "measured: it does not fire for an undeliverable transfer",
         ),
         # 2. "complete the main app's payout flow with the owed balance and withdrawal methods"
+        (
+            "the agreement rule is checkable from outside",
+            "agreement_check" in fns
+            and "grades_agree" in code(fns["agreement_check"])
+            and "bond_outcome" in code(fns["agreement_check"])
+            and "collateral_outcome" in code(fns["agreement_check"]),
+            "the rule only runs inside run_nondet, so a view is the only way to check it",
+        ),
         (
             "the payout views exist",
             all(v in fns for v in ("owed_to", "is_proven", "liabilities")),

@@ -65,6 +65,7 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         # an entitlement whose payout never left, and refuses when the value did.
         "withdraw",
         "assign_to",
+        "agreement_check",
         "prove_recipient",
         "confirm_recipient",
         "is_proven",
@@ -593,6 +594,27 @@ def test_value_is_never_emitted_at_an_unproven_recipient(artifact_source: str) -
     consumed = confirm.index("self.probing[key] = False")
     assert consumed < set_true, "the probe must be spent before the proof is recorded"
 
+    # The one check that is a proof rather than a bar, where the network reports
+    # `origin_address` faithfully: only a transaction's entry point can have a
+    # wallet as its sender, so `sender != origin` means the caller is a
+    # contract. It must guard both the call that records eligibility and the
+    # call that spends the entitlement -- the second because nothing downstream
+    # should have to trust that the first ran.
+    assert "_refuse_the_transaction_origin" in fns, (
+        "the origin refusal helper is gone; the handshake is the only guard left"
+    )
+    helper = _code_of(fns["_refuse_the_transaction_origin"])
+    assert "sender_address" in helper and "origin_address" in helper, (
+        "the origin refusal does not compare the sender against the origin"
+    )
+    assert "REASON_CALLER_IS_ORIGIN" in helper, (
+        "the origin refusal is not a classified rejection"
+    )
+    for guarded in ("confirm_recipient", "withdraw"):
+        assert "_refuse_the_transaction_origin()" in _code_of(fns[guarded]), (
+            f"{guarded} does not refuse the transaction's own entry point"
+        )
+
 
 def test_recipients_and_entitlements_are_validated(artifact_source: str) -> None:
     """A malformed or zero recipient must be a classified refusal.
@@ -646,4 +668,47 @@ def test_the_readme_states_the_real_test_count(request: pytest.FixtureRequest) -
     assert stated, "the README no longer states a test count"
     assert stated == {collected}, (
         f"the README says {sorted(stated)} tests and the suite collects {collected}"
+    )
+
+
+def test_the_agreement_view_delegates_to_the_consensus_rule(artifact_source: str) -> None:
+    """`agreement_check` must answer with the rule the contract actually uses.
+
+    The view exists so the review's first item can be exercised against a
+    deployment rather than read in the source: the real comparison runs inside
+    `gl.vm.run_nondet` and is only reached when two validators genuinely
+    disagree, which a caller cannot arrange.
+
+    That makes it evidence, and evidence has to be wired to the thing it is
+    evidence about. A view that reimplemented the comparison would be worse than
+    no view at all -- it would agree with the tests, disagree with the contract,
+    and read as proof either way. So it must call `grades_agree`,
+    `bond_outcome` and `collateral_outcome`, and it must read the deployed
+    policy rather than take one from the caller.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "agreement_check" in fns, "the agreement rule is not checkable from outside"
+
+    code = _code_of(fns["agreement_check"])
+    for call in ("grades_agree(", "bond_outcome(", "collateral_outcome("):
+        assert call in code, (
+            f"agreement_check does not call {call.rstrip('(')}; a view that "
+            "reimplements the rule is evidence for the wrong thing"
+        )
+    assert "self._policy()" in code, (
+        "agreement_check must answer against the deployed policy, not a supplied one"
+    )
+
+    args = [a.arg for a in fns["agreement_check"].args.args if a.arg != "self"]
+    assert args == ["mine", "theirs"], f"unexpected signature: {args}"
+
+    # A view: it must not write. `gl.public.view` is checked by the schema test;
+    # this checks the body cannot have grown a side effect.
+    assert "self." not in code.replace("self._policy()", ""), (
+        "agreement_check touches storage; it is meant to decide nothing and store nothing"
     )

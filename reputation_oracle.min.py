@@ -56,6 +56,7 @@ REASON_SELF_PAYOUT = "recipient_is_this_contract"
 REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
+REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 REASONS = frozenset({
@@ -82,6 +83,7 @@ REASONS = frozenset({
     REASON_RECIPIENT_UNPROVEN,
     REASON_ALREADY_PROVEN,
     REASON_NO_PROBE_OUTSTANDING,
+    REASON_CALLER_IS_ORIGIN,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })
@@ -573,6 +575,9 @@ def _clean_recipient(raw: object) -> Address:
     return address
 def _fail(reason: str) -> None:
     raise gl.vm.UserError(f"{ERROR_EXPECTED} {reason}")
+def _refuse_the_transaction_origin() -> None:
+    if gl.message.sender_address.as_hex.lower() == gl.message.origin_address.as_hex.lower():
+        _fail(REASON_CALLER_IS_ORIGIN)
 def _now_seconds() -> int:
     return parse_block_time(gl.message_raw["datetime"])
 def _pair_key(attester: Address, subject: Address) -> str:
@@ -953,6 +958,7 @@ class ReputationOracle(gl.Contract):
         return {"probing": key}
     @gl.public.write
     def confirm_recipient(self) -> dict:
+        _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
         if not bool(self.probing.get(key, False)):
             _fail(REASON_NO_PROBE_OUTSTANDING)
@@ -961,6 +967,7 @@ class ReputationOracle(gl.Contract):
         return {"proven": key}
     @gl.public.write
     def withdraw(self) -> dict:
+        _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
         if not bool(self.proven.get(key, False)):
             _fail(REASON_RECIPIENT_UNPROVEN)
@@ -1174,6 +1181,19 @@ class ReputationOracle(gl.Contract):
             "collateral_state": self.eng_collateral_state.get(engagement_id, _COL_NONE),
             "collateral_rate_bp": int(self.eng_collateral_rate_bp.get(engagement_id, 0)),
             "score_bp": int(self.eng_score_bp.get(engagement_id, 0)),
+        }
+    @gl.public.view
+    def agreement_check(self, mine: dict, theirs: dict) -> dict:
+        policy = self._policy()
+        return {
+            "agree": grades_agree(mine, theirs, policy),
+            "bond_mine": bond_outcome(mine, policy),
+            "bond_theirs": bond_outcome(theirs, policy),
+            "collateral_mine": collateral_outcome(mine, policy),
+            "collateral_theirs": collateral_outcome(theirs, policy),
+            "confidence_tol": policy.confidence_tol,
+            "slash_floor": policy.slash_floor,
+            "collateral_forfeit_bp": policy.collateral_forfeit_bp,
         }
     @gl.public.view
     def get_policy(self) -> dict:

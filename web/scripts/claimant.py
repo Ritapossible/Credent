@@ -10,9 +10,9 @@
 #
 # `__receive__` is what makes it a valid recipient. It is called when native
 # tokens are sent without invoking a method, and it must be a payable public
-# write. Crediting and executing are separate outcomes -- a recipient is credited
-# even when this body has not run yet -- so the counter is a convenience for the
-# harness, not the proof. The balance is the proof.
+# write. The counter it keeps is a convenience for the harness, not the proof:
+# the balance is the proof, and the settlement suite reads it on both sides of
+# every transfer.
 
 from __future__ import annotations
 
@@ -51,13 +51,14 @@ class Claimant(gl.Contract):
     #
     # Quiet wins here, deliberately. `emit_transfer` sends a message with **no
     # method name**; the runner resolves that by trying `__receive__` and then
-    # `__handle_undefined_method__`. A recipient implementing neither still
-    # *receives the value* -- crediting and executing the handler are separate
-    # outcomes, so the balance moves either way -- but the inbound message
-    # leaves `ValueError: call to private method ...` in its receipt, which
-    # reads exactly like the failed transfer this whole change exists to fix.
-    # On a payout path being re-examined by a reviewer, a clean receipt is worth
-    # more than a clean lint run on a test fixture.
+    # `__handle_undefined_method__`. A recipient implementing neither leaves
+    # `ValueError: call to private method ...` in the inbound message's receipt,
+    # which reads exactly like the failed transfer this whole change exists to
+    # fix. Whether such a recipient is nonetheless credited is not established
+    # here -- an earlier comment said it was, on reasoning rather than
+    # measurement -- so this contract implements the handler and the suite tests
+    # that case. On a payout path being re-examined by a reviewer, a clean
+    # receipt is worth more than a clean lint run on a test fixture.
     @gl.public.write.payable
     def __receive__(self) -> None:
         """Accept a plain value transfer."""
