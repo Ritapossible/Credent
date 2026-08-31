@@ -173,6 +173,31 @@ verify. That is why the payout path below moves entitlements rather than value. 
 `gl.chain.Account`, and `wasi.gl_call({'PostMessage': …})` with three different
 calldata shapes -- and all seven end in the same place.
 
+**The documentation says otherwise, so this was measured again with a control.**
+[The GenLayer docs](https://docs.genlayer.com/developers/intelligent-contracts/introduction)
+describe `emit_transfer()` as sending value "to other contracts or EOAs", which
+would make this entire payout design unnecessary. A reviewer reading that page
+should see the measurement rather than take either claim on trust.
+
+One payer contract, two transfers of 0.01 GEN, same run. The control is a
+claimant contract that had already been paid 0.925 GEN by this exact mechanism,
+so if the payer were broken the control would show it:
+
+```text
+payer   0xDc66a69677BB7f636D5d67e5350842abFBC4EEf9   funded 0.030000 GEN
+CONTROL 0x5d6df82bDd832f09b323256DD7dddC94265Ca324   0.925000 -> 0.935000   credited: YES
+EOA     0x7C4D842feE6e5e1B4Db3B8da5853a608dd456Bcf   0.000000 -> 0.000000   credited: NO
+payer ends with 0.010000 GEN
+```
+
+The payer is debited **0.02 GEN for two transfers** and only one arrives. The
+wallet is not credited and the 0.01 GEN sent toward it is gone. Every earlier
+attempt at this measurement was thrown away for a harness fault -- recipients
+that had silently failed to deploy, and a poll that stopped on the sender's
+balance dropping rather than the recipient's rising -- so the run above verifies
+the payer answers a view call, verifies its funding by reading the balance back,
+pays a known-good control first, and waits on the recipient only.
+
 **Emitting value toward a contract works.** That is the half this repository
 never tested, and it is the half that matters. Measured with an isolated probe:
 
@@ -422,6 +447,35 @@ by the arithmetic they agree, and one confiscates the attester's bond while the
 other returns it. The control matters as much — two grades that differ and
 settle identically still agree, because a rule that rejected those would fail
 every honest round.
+
+**Written against the official guidance, and checked with the official tool.**
+`genlayerlabs/skills`' `write-contract` skill is the reference this contract is
+held to, and `genvm-lint check` is step one of its testing strategy:
+
+```text
+✓ Lint passed (3 checks)
+✓ Validation passed
+  Contract: ReputationOracle
+  Methods: 26 (15 view, 11 write)
+```
+
+The runner header is the exact hash that skill pins. Errors carry its four
+prefixes and `[LLM_ERROR]` forces rotation rather than agreement. Storage is
+`TreeMap`/`DynArray`/`u256` declared as class-level annotations, money is
+atto-scale `u256`, and enums are stored as `str`. On the rule it calls most
+important -- never validate the leader's output alone -- the validator re-runs
+the prompt and compares the decision fields, which is the comparative form it
+asks for.
+
+One rule is deliberately not followed. The skill says never raise a bare
+exception, because an unclassified fault forces validator rotation instead of an
+agreed rejection. `parse_block_time` and `Policy.validate` still raise
+`ValueError`. That is the point: they guard invariants that no caller can reach
+-- every public method routes user input through `_fail`, and typed `u256`
+parameters are rejected by the calldata decoder before the body runs -- so a
+failure there is a bug in this contract, and rotation is the correct outcome for
+a bug. `_fail` exists for the other case, and the distinction is the whole
+reason both exist.
 
 **Check the review's four items yourself, in one command.** `python
 tools/audit_review.py` needs no key and no gas. It reads both *deployed*
