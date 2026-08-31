@@ -1132,6 +1132,12 @@ async function main(): Promise<void> {
       return seen === 'held' ? 0n : 1n
     },
     (graded) => graded === 1n,
+    // The attest timeout, not settleTo's default. What this waits for *is* an
+    // attestation landing, and the default is 26 hours -- so on a run where a
+    // contract-emitted attest never arrived, which bradbury does, the suite sat
+    // on this poll for ninety minutes and would have sat there overnight rather
+    // than reporting a clean timeout. Observed doing exactly that.
+    ATTEST_TIMEOUT_MS,
   ).catch(() => 0n)
 
   const engagement4 = await view(strict, 'get_engagement', [fourth])
