@@ -341,6 +341,16 @@ entitlement, raised a probe for itself, answered it directly, and withdrew.
   ok   the contract still holds at least everything it owes everyone else
 ```
 
+The transactions, on the submitted bradbury deployment, so this can be checked
+rather than taken on trust:
+
+| step | tx |
+|---|---|
+| `accept_engagement`, overpaying to create the entitlement | [`0xc3baaa3b`](https://explorer-bradbury.genlayer.com/tx/0xc3baaa3b01822f8902d501c49170d7d398a29fd89d5ef22c65c8329c4e9a14b6) |
+| `prove_recipient` — the wallet raises a probe for itself | [`0x24c284d0`](https://explorer-bradbury.genlayer.com/tx/0x24c284d0e455c600e4b370fa3729f103e2e8dc180560e09a734b90b73feb4a3e) |
+| `confirm_recipient` — and answers it directly | [`0xd093088b`](https://explorer-bradbury.genlayer.com/tx/0xd093088bc297506982a69c93aac6a28cad58b1d1618597c6ab53db98bab6b704) |
+| `withdraw` — the entitlement is spent and nothing arrives | [`0xc12f9b5d`](https://explorer-bradbury.genlayer.com/tx/0xc12f9b5d210c5dfe8abcd47faabce60778e888da47130e52a738e362ed1e6018) |
+
 One wallet's own entitlement, and nothing else: no other party's credit moved,
 `held >= total_owed` still holds so everyone else stays payable, and the value
 did not even leave the contract on this network. A caller has to lie about
