@@ -325,19 +325,60 @@ npm run typecheck && npm run build
 different addresses, and if any page file mentions a contract method that does
 not exist. Both guards exist because both failures have happened here.
 
-The recovery mechanism is covered twice, deliberately. `TestResolveWithdrawal`
-in `test_reputation_core.py` executes the decision through every branch with
-real numbers — including a delivered payout that must not be restored, an
-undelivered one that must be, and a restore that must be refused when another
-party's money is on the books. `test_a_failed_transfer_leaves_the_entitlement_recoverable`
-in `test_build_contract.py` checks the contract is wired to it. A structural
-test cannot tell you the arithmetic is right, and an arithmetic test cannot tell
-you the contract calls it.
+The recovery mechanism is covered three ways, deliberately, because no one of
+them is sufficient:
+
+1. **The arithmetic.** `TestResolveWithdrawal` in `test_reputation_core.py`
+   executes `resolve_withdrawal` through every branch with real numbers.
+2. **The wiring.** `test_a_failed_transfer_leaves_the_entitlement_recoverable`
+   in `test_build_contract.py` checks the contract calls it and passes the
+   deployed policy's settle window rather than the module constant.
+3. **The behaviour.** `tests/direct/` runs the contract itself — see below.
+
+A structural test cannot tell you the arithmetic is right, an arithmetic test
+cannot tell you the contract calls it, and neither can tell you what the
+contract actually does.
 
 Every structural check reads code with docstrings stripped. That is not
 fussiness: three guards in this repository once passed against a deliberately
 broken contract because the term they searched for appeared in the prose
 explaining the rule.
+
+### Direct mode — the contract executed, no node and no keys
+
+```bash
+./run_direct_tests.sh          # nine tests, well under a second
+```
+
+GenLayer's own `genlayer-test` harness runs `reputation_oracle.py` in memory.
+This is where the review's sentence is executed rather than argued:
+
+| Test | What it drives |
+|---|---|
+| a wallet cannot open the handshake | `prove_recipient` refused, `is_proven` still false |
+| a wallet cannot close one it never opened | `confirm_recipient` refused |
+| a wallet cannot withdraw | all three refused, entitlement untouched, nothing emitted |
+| withdraw parks the entitlement | `owed` → 0, the same amount in `in_flight_to`, `withdrawal_of` reporting when it resolves |
+| nothing is judged too early | `reclaim` refused before the settle window |
+| **an undelivered transfer restores the entitlement** | the money is still in the contract, so `reclaim` gives the claim back |
+| a restored entitlement can be withdrawn again | restored means usable, not just booked |
+| a delivered transfer is closed, not paid twice | the money left, so nothing is credited back |
+| reclaim cannot be replayed | the second call is refused |
+
+The sixth row is the one that matters most, and the one a live network cannot
+produce: every contract is credited by `emit_transfer`, so a transfer to a
+verified recipient always arrives. In direct mode the test states what the
+contract's balance is, which is exactly the input `reclaim` decides from.
+
+Two things the harness leaves to the test, both documented in
+`tests/direct/conftest.py`: cross-contract calls are answered by a hook, which
+is what makes "a wallet" and "a recipient contract" different things here; and
+`direct_vm.warp` does not refresh the field this contract reads consensus time
+from, so the fixture sets both.
+
+Needs Python 3.12+ and a cached GenVM release tarball. The default
+`python -m pytest` skips the directory when the harness is not importable, so a
+contributor without it still gets a green run.
 
 ### On-chain — network, but no key and no gas
 
@@ -393,14 +434,18 @@ tools/audit_review.py     checks the live bytes against every review item
 web/                      the React site, the TypeScript port of the engine, and
                           the end-to-end scripts
 web/scripts/claimant.py   the reference recipient contract
+tests/direct/             the contract executed in memory, via genlayer-test
+run_direct_tests.sh       runs those, naming an interpreter that can
 ```
 
 **Why the engine is split out.** It is pure integer arithmetic, covered by its
-own test module, which runs with no GenLayer runtime present. The shell cannot be unit-tested at all
-without the GenVM, because `from genlayer import *` only resolves inside it.
-Keeping the untestable part small and free of arithmetic is what stops the
-untestable part from being where a bug hides — and it is why the recovery
-decision was moved there.
+own test module, which runs with no GenLayer runtime present at all — no
+harness, no download, no Python version floor. The shell needs the GenVM,
+because `from genlayer import *` only resolves inside it; `tests/direct/`
+supplies one in memory, at the cost of a heavier dependency. Keeping the
+arithmetic in the part that needs neither is what makes every decision in this
+contract reachable by the cheapest test that can reach it — and it is why the
+recovery decision was moved there.
 
 ---
 
@@ -534,5 +579,12 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 363 tests and 3,421 parity vectors, and `genvm-lint`
-validates the rebuilt schema at 29 methods and 14 constructor parameters.
+Offline the project carries 363 tests and 3,421 parity vectors, plus nine
+direct-mode tests that execute the contract itself, and `genvm-lint` validates
+the rebuilt schema at 29 methods and 14 constructor parameters.
+
+The review's sentence — a wallet marking itself proven, `withdraw` clearing an
+owed balance before an undeliverable transfer, no restoration path — is now
+false in all three of its clauses, and each clause is checked in three places:
+by a test that runs the contract, by a test that runs the arithmetic, and by a
+transaction on a deployed contract you can open in an explorer.
