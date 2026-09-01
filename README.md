@@ -513,27 +513,32 @@ livedemo ok — a settlement completed on the submitted deployment
 ```
 
 Every step, on Testnet Bradbury, oracle
-[`0x3a5DdDBa`](https://explorer-bradbury.genlayer.com/address/0x854008213bB589e8e68BB5f3E6aE05e364619a51),
+[`0x85400821`](https://explorer-bradbury.genlayer.com/address/0x854008213bB589e8e68BB5f3E6aE05e364619a51),
 claimant
-[`0xB6854844`](https://explorer-bradbury.genlayer.com/address/0xB6854844fc9F0b0B8959D8F07539BaF65290aB0d):
+[`0xd9eA7ccF`](https://explorer-bradbury.genlayer.com/address/0xd9eA7ccF45badf15dD0692EFeD01a72633437E12):
 
 | Step | Transaction |
 |---|---|
-| `open_engagement` | [`0x3675c930`](https://explorer-bradbury.genlayer.com/tx/0x3675c9305816ec032448cf43233008ab5b8fb6cacd1d3421f4e20a6ae8ff09ae) |
-| `attest`, graded in consensus | [`0x6842760b`](https://explorer-bradbury.genlayer.com/tx/0x6842760bb5b0a27377da9b7ddbf3d3f10770bd1cb1ce5e2fe1a7e0f1db7a7e26) |
-| `release_collateral` | [`0x6b032704`](https://explorer-bradbury.genlayer.com/tx/0x6b032704bd3997aad91933a0908cf7fbadf4302a7a82e3fda4bbdf1015e92ece) |
-| `prove_recipient` — the probe is paid | [`0xb6942989`](https://explorer-bradbury.genlayer.com/tx/0xb694298944134bd8c2863cc373ecf81278f62ddb001a1505c73cbcd00dc202f3) |
-| `confirm_recipient` — the probe arrived | [`0xb96aaa73`](https://explorer-bradbury.genlayer.com/tx/0xb96aaa738fcce99a2ac6d173e945d18e3a8eb6470a1fd5ca6c7e19321e0c6102) |
-| `withdraw` — 0.874999 GEN delivered | [`0x5be23940`](https://explorer-bradbury.genlayer.com/tx/0x5be23940d4f365a1417c6f28f0fd4fdeb9889cf8019dacfea5fae7ab0d055789) |
-| `reclaim` — the withdrawal settled | [`0xb8dd9365`](https://explorer-bradbury.genlayer.com/tx/0xb8dd9365a0a3c44a0f8a8857622868dec2b81484e95f2c8586faf20fd078bd5b) |
-| `assign_to` — the wallet's credit | [`0x8961c8ee`](https://explorer-bradbury.genlayer.com/tx/0x8961c8ee8f3100d002e27f2193ffe05ad8846bfcae03af1048cfa3a5c987e93a) |
-| `withdraw` — 0.05 GEN delivered | [`0x6f1bbebd`](https://explorer-bradbury.genlayer.com/tx/0x6f1bbebd06067276f2fe41cbf6ba6f21237d66e1991cdfa6b8bacb50bdcc4a2e) |
-| wallet `withdraw`, refused | [`0x6b633599`](https://explorer-bradbury.genlayer.com/tx/0x6b6335991ba2693adb23d6c2c96f3ffcc58a85470cc2e09cd99812662dffad5e) |
-| wallet `prove_recipient`, refused | [`0xc54fe887`](https://explorer-bradbury.genlayer.com/tx/0xc54fe88746501deffb3b38a38de99f09a2e133131cdf306ecb678d2a3b8f7049) |
+| `open_engagement` | [`0xd5ee7782`](https://explorer-bradbury.genlayer.com/tx/0xd5ee7782a3af4ba75b72b27359f568cdbf132276abb1e05c748384876504c337) |
+| `accept_engagement` — collateral posted | [`0x8755c6ab`](https://explorer-bradbury.genlayer.com/tx/0x8755c6ab20719b33f15ff4f9a21374c832d06a9740b0a8d756f16230239313eb) |
+| `close_engagement` | [`0xdff9a744`](https://explorer-bradbury.genlayer.com/tx/0xdff9a744e73fd659f2a2242d2665037e22b73c009c5e919e68ce7aeb05dea1a8) |
+| `attest`, graded in consensus | [`0x63c452a2`](https://explorer-bradbury.genlayer.com/tx/0x63c452a2799731f61e64d64554952b0b3de075ad80c9006190a90b8599b85d77) |
+| `release_collateral` | [`0x8f7792a3`](https://explorer-bradbury.genlayer.com/tx/0x8f7792a3b7925eeccf4316fe61f48e14c81c3020c042365af290a0e69648c077) |
+| `prove_recipient` — the probe is paid | [`0xda567be6`](https://explorer-bradbury.genlayer.com/tx/0xda567be63ba37300318c1a15c6e833905df406351ebe62f9bd152e9ae0b41f49) |
+| `confirm_recipient` — the probe arrived | [`0x392ee47f`](https://explorer-bradbury.genlayer.com/tx/0x392ee47f5cfa978e00924e2b3bb4566149fc795b2f605a3edddadf51d836a91a) |
+| `withdraw` — 0.874999 GEN delivered | [`0x7ab64fd8`](https://explorer-bradbury.genlayer.com/tx/0x7ab64fd8dc28850ad9f2659898be92d3d07e06662a1dec3add469e90fef1200c) |
+| `reclaim` — the withdrawal settled | [`0x19057d94`](https://explorer-bradbury.genlayer.com/tx/0x19057d94bc722726b355a69e4d4fc8c5dfe4df53833543412135253f0211ed93) |
+| `assign_to` — the wallet's credit | [`0xe7fa2877`](https://explorer-bradbury.genlayer.com/tx/0xe7fa2877831eb3801feea3450b062202800ac9f85a0e3dad89a8b6d3dc9fbdf6) |
+| `withdraw` — 0.05 GEN delivered | [`0x029b2b08`](https://explorer-bradbury.genlayer.com/tx/0x029b2b082882ddb28c1807e7bcea1bdc2895eb3d1cc75c624d8d1af7740626f3) |
+| wallet `withdraw`, refused | [`0x603581c3`](https://explorer-bradbury.genlayer.com/tx/0x603581c32caf72d20356ec91a537ec3ea58e7c468f0b0f407ad9b3b08a4c7d2a) |
+| wallet `prove_recipient`, refused | [`0xea179752`](https://explorer-bradbury.genlayer.com/tx/0xea179752871896cfd5aa0881f1f2ca347400e2a0f26cd6b8b9d8de546330f336) |
+| `assign_to` the zero address, refused | [`0x95e886d3`](https://explorer-bradbury.genlayer.com/tx/0x95e886d3569c7cf91c5750e1e961e71bd21ffebb989967f0c841e475778f31cb) |
 
-The last row is the second review's first clause, on the deployed contract. The
-wallet is refused before it can raise a probe, so it never reaches the state the
-rest of that sentence describes.
+The same run passes on studionet against
+[`0x939DCEa4`](https://explorer-studio.genlayer.com/address/0x939DCEa4aEAF09507a208C72D2a47BA45C686D88).
+The last two refusals are the second review's first clause, on the deployed
+contract: the wallet is refused before it can raise a probe, so it never reaches
+the state the rest of that sentence describes.
 
 Two paths the production policy puts out of reach of a single run, neither a
 defect. `min_bond` is 1 GEN rather than the test policy's 0.01, so attesting
@@ -597,6 +602,78 @@ really failed the value is still in the contract and the restore passes; if it
 succeeded the balance is short by exactly that amount and the restore is
 refused. `liabilities()` reports every figure the guard uses, separately.
 
+The run, against
+[`0x85400821`](https://explorer-bradbury.genlayer.com/address/0x854008213bB589e8e68BB5f3E6aE05e364619a51):
+
+```text
+oracle       0x854008213bB589e8e68BB5f3E6aE05e364619a51
+wallet       0xF9dF362Ec0797e2A1Da9c8b11e3FB107C27dD0a7   (an ordinary account, no code)
+  ok   the wallet is owed 0.020000
+
+  clause 1: "a wallet can mark itself proven"
+    prove_recipient — from the wallet, expected to be refused
+  ok   the wallet did not become proven
+  ok   and its entitlement was not touched
+    confirm_recipient — the wallet answering a probe it never got
+  ok   still unproven — the reported bypass is closed
+    withdraw — from the wallet, expected to be refused
+  ok   withdraw did not clear the wallet's owed balance
+  ok   and nothing was put in flight
+
+  clauses 2 and 3, on a recipient that can actually be paid
+    recipient  0xF2854682504e83Ce3537a978555924ab5122f19E
+  ok   it answers credent_recipient(), which a wallet cannot
+    assign_to — the wallet hands its entitlement to the recipient
+  ok   the recipient is owed 0.020000 and the wallet nothing
+    prove — the oracle pays the probe out of the entitlement
+  ok   the probe came out of the entitlement (0.000001)
+    confirm — refused unless the probe actually arrived
+  ok   the recipient is proven, by being paid rather than by asserting
+
+  clause 2: withdraw parks the entitlement, it does not clear it
+    withdraw
+  ok   owed is zero — as the review describes
+  ok   but the entitlement is parked in flight (0.019999), not discarded
+
+  clause 3: reclaim is the restoration path
+    the recipient has received 0.020000 in total
+    reclaim — from the wallet, which has nothing in flight
+    reclaim — from the recipient
+  ok   the in-flight withdrawal was resolved
+  ok   and nothing was credited back, because the value arrived — reclaim settled it rather than paying twice
+    liabilities  owed 0.000000  in_flight 0.000000  bonds 0.000000  collateral 0.043750
+                 obligations 0.043750  held 0.043750
+  ok   the contract still covers everything it has not sent — bonds and collateral included, not just entitlements
+
+  and reclaim cannot be replayed
+    reclaim again (expected to be refused)
+    owed 0.000000 -> 0.000000
+  ok   a second reclaim credited nothing
+
+recovery ok — the reported bypass is closed, the entitlement is parked rather
+than cleared, and reclaim resolves it
+```
+
+| Step | Transaction |
+|---|---|
+| `accept_engagement` — the wallet's entitlement is created | [`0xb80c8f06`](https://explorer-bradbury.genlayer.com/tx/0xb80c8f06a7b4b659dbefe4af87517242e2fe47c9ca6e20c394d0b0ba83a0bc4b) |
+| **`prove_recipient` from the wallet — refused** | [`0x4d7c57b0`](https://explorer-bradbury.genlayer.com/tx/0x4d7c57b04372d48d8ffa5a255ecf9112c85299f96e4c59701ba4756d8bd10023) |
+| **`confirm_recipient` from the wallet — refused** | [`0xd188221a`](https://explorer-bradbury.genlayer.com/tx/0xd188221a041d3c9bb9dc141887518ca4c7b2533cb8fc2183b1afd1ef4fdd14c0) |
+| **`withdraw` from the wallet — refused, entitlement untouched** | [`0x2f4c087c`](https://explorer-bradbury.genlayer.com/tx/0x2f4c087c0e283ddcf88ed57f42f32173340d501b0104f067c791ba01d4b49c31) |
+| `assign_to` — the wallet routes it to a recipient contract | [`0xdca67f92`](https://explorer-bradbury.genlayer.com/tx/0xdca67f92c8dae37fc9db9b7dd3808e471644cda629b5af33167b0a6fbabec774) |
+| `prove_recipient` — the probe is paid out of the entitlement | [`0x6ac3d5dc`](https://explorer-bradbury.genlayer.com/tx/0x6ac3d5dcbed26d567e34c2b798a5b4aebc767fb5293485ac812b4590020ffb6b) |
+| `confirm_recipient` — the probe arrived | [`0x7e47e1f6`](https://explorer-bradbury.genlayer.com/tx/0x7e47e1f6ae1f098aa308623db1ce563fc163573f571a9a58b05603206a919a02) |
+| `withdraw` — parked in flight, not cleared | [`0x87803a06`](https://explorer-bradbury.genlayer.com/tx/0x87803a066103a07488da8619528209f95f374e01dbb0f37f45837c60ae85624d) |
+| `reclaim` from an address with nothing in flight — refused | [`0xe95e74e4`](https://explorer-bradbury.genlayer.com/tx/0xe95e74e476b71d8238d04fd8dcb565af9897f9ae586ee1067b2a0152fc5be73c) |
+| `reclaim` — the withdrawal settled | [`0xc5a6aca5`](https://explorer-bradbury.genlayer.com/tx/0xc5a6aca548559d6273a33f98d2067e5c9e957f8c262f27fe02d9ae1f9d835965) |
+| `reclaim` again — credited nothing | [`0x2c1add94`](https://explorer-bradbury.genlayer.com/tx/0x2c1add94a5ba694775ec39e82ec6a74ccafcb25bbf17ca1d0838f1baff7a783e) |
+
+The three bold rows are the review's first clause. Neither network reports a
+reason string for a transaction that does not complete, so each is judged on
+what the contract state says afterwards rather than on the error: `is_proven`
+never turns true, and the wallet's 0.02 GEN is still sitting in `owed_to` when
+all three are done.
+
 ### Contract validation
 
 `genvm-lint check`, step one of GenLayer's own `write-contract` testing
@@ -613,6 +690,19 @@ strategy:
 
 ## Limitations
 
+### A recipient must be a Credent recipient contract
+
+`withdraw` will only pay an address that answers `credent_recipient()` by view.
+That is what makes the guard exact on both networks, and it is a real
+constraint: an arbitrary contract cannot be pushed value by this oracle, only
+one built to receive from it. Every other party — wallets included — uses
+`assign_to`, which moves the entitlement into a recipient contract's name
+without moving any value and without being able to fail.
+
+The alternative was a guard that a wallet could satisfy on bradbury, which is
+what the second review found. Between a constraint on recipients and a hole in
+the payout path, the constraint is the right trade.
+
 ### A recipient must be able to hold the probe across two transactions
 
 `confirm_recipient` reads the recipient's balance, so a contract that forwards
@@ -626,19 +716,6 @@ its entitlement to a contract that can hold a millionth of a token for one
 transaction, and moves no value in the process. The constraint is stated here
 rather than worked around because the alternative — accepting a confirmation
 without evidence — is the thing the guard exists to prevent.
-
-### A recipient must be a Credent recipient contract
-
-`withdraw` will only pay an address that answers `credent_recipient()` by view.
-That is what makes the guard exact on both networks, and it is a real
-constraint: an arbitrary contract cannot be pushed value by this oracle, only
-one built to receive from it. Every other party — wallets included — uses
-`assign_to`, which moves the entitlement into a recipient contract's name
-without moving any value and without being able to fail.
-
-The alternative was a guard that a wallet could satisfy on bradbury, which is
-what the second review found. Between a constraint on recipients and a hole in
-the payout path, the constraint is the right trade.
 
 ### The restore branch of `reclaim` is no longer reachable on either network
 
@@ -689,16 +766,19 @@ point.
 The first two rows are what no longer happens. `npm run recovery` drives the
 same script against the current deployment and asserts that they are refused.
 
-### Why recovery took three attempts to get right
+### Why the recovery path took four attempts to get right
 
-Two earlier designs tried to decide delivery from the contract's *own* balance
-and both were wrong. The first compared it to `total_owed + total_in_flight` and
-read a shortfall as proof the value had left; the same balance also holds
-collateral and locked bonds, so on a live run it read 1.800 against obligations
-of 2.795 and refused a resolution it had no grounds to judge. The second used an
-exact `total_in - total_out` ledger, sound only while every wei arrived through
-a counted method — a single untracked transfer made a *delivered* payout look
-recoverable and would have credited its owner twice.
+Three designs were wrong before this one, and each was wrong in a way the next
+one only half-fixed.
+
+The first two tried to decide delivery from the contract's *own* balance. One
+compared it to `total_owed + total_in_flight` and read a shortfall as proof the
+value had left; the same balance also holds collateral and locked bonds, so on a
+live run it read 1.800 against obligations of 2.795 and refused a resolution it
+had no grounds to judge. The other used an exact `total_in - total_out` ledger,
+sound only while every wei arrived through a counted method — a single untracked
+transfer made a *delivered* payout look recoverable and would have credited its
+owner twice.
 
 Both failed for the same reason: the contract's own balance mixes obligations
 that have nothing to do with the payout in question. The working answer reads
