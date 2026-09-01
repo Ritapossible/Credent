@@ -39,7 +39,7 @@ client; anything else returns it.
 
 | Network | Address | Artifact |
 |---|---|---|
-| GenLayer Studio | [`0xa0748f2bBb1ADf2335ec2AEF52A99AF26fC8c303`](https://explorer-studio.genlayer.com/address/0xa0748f2bBb1ADf2335ec2AEF52A99AF26fC8c303) | `reputation_oracle.py` |
+| GenLayer Studio | [`0x380aE736827BefB0BD441F627755849D1891cE09`](https://explorer-studio.genlayer.com/address/0x380aE736827BefB0BD441F627755849D1891cE09) | `reputation_oracle.py` |
 | Testnet Bradbury | [`0x3a5DdDBae57372762E61cc812b64107E950a2E5f`](https://explorer-bradbury.genlayer.com/address/0x3a5DdDBae57372762E61cc812b64107E950a2E5f) | `reputation_oracle.min.py` |
 
 Bradbury carries the minified artifact because it refuses the full-size source
@@ -49,7 +49,7 @@ whitespace and nothing else: comments and docstrings are cut, indentation is
 rewritten as one space per level, and continuation lines inside brackets go
 flush left. Every row covered by a multi-line string is preserved byte for byte,
 because the grading prompts are triple-quoted and validators grade against them.
-136,220 bytes become 47,411. `ast.dump` on both files is compared before either
+137,387 bytes become 47,411. `ast.dump` on both files is compared before either
 is written, so the runner cannot tell them apart.
 
 Both run the **production policy**, which is deliberately not the constructor's
@@ -191,7 +191,7 @@ caller cannot arrange — so `agreement_check` exposes the same rule as a view a
 `npm run agreement` exercises it against every deployment:
 
 ```text
-studionet  0xa0748f2bBb1ADf2335ec2AEF52A99AF26fC8c303
+studionet  0x380aE736827BefB0BD441F627755849D1891cE09
   substantiated 10 vs 30 (tolerance 20, slash_floor 20)
     bond: slashed vs releasable
   ok   the two grades settle the bond differently
@@ -432,7 +432,7 @@ the bond payout is still covered in both runs through the client's reclaim.
 `npm run settlement` isolates runs by deploying its own oracle, which left the
 submitted addresses carrying nothing but view reads. `npm run livedemo` settles
 a real engagement against whatever is in `deployments.json`, under the
-production policy:
+production policy. Bradbury, in full:
 
 ```text
 === livedemo — a settlement on the deployed contract ===
@@ -441,41 +441,77 @@ production policy:
     accept — the provider posts collateral through its contract
     ok   the contract took exactly 0.875 GEN of collateral
     close_engagement — the client marks the work delivered
+
   the attestation — an LLM grades the work, in consensus
     attest — the client posts a 1 GEN bond and 0.05 GEN over
     ok   the client wallet was credited the 0.05 GEN it overpaid
     collateral_state = releasable
+
   the payout
     release_collateral — the grade cleared, so the provider reclaims it
     ok   the entitlement rose by 0.875 GEN
     ok   and the contract holds exactly what it held before — crediting moves no value
-    prove_recipient — the oracle probes the recipient, which answers
+    prove_recipient — the oracle pays the recipient a token amount
+    ok   the probe arrived (0.000001 GEN) — only a contract is credited
+    confirm_recipient — refused unless that value actually landed
     ok   the claimant is a proven recipient
+    ok   the probe came out of the entitlement (0.000001 GEN)
     withdraw — the only method that moves value
-    ok   the claimant received the whole entitlement (0.875 GEN)
+    claimant  0.000001 GEN -> 0.875 GEN
+    ok   the claimant received the rest of the entitlement (0.874999 GEN)
+    ok   probe and withdrawal together are the whole entitlement (0.875 GEN)
     ok   the entitlement was zeroed
+    in flight 0.874999 GEN
+    reclaim — settle the withdrawal against the balance
+    ok   the in-flight withdrawal was resolved
+    ok   and nothing was credited back, because the value had arrived
+
   the client wallet's own credit — 0.05 GEN
-    assign_to — moves the entitlement, not the money
+    assign_to — moves the entitlement, not the money; it cannot fail
     ok   the wallet entitlement is spent, not duplicated
     withdraw — the contract collects what the wallet assigned it
     ok   the claimant received the wallet's 0.05 GEN
+
   the payout guard, on the deployed contract
-      refused: caller_is_the_transaction_origin
+    ok   an ordinary wallet is not a proven recipient
+    withdraw from a wallet (expected to be refused)
+      refused (this network reports no reason string)
     ok   withdraw from an unproven wallet is refused, not attempted
-      refused: recipient_is_the_zero_address
+    prove_recipient from a wallet (expected to be refused)
+      refused (this network reports no reason string)
+    ok   a wallet cannot even raise a probe for itself
+    ok   and it is still not a proven recipient
     ok   assigning to the zero address is refused
+
+  liabilities  owed 0 GEN  in_flight 0.05 GEN  bonds 1 GEN  collateral 0.04375 GEN
+               obligations 1.09375 GEN  held 1.04375 GEN
+    ok   the contract covers everything it has not sent (1.04375 GEN against 1.04375 GEN)
 
 livedemo ok — a settlement completed on the submitted deployment
 ```
 
-| | Studionet | Testnet Bradbury |
-|---|---|---|
-| claimant | [`0xBc03cF3c`](https://explorer-studio.genlayer.com/address/0xBc03cF3c752739dD1b5C82c1e164E9Fa2500AD3A) | [`0x44eFd1CF`](https://explorer-bradbury.genlayer.com/address/0x44eFd1CF21b146Bb8676A3Cde89caEC6Fbd75490) |
-| `attest`, graded in consensus | [`0x9752e2c1`](https://explorer-studio.genlayer.com/tx/0x9752e2c1e2827d2b5d4613781cd39ba8148c8c2f53149bb937ca104b3aa07d4b) | [`0x51e7fdd1`](https://explorer-bradbury.genlayer.com/tx/0x51e7fdd1bcce30e12e8756970a7d35f853c5ca418831763da2d5b1307f094aea) |
-| `withdraw` — 0.875 GEN delivered | [`0x2b3f3b0e`](https://explorer-studio.genlayer.com/tx/0x2b3f3b0e6208a269d8d2ea093d91519da0fbf03c587e76c546d557cc765b4daf) | [`0x45b85e71`](https://explorer-bradbury.genlayer.com/tx/0x45b85e71a2735c29e62de753f5344c0bbed821eb05ec12db41cf205406e538a1) |
-| `assign_to` — the wallet's credit | [`0xbfc4f2a8`](https://explorer-studio.genlayer.com/tx/0xbfc4f2a8ccb2c9e8cb3dd73de39c27c1ff16e691763fbe0f599d5da2358da080) | [`0x234f28fe`](https://explorer-bradbury.genlayer.com/tx/0x234f28fe09fe7151c9ba7db24d70df77223ae791fd0db2393be7afa2b91c4d9a) |
-| `withdraw` — 0.05 GEN delivered | [`0x3f89401a`](https://explorer-studio.genlayer.com/tx/0x3f89401a39e211a95e2b03e376e352611711e482544bbef1a12f4f0bbb2baee6) | [`0x9e0a266c`](https://explorer-bradbury.genlayer.com/tx/0x9e0a266c638a59bf781c43335be2d35be73f4a1c91651bd09b27e43775561f08) |
-| wallet `withdraw`, refused | [`0x4e94f7d0`](https://explorer-studio.genlayer.com/tx/0x4e94f7d0df0d031deccf36bc4a47a7425e2464813dd55ef27d37c5cfb70caef1) | [`0x8f6e0bf5`](https://explorer-bradbury.genlayer.com/tx/0x8f6e0bf5c169d47f842ad977991614e11594633a1c9af1f59d05a9a888047a7a) |
+Every step, on Testnet Bradbury, oracle
+[`0x3a5DdDBa`](https://explorer-bradbury.genlayer.com/address/0x3a5DdDBae57372762E61cc812b64107E950a2E5f),
+claimant
+[`0xB6854844`](https://explorer-bradbury.genlayer.com/address/0xB6854844fc9F0b0B8959D8F07539BaF65290aB0d):
+
+| Step | Transaction |
+|---|---|
+| `open_engagement` | [`0x3675c930`](https://explorer-bradbury.genlayer.com/tx/0x3675c9305816ec032448cf43233008ab5b8fb6cacd1d3421f4e20a6ae8ff09ae) |
+| `attest`, graded in consensus | [`0x6842760b`](https://explorer-bradbury.genlayer.com/tx/0x6842760bb5b0a27377da9b7ddbf3d3f10770bd1cb1ce5e2fe1a7e0f1db7a7e26) |
+| `release_collateral` | [`0x6b032704`](https://explorer-bradbury.genlayer.com/tx/0x6b032704bd3997aad91933a0908cf7fbadf4302a7a82e3fda4bbdf1015e92ece) |
+| `prove_recipient` — the probe is paid | [`0xb6942989`](https://explorer-bradbury.genlayer.com/tx/0xb694298944134bd8c2863cc373ecf81278f62ddb001a1505c73cbcd00dc202f3) |
+| `confirm_recipient` — the probe arrived | [`0xb96aaa73`](https://explorer-bradbury.genlayer.com/tx/0xb96aaa738fcce99a2ac6d173e945d18e3a8eb6470a1fd5ca6c7e19321e0c6102) |
+| `withdraw` — 0.874999 GEN delivered | [`0x5be23940`](https://explorer-bradbury.genlayer.com/tx/0x5be23940d4f365a1417c6f28f0fd4fdeb9889cf8019dacfea5fae7ab0d055789) |
+| `reclaim` — the withdrawal settled | [`0xb8dd9365`](https://explorer-bradbury.genlayer.com/tx/0xb8dd9365a0a3c44a0f8a8857622868dec2b81484e95f2c8586faf20fd078bd5b) |
+| `assign_to` — the wallet's credit | [`0x8961c8ee`](https://explorer-bradbury.genlayer.com/tx/0x8961c8ee8f3100d002e27f2193ffe05ad8846bfcae03af1048cfa3a5c987e93a) |
+| `withdraw` — 0.05 GEN delivered | [`0x6f1bbebd`](https://explorer-bradbury.genlayer.com/tx/0x6f1bbebd06067276f2fe41cbf6ba6f21237d66e1991cdfa6b8bacb50bdcc4a2e) |
+| wallet `withdraw`, refused | [`0x6b633599`](https://explorer-bradbury.genlayer.com/tx/0x6b6335991ba2693adb23d6c2c96f3ffcc58a85470cc2e09cd99812662dffad5e) |
+| wallet `prove_recipient`, refused | [`0xc54fe887`](https://explorer-bradbury.genlayer.com/tx/0xc54fe88746501deffb3b38a38de99f09a2e133131cdf306ecb678d2a3b8f7049) |
+
+The last row is the second review's first clause, on the deployed contract. The
+wallet is refused before it can raise a probe, so it never reaches the state the
+rest of that sentence describes.
 
 Two paths the production policy puts out of reach of a single run, neither a
 defect. `min_bond` is 1 GEN rather than the test policy's 0.01, so attesting
