@@ -39,8 +39,8 @@ client; anything else returns it.
 
 | Network | Address | Artifact |
 |---|---|---|
-| GenLayer Studio | [`0x10B19063c1F03E91103c6cb9E1845D66eeE08bC5`](https://explorer-studio.genlayer.com/address/0x10B19063c1F03E91103c6cb9E1845D66eeE08bC5) | `reputation_oracle.py` |
-| Testnet Bradbury | [`0x791852F8571481EA503D0863660A9Cb8fBD6c940`](https://explorer-bradbury.genlayer.com/address/0x791852F8571481EA503D0863660A9Cb8fBD6c940) | `reputation_oracle.min.py` |
+| GenLayer Studio | [`0x052aa4DA317d9bdcAe1931417bc8Cb3FF7843568`](https://explorer-studio.genlayer.com/address/0x052aa4DA317d9bdcAe1931417bc8Cb3FF7843568) | `reputation_oracle.py` |
+| Testnet Bradbury | [`0x5A4c5C7A0783ee746dd373F9F51fBD0669Dc63B2`](https://explorer-bradbury.genlayer.com/address/0x5A4c5C7A0783ee746dd373F9F51fBD0669Dc63B2) | `reputation_oracle.min.py` |
 
 Bradbury carries the minified artifact because it refuses the full-size source
 on transaction pubdata rather than on gas. `minify_contract.py` strips comments
@@ -68,7 +68,7 @@ transaction hashes.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                 # 349 tests: engine, prompts, contract, parity vectors
+python -m pytest                 # 350 tests: engine, prompts, contract, parity vectors
 python build_contract.py         # regenerate reputation_oracle.py after an engine change
 
 cd web
@@ -108,7 +108,7 @@ tools/audit_review.py   checks the review's items against the deployed bytes
 
 GenVM's runner takes a **single** Python file, so the engine must live inside
 the contract rather than be imported by it. Concatenating by hand would mean two
-copies of arithmetic that 349 tests are pinned to, and the copy that drifts is
+copies of arithmetic that 350 tests are pinned to, and the copy that drifts is
 always the one nobody runs. `build_contract.py` inlines the engine verbatim, and
 `test_build_contract.py` fails the suite if the checked-in artifact is stale.
 
@@ -186,7 +186,7 @@ caller cannot arrange — so `agreement_check` exposes the same rule as a view a
 `npm run agreement` exercises it against every deployment:
 
 ```text
-studionet  0x10B19063c1F03E91103c6cb9E1845D66eeE08bC5
+studionet  0x052aa4DA317d9bdcAe1931417bc8Cb3FF7843568
   substantiated 10 vs 30 (tolerance 20, slash_floor 20)
     bond: slashed vs releasable
   ok   the two grades settle the bond differently
@@ -321,7 +321,7 @@ can.
 ### Offline — no network, runs in CI
 
 ```bash
-python -m pytest                 # 349 tests
+python -m pytest                 # 350 tests
 cd web
 npm run parity                   # 3,421 vectors: the TS port agrees with the engine
 npm run units                    # formatting, error text, calldata encoding
@@ -426,6 +426,57 @@ costs real balance — the anti-sybil price the design argues for. And
 `bond_lock_seconds` is fourteen days, so `reclaim_bond` is covered by
 `npm run settlement` against a zero-lock instance instead.
 
+### Recovering an undelivered withdrawal
+
+The review's third item — *ensure a failed emitted transfer leaves the
+entitlement recoverable* — is answered by `withdraw` parking the entitlement
+rather than discarding it, and `reclaim` resolving it against evidence.
+
+`withdraw` moves the entitlement out of `owed` so it cannot be spent twice while
+a transfer is outstanding, into `in_flight` under the same key, and records what
+the recipient held at that moment. `reclaim` then reads the recipient's balance
+again. `emit_transfer` credits a contract and never credits a wallet, so that
+balance answers whether the value arrived: risen by the amount means delivered
+and the claim is closed; not risen means it did not arrive and the entitlement
+is **credited back to the same key**.
+
+The restore is refused unless the contract's balance still covers every
+entitlement including the restored one. That guard is what makes it safe: a
+recipient that received the value and then emptied itself would present the same
+balance evidence as one that never received it, and without the guard could take
+a second credit out of the pool backing everyone else. With it, such a caller is
+simply refused, and no other party's entitlement is reachable.
+
+`npm run recovery` drives the review's exact scenario against the deployed
+bradbury contract:
+
+```text
+  reproducing the reported failure
+    confirm_recipient — the wallet answers its own probe
+  ok   the wallet marked itself proven (the reported bypass)
+    withdraw — emits a transfer that cannot be delivered to a wallet
+  ok   owed is now zero — as the review describes
+  ok   but the entitlement is parked in flight (0.020000), not discarded
+
+  the restoration path the review asked for
+    reclaim
+    wallet balance 5.160165 -> 5.159883 (gas only; a wallet is never credited)
+  ok   the entitlement was RESTORED in full (0.020000)
+  ok   and the in-flight record was cleared, so it cannot be reclaimed twice
+    liabilities  total_owed 0.020000  in_flight 0.000000  held 0.063750
+  ok   the contract still covers every entitlement
+```
+
+| step | tx |
+|---|---|
+| `confirm_recipient` — the wallet answers its own probe | [`0xefde493f`](https://explorer-bradbury.genlayer.com/tx/0xefde493fa04d4bb047633873f668c72b07646e58f90ee113cffa9a14a74475df) |
+| `withdraw` — an undeliverable transfer | [`0x825534df`](https://explorer-bradbury.genlayer.com/tx/0x825534df404a1257c13827de14e3901806cc896106b116c5b4c2daebec5f6e5f) |
+| `reclaim` — the entitlement restored | [`0x009106f2`](https://explorer-bradbury.genlayer.com/tx/0x009106f2bbda9eff2b9c73af376085c404a552b30ded16e7a724dde9bbc4c9ce) |
+
+A second `reclaim` credits nothing. Bradbury serves no receipt to read a reason
+from, so that is judged on state rather than on whether the call threw: `owed`
+stayed at 0.020000 instead of doubling.
+
 ### Contract validation
 
 `genvm-lint check`, step one of GenLayer's own `write-contract` testing
@@ -442,54 +493,55 @@ strategy:
 
 ## Limitations
 
-### The recipient guard is weaker on bradbury
+### The recipient guard is weaker on bradbury, and the entitlement survives it
 
 `origin_address` is not the transaction initiator there, so the origin check
-cannot fire and the probe handshake is the only guard. A wallet can raise a
-probe for itself, answer it directly, and withdraw. **This was driven
-deliberately against the submitted deployment rather than described:**
+cannot fire and the probe handshake is the only guard: a wallet can raise a
+probe for itself, answer it directly, and withdraw. **That case no longer
+destroys the entitlement.** `withdraw` parks it in `in_flight` and `reclaim`
+gives it back — see [Recovering an undelivered
+withdrawal](#recovering-an-undelivered-withdrawal), which drives exactly this
+scenario against the deployed contract and recovers from it.
+
+What remains is that a wallet *can* still reach the state; it just costs it
+nothing but gas, and one extra call puts the entitlement back.
+
+### What this looked like before the recovery path
+
+An earlier build had no `reclaim`, and the run below is what that cost. It is
+kept because the difference is the point: the same scenario, on the same
+network, ending in a lost entitlement rather than a restored one.
 
 ```text
   ok   the wallet marked itself proven — the documented bradbury residual
   ok   the lying wallet lost its own entitlement
   ok   and it did NOT receive the value — a wallet cannot be credited
   ok   total_owed fell by exactly the 0.020000
-  ok   the contract still holds at least everything it owes everyone else
 ```
 
-| step | tx |
-|---|---|
-| `accept_engagement`, overpaying to create the entitlement | [`0xc3baaa3b`](https://explorer-bradbury.genlayer.com/tx/0xc3baaa3b01822f8902d501c49170d7d398a29fd89d5ef22c65c8329c4e9a14b6) |
-| `prove_recipient` — the wallet raises a probe for itself | [`0x24c284d0`](https://explorer-bradbury.genlayer.com/tx/0x24c284d0e455c600e4b370fa3729f103e2e8dc180560e09a734b90b73feb4a3e) |
-| `confirm_recipient` — and answers it directly | [`0xd093088b`](https://explorer-bradbury.genlayer.com/tx/0xd093088bc297506982a69c93aac6a28cad58b1d1618597c6ab53db98bab6b704) |
-| `withdraw` — the entitlement is spent and nothing arrives | [`0xc12f9b5d`](https://explorer-bradbury.genlayer.com/tx/0xc12f9b5d210c5dfe8abcd47faabce60778e888da47130e52a738e362ed1e6018) |
+That is the state the review named, and it was documented here rather than
+fixed — which was the wrong call. `withdraw` now parks the entitlement and
+`reclaim` restores it; the run above under [Recovering an undelivered
+withdrawal](#recovering-an-undelivered-withdrawal) is the same scenario against
+the current deployment.
 
-**Blast radius: one wallet's own entitlement.** No other party's credit moved,
-`held >= total_owed` still holds so everyone else stays payable, and the value
-did not even leave the contract on that network. Reaching this state requires
-lying about yourself in two deliberate transactions, and costs only yourself.
-`assign_to` makes no claim at all and is what the app offers a wallet by
-default.
+### Why recovery took three attempts to get right
 
-### No recovery mechanism is possible
+Two earlier designs tried to decide delivery from the contract's *own* balance
+and both were wrong. The first compared it to `total_owed + total_in_flight` and
+read a shortfall as proof the value had left; the same balance also holds
+collateral and locked bonds, so on a live run it read 1.800 against obligations
+of 2.795 and refused a resolution it had no grounds to judge. The second used an
+exact `total_in - total_out` ledger, sound only while every wei arrived through
+a counted method — a single untracked transfer made a *delivered* payout look
+recoverable and would have credited its owner twice.
 
-A contract cannot observe the outcome of a message it emitted.
-`__on_errored_message__` is never called for this failure. The sender's balance
-carries no signal. And inferring from the recipient's balance cannot separate
-"never arrived" from "arrived and was spent" — a reclaim built on that would pay
-a recipient twice.
-
-Two earlier designs tried and both were wrong. The first compared the contract's
-balance to `total_owed + total_in_flight` and read a shortfall as proof the
-value had left; the same balance also holds collateral and locked bonds, so on a
-live run it read 1.800 against obligations of 2.795 and refused a resolution it
-had no grounds to judge. The second used an exact `total_in - total_out` ledger,
-sound only while every wei arrived through a counted method — a single untracked
-transfer made a *delivered* payout look recoverable and credited its owner
-twice. Both were found by auditing the fix, not by a reviewer.
-
-Refusing to emit at an unverified address is the honest version of the same
-guarantee.
+Both failed for the same reason: the contract's own balance mixes obligations
+that have nothing to do with the payout in question. The working answer reads
+the **recipient's** balance instead, which is specific to the payout and
+answerable because `emit_transfer` credits a contract and never credits a
+wallet. The contract's balance is still consulted, but only as a solvency guard
+on the restore, never as the evidence for it.
 
 ### Not production infrastructure
 
@@ -619,7 +671,7 @@ The payout leg works end to end, with balances checked on both sides of every
 transfer, on studionet and testnet-bradbury, against both throwaway instances
 and the submitted deployments.
 
-Offline the project carries 349 tests and 3,421 parity vectors, and `genvm-lint`
+Offline the project carries 350 tests and 3,421 parity vectors, and `genvm-lint`
 validates the rebuilt schema at 26 methods and 13 constructor parameters.
 
 ---

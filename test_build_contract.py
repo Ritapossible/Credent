@@ -66,6 +66,8 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         "withdraw",
         "assign_to",
         "agreement_check",
+        "reclaim",
+        "in_flight_to",
         "prove_recipient",
         "confirm_recipient",
         "is_proven",
@@ -711,4 +713,54 @@ def test_the_agreement_view_delegates_to_the_consensus_rule(artifact_source: str
     # this checks the body cannot have grown a side effect.
     assert "self." not in code.replace("self._policy()", ""), (
         "agreement_check touches storage; it is meant to decide nothing and store nothing"
+    )
+
+
+def test_a_failed_transfer_leaves_the_entitlement_recoverable(artifact_source: str) -> None:
+    """The review's third item, as a structural guarantee.
+
+    "Ensure a failed emitted transfer leaves the entitlement recoverable." The
+    answer is not to guess afterwards whether the value landed -- two earlier
+    designs guessed and both were wrong -- but to *park* the entitlement instead
+    of discarding it, and to judge it against the one thing that is observable:
+    the recipient's own balance, which rises only if the value arrived.
+
+    So `withdraw` must move the entitlement into `in_flight` rather than drop
+    it, must record the baseline it will later be judged against, and `reclaim`
+    must be able to put it back. The solvency guard is checked too, because
+    without it the restore is a way to spend the pool that backs everybody else.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+    withdraw = _code_of(fns["withdraw"])
+    assert "self.in_flight[key] = amount" in withdraw, (
+        "withdraw discards the entitlement instead of parking it; a failed "
+        "transfer would leave nothing to recover"
+    )
+    assert "self.in_flight_baseline[key] = baseline" in withdraw, (
+        "withdraw records no baseline, so reclaim has nothing to judge delivery against"
+    )
+    assert ".balance" in withdraw, "the baseline must be read from the recipient's balance"
+    parked = withdraw.index("self.in_flight[key] = amount")
+    emitted = withdraw.index("emit_transfer")
+    assert parked < emitted, "the entitlement must be parked before the transfer is emitted"
+
+    assert "reclaim" in fns, "there is no way to recover an undelivered withdrawal"
+    reclaim = _code_of(fns["reclaim"])
+    assert "REASON_NO_WITHDRAWAL_PENDING" in reclaim, (
+        "reclaim must refuse when nothing is outstanding, rather than crediting silently"
+    )
+    assert "self.owed[key] = restored" in reclaim, "reclaim never restores the entitlement"
+    assert "REASON_CANNOT_BACK_RESTORE" in reclaim, (
+        "reclaim has no solvency guard; a restore could spend the balance backing "
+        "other parties' entitlements"
+    )
+    # The guard has to compare against everything owed, not just this claim.
+    assert "self.total_owed" in reclaim and "held" in reclaim, (
+        "the solvency guard must weigh the whole obligation, not one entitlement"
+    )
+    # Delivered and undelivered must be distinguished by evidence, not assumed.
+    assert "baseline + amount" in reclaim, (
+        "reclaim must decide delivery from the recipient's balance against its baseline"
     )

@@ -1,13 +1,13 @@
 {
   "_note": "The deployed addresses, in one place. Three copies of these drifted apart once and a review read the stale pair as proof a fix was undeployed.",
   "studionet": {
-    "address": "0x10B19063c1F03E91103c6cb9E1845D66eeE08bC5",
+    "address": "0x052aa4DA317d9bdcAe1931417bc8Cb3FF7843568",
     "rpc": "https://studio.genlayer.com/api",
     "artifact": "reputation_oracle.py",
     "params": "bare"
   },
   "testnet-bradbury": {
-    "address": "0x791852F8571481EA503D0863660A9Cb8fBD6c940",
+    "address": "0x5A4c5C7A0783ee746dd373F9F51fBD0669Dc63B2",
     "rpc": "https://rpc-bradbury.genlayer.com",
     "artifact": "reputation_oracle.min.py",
     "params": "object"

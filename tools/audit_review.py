@@ -161,10 +161,33 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             and "REASON_ZERO_RECIPIENT" in code(fns["_clean_recipient"]),
             "a bare Address() raises unclassified; the zero address strands funds",
         ),
+        # The two unsound designs decided delivery from *this contract's* balance
+        # weighed against its obligations, which fails because that balance also
+        # holds collateral and locked bonds. `reclaim` reads the **recipient's**
+        # balance instead -- specific to the payout, and answerable because
+        # emit_transfer credits a contract and never a wallet. So the check is
+        # that the old machinery is gone, not that balances are never read.
         (
-            "no balance-inference machinery remains",
-            all(n not in fns for n in ("resolve_in_flight", "in_flight_to", "solvency")),
-            "two designs inferred delivery from the balance and both were wrong",
+            "delivery is not inferred from this contract's own balance",
+            "solvency" not in fns and "resolve_in_flight" not in fns
+            and "total_in_flight" not in code(fns.get("withdraw", fns["assign_to"])).replace(
+                "self.total_in_flight = int(self.total_in_flight) + amount", ""
+            ),
+            "two designs weighed the contract's balance against its obligations "
+            "and both were wrong",
+        ),
+        (
+            "an undelivered withdrawal can be recovered",
+            "reclaim" in fns
+            and "REASON_CANNOT_BACK_RESTORE" in code(fns["reclaim"])
+            and "self.owed[key] = restored" in code(fns["reclaim"]),
+            "a failed emitted transfer must leave the entitlement recoverable",
+        ),
+        (
+            "the entitlement is parked, not discarded",
+            "self.in_flight[key] = amount" in code(fns["withdraw"])
+            and "self.in_flight_baseline[key] = baseline" in code(fns["withdraw"]),
+            "withdraw must preserve the claim while the transfer is outstanding",
         ),
         (
             "no __on_errored_message__ is claimed",

@@ -236,6 +236,10 @@ REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
 REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
+REASON_WITHDRAWAL_PENDING = "a_withdrawal_is_already_pending"
+REASON_NO_WITHDRAWAL_PENDING = "no_withdrawal_pending"
+REASON_DELIVERED = "the_withdrawal_was_delivered"
+REASON_CANNOT_BACK_RESTORE = "the_contract_cannot_back_the_restore"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
@@ -264,6 +268,10 @@ REASONS = frozenset({
     REASON_ALREADY_PROVEN,
     REASON_NO_PROBE_OUTSTANDING,
     REASON_CALLER_IS_ORIGIN,
+    REASON_WITHDRAWAL_PENDING,
+    REASON_NO_WITHDRAWAL_PENDING,
+    REASON_DELIVERED,
+    REASON_CANNOT_BACK_RESTORE,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })
@@ -1524,6 +1532,23 @@ class ReputationOracle(gl.Contract):
     probing: TreeMap[str, bool]
     total_owed: u256
 
+    # A withdrawal that has been emitted and not yet resolved.
+    #
+    # `withdraw` cannot see whether its transfer arrived, so it no longer
+    # *discards* the entitlement on the way out: it moves it here, where it is
+    # still recorded under the same key and still readable, and `reclaim` gives
+    # it back if the value never landed. The entitlement is therefore never
+    # cleared irreversibly -- the case the review asked about.
+    #
+    # Deciding that afterwards is possible because of one measured fact:
+    # `emit_transfer` credits a contract and never credits an externally owned
+    # account. So the recipient's own balance answers the question. `baseline`
+    # is what it held when the withdrawal was emitted; if it has not risen by
+    # the amount, the value did not arrive.
+    in_flight: TreeMap[str, u256]
+    in_flight_baseline: TreeMap[str, u256]
+    total_in_flight: u256
+
     # Indexes.
     subject_atts: TreeMap[Address, DynArray[u256]]
     pair_count: TreeMap[str, u256]
@@ -1593,6 +1618,7 @@ class ReputationOracle(gl.Contract):
         # Plain `0`, never `u256(0)`: on this runner the integer aliases are
         # `typing.Annotated[int, ...]`, so they annotate and do not call.
         self.total_owed = 0
+        self.total_in_flight = 0
 
     def _policy(self) -> Policy:
         """Rebuild the in-memory policy from storage."""
@@ -2237,8 +2263,26 @@ class ReputationOracle(gl.Contract):
         if amount <= 0:
             _fail(REASON_NOTHING_OWED)
 
+        # One withdrawal at a time per recipient. Two in flight at once would
+        # share a single baseline and neither could be judged against it.
+        if int(self.in_flight.get(key, 0)) > 0:
+            _fail(REASON_WITHDRAWAL_PENDING)
+
+        # What the recipient holds before the transfer is emitted. `reclaim`
+        # compares against this, which is why it is taken here and stored rather
+        # than recomputed later.
+        baseline = int(gl.get_contract_at(gl.message.sender_address).balance)
+
+        # The entitlement is *parked*, not discarded. It leaves `owed` so it
+        # cannot be withdrawn twice while the transfer is outstanding, and it is
+        # still recorded under the same key, still readable through
+        # `in_flight_to`, and still restorable by `reclaim`.
         self.owed[key] = 0
         self.total_owed = int(self.total_owed) - amount
+        self.in_flight[key] = amount
+        self.in_flight_baseline[key] = baseline
+        self.total_in_flight = int(self.total_in_flight) + amount
+
         # `on="accepted"`, not the SDK's safer-by-default `on="finalized"`:
         # measured on bradbury, a transfer emitted `on="finalized"` was recorded
         # on the transaction and never dispatched. This method runs no nondet
@@ -2246,7 +2290,75 @@ class ReputationOracle(gl.Contract):
         gl.get_contract_at(gl.message.sender_address).emit_transfer(
             value=amount, on="accepted"
         )
-        return {"to": key, "amount": amount}
+        return {"to": key, "amount": amount, "in_flight": amount}
+
+    @gl.public.write
+    def reclaim(self) -> dict:
+        """Resolve your own outstanding withdrawal: settle it, or take it back.
+
+        This is the answer to "a failed emitted transfer must leave the
+        entitlement recoverable", and it is possible because of one measured
+        fact rather than an assumption: **`emit_transfer` credits a contract and
+        never credits an externally owned account.** The recipient's own balance
+        therefore says whether the value arrived, and this contract can read any
+        address's balance.
+
+        Two outcomes, both terminal:
+
+        * The balance rose by at least the amount -- the value arrived. The
+          withdrawal is settled and nothing is restored. Calling again is
+          refused rather than silently repeated.
+        * It did not -- the value did not arrive. The entitlement is credited
+          back to the same key it was debited from, and can be withdrawn again
+          or moved with `assign_to`.
+
+        **The restore is refused unless this contract can actually back it.**
+        `self.balance` must still cover every entitlement including the one
+        being restored. That guard is what makes the mechanism safe rather than
+        merely useful: a recipient that received the value and then emptied
+        itself would present the same balance evidence as one that never
+        received it, and without the guard could obtain a second credit out of
+        the pool that backs everybody else. With it, the worst such a caller can
+        do is be refused. No other party's entitlement can be spent this way.
+
+        The key is `gl.message.sender_address`, so a caller resolves only its
+        own withdrawal and can neither settle nor restore anyone else's.
+        """
+        key = _owed_key(gl.message.sender_address)
+        amount = int(self.in_flight.get(key, 0))
+        if amount <= 0:
+            _fail(REASON_NO_WITHDRAWAL_PENDING)
+
+        baseline = int(self.in_flight_baseline.get(key, 0))
+        now = int(gl.get_contract_at(gl.message.sender_address).balance)
+
+        if now >= baseline + amount:
+            # Delivered. Close it out; there is nothing to give back.
+            self.in_flight[key] = 0
+            self.total_in_flight = int(self.total_in_flight) - amount
+            return {"to": key, "amount": amount, "outcome": "delivered"}
+
+        # Not delivered. Restore only if the balance still covers every
+        # entitlement once this one is back on the books.
+        held = int(self.balance)
+        if held < int(self.total_owed) + amount:
+            _fail(REASON_CANNOT_BACK_RESTORE)
+
+        self.in_flight[key] = 0
+        self.total_in_flight = int(self.total_in_flight) - amount
+        restored = int(self.owed.get(key, 0)) + amount
+        if restored > U256_MAX:
+            _fail("entitlement_overflow")
+        self.owed[key] = restored
+        self.total_owed = int(self.total_owed) + amount
+        return {"to": key, "amount": amount, "outcome": "restored"}
+
+    @gl.public.view
+    def in_flight_to(self, recipient: str) -> int:
+        """What this contract has emitted to an address and not yet resolved."""
+        if not isinstance(recipient, str):
+            return 0
+        return int(self.in_flight.get(recipient.lower(), 0))
 
     @gl.public.view
     def is_proven(self, recipient: str) -> bool:
@@ -2270,6 +2382,7 @@ class ReputationOracle(gl.Contract):
         """
         return {
             "total_owed": int(self.total_owed),
+            "total_in_flight": int(self.total_in_flight),
             "held": int(gl.get_contract_at(gl.message.contract_address).balance),
         }
 

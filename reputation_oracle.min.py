@@ -57,6 +57,10 @@ REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
 REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
+REASON_WITHDRAWAL_PENDING = "a_withdrawal_is_already_pending"
+REASON_NO_WITHDRAWAL_PENDING = "no_withdrawal_pending"
+REASON_DELIVERED = "the_withdrawal_was_delivered"
+REASON_CANNOT_BACK_RESTORE = "the_contract_cannot_back_the_restore"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 REASONS = frozenset({
@@ -84,6 +88,10 @@ REASONS = frozenset({
     REASON_ALREADY_PROVEN,
     REASON_NO_PROBE_OUTSTANDING,
     REASON_CALLER_IS_ORIGIN,
+    REASON_WITHDRAWAL_PENDING,
+    REASON_NO_WITHDRAWAL_PENDING,
+    REASON_DELIVERED,
+    REASON_CANNOT_BACK_RESTORE,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })
@@ -625,6 +633,9 @@ class ReputationOracle(gl.Contract):
     proven: TreeMap[str, bool]
     probing: TreeMap[str, bool]
     total_owed: u256
+    in_flight: TreeMap[str, u256]
+    in_flight_baseline: TreeMap[str, u256]
+    total_in_flight: u256
     subject_atts: TreeMap[Address, DynArray[u256]]
     pair_count: TreeMap[str, u256]
     engagement_attested: TreeMap[str, bool]
@@ -680,6 +691,7 @@ class ReputationOracle(gl.Contract):
         self.p_collateral_floor_bp = collateral_floor_bp
         self.p_collateral_forfeit_bp = collateral_forfeit_bp
         self.total_owed = 0
+        self.total_in_flight = 0
     def _policy(self) -> Policy:
         return Policy(
             half_life_seconds=int(self.p_half_life_seconds),
@@ -975,12 +987,46 @@ class ReputationOracle(gl.Contract):
         amount = 0 if current is None else int(current)
         if amount <= 0:
             _fail(REASON_NOTHING_OWED)
+        if int(self.in_flight.get(key, 0)) > 0:
+            _fail(REASON_WITHDRAWAL_PENDING)
+        baseline = int(gl.get_contract_at(gl.message.sender_address).balance)
         self.owed[key] = 0
         self.total_owed = int(self.total_owed) - amount
+        self.in_flight[key] = amount
+        self.in_flight_baseline[key] = baseline
+        self.total_in_flight = int(self.total_in_flight) + amount
         gl.get_contract_at(gl.message.sender_address).emit_transfer(
             value=amount, on="accepted"
         )
-        return {"to": key, "amount": amount}
+        return {"to": key, "amount": amount, "in_flight": amount}
+    @gl.public.write
+    def reclaim(self) -> dict:
+        key = _owed_key(gl.message.sender_address)
+        amount = int(self.in_flight.get(key, 0))
+        if amount <= 0:
+            _fail(REASON_NO_WITHDRAWAL_PENDING)
+        baseline = int(self.in_flight_baseline.get(key, 0))
+        now = int(gl.get_contract_at(gl.message.sender_address).balance)
+        if now >= baseline + amount:
+            self.in_flight[key] = 0
+            self.total_in_flight = int(self.total_in_flight) - amount
+            return {"to": key, "amount": amount, "outcome": "delivered"}
+        held = int(self.balance)
+        if held < int(self.total_owed) + amount:
+            _fail(REASON_CANNOT_BACK_RESTORE)
+        self.in_flight[key] = 0
+        self.total_in_flight = int(self.total_in_flight) - amount
+        restored = int(self.owed.get(key, 0)) + amount
+        if restored > U256_MAX:
+            _fail("entitlement_overflow")
+        self.owed[key] = restored
+        self.total_owed = int(self.total_owed) + amount
+        return {"to": key, "amount": amount, "outcome": "restored"}
+    @gl.public.view
+    def in_flight_to(self, recipient: str) -> int:
+        if not isinstance(recipient, str):
+            return 0
+        return int(self.in_flight.get(recipient.lower(), 0))
     @gl.public.view
     def is_proven(self, recipient: str) -> bool:
         if not isinstance(recipient, str):
@@ -990,6 +1036,7 @@ class ReputationOracle(gl.Contract):
     def liabilities(self) -> dict:
         return {
             "total_owed": int(self.total_owed),
+            "total_in_flight": int(self.total_in_flight),
             "held": int(gl.get_contract_at(gl.message.contract_address).balance),
         }
     @gl.public.view

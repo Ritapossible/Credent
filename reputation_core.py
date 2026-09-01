@@ -156,6 +156,10 @@ REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
 REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
+REASON_WITHDRAWAL_PENDING = "a_withdrawal_is_already_pending"
+REASON_NO_WITHDRAWAL_PENDING = "no_withdrawal_pending"
+REASON_DELIVERED = "the_withdrawal_was_delivered"
+REASON_CANNOT_BACK_RESTORE = "the_contract_cannot_back_the_restore"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
@@ -184,6 +188,10 @@ REASONS = frozenset({
     REASON_ALREADY_PROVEN,
     REASON_NO_PROBE_OUTSTANDING,
     REASON_CALLER_IS_ORIGIN,
+    REASON_WITHDRAWAL_PENDING,
+    REASON_NO_WITHDRAWAL_PENDING,
+    REASON_DELIVERED,
+    REASON_CANNOT_BACK_RESTORE,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })
