@@ -268,14 +268,37 @@ async function expectRejection(
   // studionet and by the missing probe on bradbury. Both are correct refusals,
   // so pinning either one alone would fail a run that behaved perfectly.
   reason: string | string[],
+  // Optional state to fall back on. A studio node that stops answering while a
+  // refused transaction settles produces a *receipt wait* timeout, which is
+  // indistinguishable from any other thrown error by its text alone -- and
+  // reporting it as "rejected for a different reason" fails a run in which the
+  // contract refused exactly as it should. Where the caller can name a figure
+  // the call would have moved, an unchanged figure settles the question without
+  // needing the node to come back.
+  unchanged?: () => Promise<bigint>,
 ): Promise<boolean> {
   const reasons = typeof reason === 'string' ? [reason] : reason
+  const before = unchanged ? await unchanged().catch(() => null) : null
   try {
     await act()
     return false
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err)
     if (reasons.some((r) => text.includes(r))) return true
+
+    if (/Timed out waiting for transaction/i.test(text)) {
+      if (before === null) {
+        console.log('    the node stopped answering before the receipt settled; nothing to judge on')
+        return false
+      }
+      const after = await unchanged!().catch(() => null)
+      if (after !== null && after === before) {
+        console.log(`    the node stopped answering, but the state did not move (${gen(before)}); the call was refused`)
+        return true
+      }
+      console.log(`    the node stopped answering and the state moved (${gen(before)} -> ${after === null ? '?' : gen(after)})`)
+      return false
+    }
 
     // Bradbury does not carry the contract's reason string in the receipt at
     // all -- the whole of what it reports is
@@ -553,6 +576,13 @@ async function withdrawal(
   // exists because a wallet cannot receive at all, so its entitlement would
   // otherwise be recorded correctly and be immovable.
   owner: string = claimant,
+  // How the recipient resolves its own withdrawal afterwards. `withdraw` parks
+  // the entitlement in `in_flight` rather than dropping it, so the payout is
+  // not finished until `reclaim` has judged it against the recipient's balance
+  // and closed it. Asserting that here means the review's third item is
+  // exercised on every payout the suite makes, not only in the runs written to
+  // demonstrate it.
+  settle?: () => Promise<Sent>,
 ): Promise<void> {
   console.log(`\n  ${label}`)
 
@@ -628,6 +658,23 @@ async function withdrawal(
   )
   check(contractAfter === contractBefore - owedBefore, `the contract paid out exactly ${gen(owedBefore)}`)
   check(owedAfter === 0n, 'the entitlement was zeroed')
+
+  if (settle) {
+    const parked = asBig(await view(oracle, 'in_flight_to', [claimant]), 'in_flight_to')
+    check(parked === owedBefore, `and parked in flight (${gen(parked)}) rather than discarded`)
+    const settled = await settle()
+    console.log(`    reclaim  ${settled.hash}`)
+    const resolved = await settleTo(
+      async () => asBig(await view(oracle, 'in_flight_to', [claimant]), 'in_flight_to'),
+      (value) => value === 0n,
+      ATTEST_TIMEOUT_MS,
+    )
+    check(resolved === 0n, 'reclaim resolved the withdrawal')
+    check(
+      asBig(await view(oracle, 'owed_to', [claimant]), 'owed_to') === 0n,
+      'and credited nothing back, because the value arrived',
+    )
+  }
   if (!arrived) {
     console.error(
       `    -> the entitlement was recorded and the money did not move.\n` +
@@ -1176,6 +1223,8 @@ async function main(): Promise<void> {
     claimant,
     total3,
     () => send(client, claimant, 'claim', []),
+    claimant,
+    () => send(client, claimant, 'settle_withdrawal', []),
   )
 
   // --- engagement four: a forfeited grade, claimed by a wallet -------------
@@ -1324,6 +1373,8 @@ async function main(): Promise<void> {
       sink,
       held4,
       () => send(client, sink, 'claim', []),
+      sink,
+      () => send(client, sink, 'settle_withdrawal', []),
     )
   }
 
@@ -1376,6 +1427,8 @@ async function main(): Promise<void> {
       walletSink,
       walletOwed,
       () => send(client, walletSink, 'claim', []),
+      walletSink,
+      () => send(client, walletSink, 'settle_withdrawal', []),
     )
   }
 
@@ -1404,12 +1457,14 @@ async function main(): Promise<void> {
   const refused = await expectRejection(
     () => send(client, oracle, 'withdraw', []),
     ['recipient_has_not_proven', 'caller_is_the_transaction_origin'],
+    async () => asBig(await view(oracle, 'owed_to', [client.address]), 'owed_to'),
   )
   check(refused, 'withdraw from an unproven wallet is refused, not attempted')
 
   const badAddress = await expectRejection(
     () => send(client, oracle, 'assign_to', [addressArg(ZERO_ADDRESS, 'assign_to.recipient')]),
     'zero_address',
+    async () => asBig(await view(oracle, 'owed_to', [ZERO_ADDRESS]), 'owed_to'),
   )
   check(badAddress, 'assigning to the zero address is refused')
 
@@ -1421,9 +1476,12 @@ async function main(): Promise<void> {
   // and mark itself proven, which is exactly what an earlier build allowed --
   // measured against a throwaway oracle, a wallet went from unproven to proven
   // in a single direct call.
+  const provenFlag = async (): Promise<bigint> =>
+    ((await view(oracle, 'is_proven', [client.address])) === true ? 1n : 0n)
   const unrequested = await expectRejection(
     () => send(client, oracle, 'confirm_recipient', []),
     ['no_probe_outstanding', 'caller_is_the_transaction_origin'],
+    provenFlag,
   )
   check(unrequested, 'a confirmation with no outstanding probe is refused')
   const stillUnproven = await view(oracle, 'is_proven', [client.address])
@@ -1440,13 +1498,16 @@ async function main(): Promise<void> {
   // to answer. Asserted on the state rather than on an error string, because
   // this refusal is a transaction that does not complete and neither network
   // reports a reason for it.
-  const probeRaised = await expectRejection(() => send(client, oracle, 'prove_recipient', []), [
-    'the_caller_is_not_a_credent_recipient',
-  ])
+  const probeRaised = await expectRejection(
+    () => send(client, oracle, 'prove_recipient', []),
+    ['the_caller_is_not_a_credent_recipient'],
+    async () => asBig(await view(oracle, 'owed_to', [client.address]), 'owed_to'),
+  )
   check(probeRaised, 'a wallet cannot even raise a probe for itself')
   const selfAnswered = await expectRejection(
     () => send(client, oracle, 'confirm_recipient', []),
     ['the_caller_is_not_a_credent_recipient', 'no_probe_outstanding', 'caller_is_the_transaction_origin'],
+    provenFlag,
   )
   check(selfAnswered, 'and it cannot answer one')
   const selfProven = await view(oracle, 'is_proven', [client.address])

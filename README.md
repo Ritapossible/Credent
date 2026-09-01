@@ -435,9 +435,24 @@ and bond reclaim, asserting each entitlement to the wei, and withdraws twice:
 once as a contract collecting its own credit, and once as a wallet moving its
 credit to a contract it names.
 
+Every payout it makes is then **resolved**: `withdraw` parks the entitlement in
+`in_flight`, the suite asserts it is parked rather than discarded, calls
+`reclaim`, and asserts the withdrawal closed without crediting anything back.
+The review's third item is therefore exercised on every payout the suite makes,
+not only in the runs written to demonstrate it.
+
 It also drives the payout guard: a wallet is refused at `withdraw`, at
 `confirm_recipient`, and at `prove_recipient`, and `is_proven` is checked
 afterwards to confirm the refusals left it unproven.
+
+Those refusals are judged on state as well as on the error, because they have to
+be. Neither network reports a reason string for a transaction that does not
+complete, and a node that stops answering while a refused transaction settles
+produces a *receipt timeout* — indistinguishable, by its text, from a real
+failure. A run against a degraded studio node reported two such timeouts as
+contract defects; both were refusals that had worked, with the state to prove
+it. The suite now names a figure each refused call would have moved and reads it
+back, so a slow node cannot be mistaken for a broken guard.
 
 ```text
 settlement ok - 44 checks, every payout reached its recipient   (bradbury)
