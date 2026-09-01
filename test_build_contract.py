@@ -573,6 +573,14 @@ def test_value_is_never_emitted_at_an_unproven_recipient(artifact_source: str) -
     probe = _code_of(fns["prove_recipient"])
     assert "emit_transfer" in probe, "the probe must transfer value; that is the evidence"
     assert "value=PROBE_WEI" in probe, "the probe must carry PROBE_WEI"
+    # Re-issue rather than refuse: a recipient whose balance falls back to the
+    # baseline before it confirms would otherwise be locked out for ever, with
+    # the confirmation refusing on the balance and a fresh probe refusing on the
+    # outstanding one.
+    assert "REASON_PROBE_OUTSTANDING" not in probe, (
+        "prove_recipient refuses an outstanding probe instead of re-issuing it; "
+        "a recipient that spends what it receives can never become proven"
+    )
     assert "self.probing[key] = True" in probe, (
         "prove_recipient must record the outstanding probe, or confirm_recipient "
         "has nothing to check against"

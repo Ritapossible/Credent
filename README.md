@@ -39,8 +39,8 @@ client; anything else returns it.
 
 | Network | Address | Artifact |
 |---|---|---|
-| GenLayer Studio | [`0x380aE736827BefB0BD441F627755849D1891cE09`](https://explorer-studio.genlayer.com/address/0x380aE736827BefB0BD441F627755849D1891cE09) | `reputation_oracle.py` |
-| Testnet Bradbury | [`0x3a5DdDBae57372762E61cc812b64107E950a2E5f`](https://explorer-bradbury.genlayer.com/address/0x3a5DdDBae57372762E61cc812b64107E950a2E5f) | `reputation_oracle.min.py` |
+| GenLayer Studio | [`0x939DCEa4aEAF09507a208C72D2a47BA45C686D88`](https://explorer-studio.genlayer.com/address/0x939DCEa4aEAF09507a208C72D2a47BA45C686D88) | `reputation_oracle.py` |
+| Testnet Bradbury | [`0x854008213bB589e8e68BB5f3E6aE05e364619a51`](https://explorer-bradbury.genlayer.com/address/0x854008213bB589e8e68BB5f3E6aE05e364619a51) | `reputation_oracle.min.py` |
 
 Bradbury carries the minified artifact because it refuses the full-size source
 on transaction pubdata rather than on gas — a limit on the *bytes* a block will
@@ -49,7 +49,7 @@ whitespace and nothing else: comments and docstrings are cut, indentation is
 rewritten as one space per level, and continuation lines inside brackets go
 flush left. Every row covered by a multi-line string is preserved byte for byte,
 because the grading prompts are triple-quoted and validators grade against them.
-137,387 bytes become 47,411. `ast.dump` on both files is compared before either
+138,849 bytes become 47,335. `ast.dump` on both files is compared before either
 is written, so the runner cannot tell them apart.
 
 Both run the **production policy**, which is deliberately not the constructor's
@@ -138,6 +138,17 @@ release_collateral the provider takes their collateral back
 claim_collateral   the client takes it instead, if the work was forfeited
 ```
 
+Each of those credits an **entitlement** rather than sending money. Taking it
+out is a separate, later step, and the whole of it is:
+
+```
+assign_to          hand your entitlement to a recipient contract   (moves no value)
+prove_recipient    ask to be paid a token amount, out of your own entitlement
+confirm_recipient  claim it arrived; refused unless the balance says it did
+withdraw           take the rest out                               (moves the money)
+reclaim            resolve your own withdrawal: settle it, or take it back
+```
+
 The acceptance step is load-bearing twice over. It is the **consent gate**:
 without it anyone could name a victim as their provider, close the engagement
 alone, and have them graded on work they never agreed to. Only the named
@@ -191,7 +202,7 @@ caller cannot arrange — so `agreement_check` exposes the same rule as a view a
 `npm run agreement` exercises it against every deployment:
 
 ```text
-studionet  0x380aE736827BefB0BD441F627755849D1891cE09
+studionet  0x939DCEa4aEAF09507a208C72D2a47BA45C686D88
   substantiated 10 vs 30 (tolerance 20, slash_floor 20)
     bond: slashed vs releasable
   ok   the two grades settle the bond differently
@@ -355,6 +366,13 @@ is lost: what the probe pays is the first slice of the same entitlement, sent
 early, to the same address, by the same mechanism. An address with nothing owed
 has nothing to prove and is refused.
 
+Calling `prove_recipient()` again while a probe is outstanding **re-issues** it
+rather than being refused. Without that, a recipient whose balance falls back to
+the baseline before it confirms — one that forwards what it receives — is locked
+out for good: the confirmation refuses because the balance is not elevated, and
+a fresh probe refuses because the old one is still open. Re-issuing costs the
+caller another probe out of its own entitlement, so it is self-limiting.
+
 Taken alone this guard would be satisfiable by a wallet funding itself the probe
 amount from a second address between the two calls. Taken alone guard 2 cannot
 fire on bradbury. Guard 1 is not satisfiable by a wallet under any funding,
@@ -417,15 +435,19 @@ and bond reclaim, asserting each entitlement to the wei, and withdraws twice:
 once as a contract collecting its own credit, and once as a wallet moving its
 credit to a contract it names.
 
+It also drives the payout guard: a wallet is refused at `withdraw`, at
+`confirm_recipient`, and at `prove_recipient`, and `is_proven` is checked
+afterwards to confirm the refusals left it unproven.
+
 ```text
-settlement ok - 41 checks, every payout reached its recipient   (studionet)
-settlement ok - 38 checks, every payout reached its recipient   (bradbury)
+settlement ok - 44 checks, every payout reached its recipient   (bradbury)
 ```
 
-The counts differ by the two checks in one engagement's bond reclaim, which the
-suite excludes when the attestation does not record inside `ATTEST_TIMEOUT_MS`.
-It says so in the run rather than folding a timeout into a payout assertion, and
-the bond payout is still covered in both runs through the client's reclaim.
+Counts can differ between runs by the two checks in one engagement's bond
+reclaim, which the suite excludes when the attestation does not record inside
+`ATTEST_TIMEOUT_MS`. It says so in the run rather than folding a timeout into a
+payout assertion, and the bond payout is still covered through the client's
+reclaim.
 
 ### Live settlement on the deployments
 
@@ -456,7 +478,7 @@ production policy. Bradbury, in full:
     confirm_recipient — refused unless that value actually landed
     ok   the claimant is a proven recipient
     ok   the probe came out of the entitlement (0.000001 GEN)
-    withdraw — the only method that moves value
+    withdraw — the method that pays out the rest of the entitlement
     claimant  0.000001 GEN -> 0.875 GEN
     ok   the claimant received the rest of the entitlement (0.874999 GEN)
     ok   probe and withdrawal together are the whole entitlement (0.875 GEN)
@@ -491,7 +513,7 @@ livedemo ok — a settlement completed on the submitted deployment
 ```
 
 Every step, on Testnet Bradbury, oracle
-[`0x3a5DdDBa`](https://explorer-bradbury.genlayer.com/address/0x3a5DdDBae57372762E61cc812b64107E950a2E5f),
+[`0x3a5DdDBa`](https://explorer-bradbury.genlayer.com/address/0x854008213bB589e8e68BB5f3E6aE05e364619a51),
 claimant
 [`0xB6854844`](https://explorer-bradbury.genlayer.com/address/0xB6854844fc9F0b0B8959D8F07539BaF65290aB0d):
 
@@ -590,6 +612,20 @@ strategy:
 ---
 
 ## Limitations
+
+### A recipient must be able to hold the probe across two transactions
+
+`confirm_recipient` reads the recipient's balance, so a contract that forwards
+everything it receives the moment it arrives cannot demonstrate that the probe
+landed — its balance is back at the baseline by the time it confirms. Probing
+again re-issues rather than deadlocking, but it will not help such a contract:
+every probe leaves as fast as it arrives.
+
+That recipient is not stuck, it just takes the other route. `assign_to` moves
+its entitlement to a contract that can hold a millionth of a token for one
+transaction, and moves no value in the process. The constraint is stated here
+rather than worked around because the alternative — accepting a confirmation
+without evidence — is the thing the guard exists to prevent.
 
 ### A recipient must be a Credent recipient contract
 
@@ -807,10 +843,12 @@ capital.
 
 The payout leg works end to end, with balances checked on both sides of every
 transfer, on studionet and testnet-bradbury, against both throwaway instances
-and the submitted deployments.
+and the submitted deployments. A wallet cannot reach any part of it — not
+`withdraw`, not `confirm_recipient`, and not `prove_recipient` — on either
+network, driven against the deployment by `npm run recovery`.
 
 Offline the project carries 353 tests and 3,421 parity vectors, and `genvm-lint`
-validates the rebuilt schema at 26 methods and 13 constructor parameters.
+validates the rebuilt schema at 28 methods and 13 constructor parameters.
 
 ---
 

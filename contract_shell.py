@@ -1034,8 +1034,17 @@ class ReputationOracle(gl.Contract):
         that is not credited, because the evidence is the credit.
 
         The probe is a real payment and it is not returned, which is why it is
-        small and why this refuses when the contract cannot cover it without
-        touching what it owes other people.
+        small and why it comes out of the caller's own entitlement rather than
+        out of the pool.
+
+        Calling this again while a probe is outstanding re-issues it rather than
+        being refused, at the cost of another `PROBE_WEI`. That is what keeps a
+        recipient that spends what it receives from being locked out for good:
+        without it, the confirmation refuses because the balance is back at the
+        baseline and a fresh probe refuses because the old one is still open.
+        A recipient that can never hold `PROBE_WEI` across two transactions
+        cannot be paid by push at all, and should be sent its entitlement with
+        `assign_to` instead.
 
         Before any of that, `_require_recipient_contract` establishes that the
         caller is a Credent recipient contract at all. That check is exact on
@@ -1046,8 +1055,18 @@ class ReputationOracle(gl.Contract):
         key = _owed_key(gl.message.sender_address)
         if bool(self.proven.get(key, False)):
             _fail(REASON_ALREADY_PROVEN)
-        if bool(self.probing.get(key, False)):
-            _fail(REASON_PROBE_OUTSTANDING)
+
+        # An outstanding probe is **re-issued**, not refused. A recipient whose
+        # balance falls back to the baseline before it gets to
+        # `confirm_recipient` -- one that forwards what it receives, say --
+        # would otherwise be locked out for good: the confirmation refuses
+        # because the balance is not elevated, and a second probe refuses
+        # because the first is still on the books. Re-issuing costs the caller
+        # another `PROBE_WEI` out of its own entitlement and overwrites the
+        # baseline, so it is self-limiting and reaches nobody else's money.
+        # `REASON_PROBE_OUTSTANDING` is kept in the reason set because it is
+        # part of the published surface and removing a reason string breaks
+        # anything matching on it.
 
         # The probe is an **advance on the caller's own entitlement**, never a
         # payment out of the pool. It is debited here and it is not returned, so
@@ -1122,7 +1141,11 @@ class ReputationOracle(gl.Contract):
 
     @gl.public.write
     def withdraw(self) -> dict:
-        """Take your entitlement out. The only method that moves value.
+        """Take your entitlement out. The method that moves the money.
+
+        One of two that emit value at all -- `prove_recipient` sends the probe,
+        which is a slice of this same entitlement paid early -- and the only one
+        that pays out the rest of it.
 
         Refused unless the caller answers `credent_recipient()` by view, is not
         its own transaction's entry point, and has completed the probe

@@ -1000,8 +1000,6 @@ compare_user_errors=compare_errors,
   key = _owed_key(gl.message.sender_address)
   if bool(self.proven.get(key, False)):
    _fail(REASON_ALREADY_PROVEN)
-  if bool(self.probing.get(key, False)):
-   _fail(REASON_PROBE_OUTSTANDING)
   entitlement = int(self.owed.get(key, 0))
   if entitlement < PROBE_WEI:
    _fail(REASON_PROBE_UNFUNDED)
