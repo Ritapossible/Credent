@@ -118,15 +118,14 @@ await send(prov,'assign_to',[addr(SINK)],0n,'assign_to — the wallet hands its 
 const assigned = await settle(async()=>big(await view('owed_to',[SINK.toLowerCase()])), v=>v>0n)
 check(assigned===owed0,`the recipient is owed ${gen(assigned)} and the wallet nothing`)
 
-// Proving pays the first PROBE_WEI of the recipient's own entitlement, so the
-// entitlement drops by exactly that and the recipient's balance rises by it.
-const PROBE = 1000000000000n
-await sendTo(prov,SINK,'prove',[],'prove — the oracle pays the probe out of the entitlement')
-const afterProbe = await settle(async()=>big(await view('owed_to',[SINK.toLowerCase()])), v=>v<assigned)
-check(afterProbe===assigned-PROBE,`the probe came out of the entitlement (${gen(PROBE)})`)
-await sendTo(prov,SINK,'confirm',[],'confirm — refused unless the probe actually arrived')
+// The handshake moves no value. What makes the recipient eligible is the view
+// call the oracle makes into it for `credent_recipient()`.
+await sendTo(prov,SINK,'prove',[],'prove — open the payout handshake')
+await sendTo(prov,SINK,'confirm',[],'confirm — close it')
 const proven = await settle(async()=>((await view('is_proven',[SINK.toLowerCase()]))?1n:0n), v=>v===1n)
-check(proven===1n,'the recipient is proven, by being paid rather than by asserting')
+check(proven===1n,'the recipient is proven')
+const afterProbe = big(await view('owed_to',[SINK.toLowerCase()]))
+check(afterProbe===assigned,`and the whole entitlement is still on the books (${gen(afterProbe)})`)
 
 console.log(`\n  clause 2: withdraw parks the entitlement, it does not clear it`)
 await sendTo(prov,SINK,'claim',[],'withdraw')
@@ -136,7 +135,15 @@ check(big(await view('owed_to',[SINK.toLowerCase()]))===0n,'owed is zero — as 
 check(inflight===afterProbe,`but the entitlement is parked in flight (${gen(inflight)}), not discarded`)
 
 console.log(`\n  clause 3: reclaim is the restoration path`)
-await sleep(120000)   // let the transfer settle either way
+// `reclaim` refuses to judge a withdrawal younger than the policy's settle
+// window. Waiting it out is the point rather than an inconvenience: judging
+// before the transfer has landed or failed is the one way a recovery path can
+// pay twice.
+const pol = await view('get_policy')
+const settleSeconds = Number(big(pol.withdrawal_settle_seconds))
+console.log(`    settle window ${settleSeconds}s — waiting for the withdrawal to become resolvable`)
+await settle(async()=>((await view('withdrawal_of',[SINK.toLowerCase()])).resolvable_now?1n:0n),
+             v=>v===1n, (settleSeconds + 300) * 1000)
 const held = await settle(async()=>big(await client.readContract({address:SINK,functionName:'total_received',args:[]})), v=>v>0n, 8*60*1000)
 console.log(`    the recipient has received ${gen(held)} in total`)
 await send(prov,'reclaim',[],0n,'reclaim — from the wallet, which has nothing in flight').catch(()=>console.log('      threw'))

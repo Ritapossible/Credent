@@ -49,11 +49,16 @@ NEUTRAL_BP = 5000
 # a classified rejection every node derives identically.
 U256_MAX = (1 << 256) - 1
 
-# What `prove_recipient` pays a candidate recipient so it can demonstrate it is
-# payable. Small, because it is a real transfer and is not returned; nonzero,
-# because `emit_transfer` rejects a zero value and because the evidence is the
-# credit itself. 0.000001 GEN.
-PROBE_WEI = 1_000_000_000_000
+# How long `reclaim` waits before it will judge a withdrawal.
+#
+# `withdraw` emits the transfer and returns; the transfer is dispatched by
+# consensus afterwards. Measured on bradbury, it lands about 150 seconds later.
+# Until it has landed or failed there is nothing to judge, and judging early
+# would be the one way this mechanism could pay twice: read "the money is still
+# here", restore the claim, and then have the transfer land as well. Fifteen
+# minutes is six times the observed settlement time, and the cost of waiting is
+# a second transaction the recipient was going to send anyway.
+WITHDRAWAL_SETTLE_SECONDS = 900
 
 # The view method a push-payment recipient must implement, and the exact string
 # it must return. This is the one *exact* recipient test available: a wallet has
@@ -173,14 +178,12 @@ REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
 REASON_PROBE_OUTSTANDING = "a_probe_is_already_outstanding"
-REASON_PROBE_NOT_RECEIVED = "the_probe_value_did_not_arrive"
-REASON_PROBE_UNFUNDED = "the_entitlement_cannot_fund_the_probe"
 REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
 REASON_WRONG_RECIPIENT_MARKER = "the_caller_is_not_a_credent_recipient"
 REASON_WITHDRAWAL_PENDING = "a_withdrawal_is_already_pending"
 REASON_NO_WITHDRAWAL_PENDING = "no_withdrawal_pending"
+REASON_WITHDRAWAL_UNSETTLED = "the_withdrawal_has_not_settled_yet"
 REASON_DELIVERED = "the_withdrawal_was_delivered"
-REASON_CANNOT_BACK_RESTORE = "the_contract_cannot_back_the_restore"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
@@ -209,14 +212,12 @@ REASONS = frozenset({
     REASON_ALREADY_PROVEN,
     REASON_NO_PROBE_OUTSTANDING,
     REASON_PROBE_OUTSTANDING,
-    REASON_PROBE_NOT_RECEIVED,
-    REASON_PROBE_UNFUNDED,
     REASON_CALLER_IS_ORIGIN,
     REASON_WRONG_RECIPIENT_MARKER,
     REASON_WITHDRAWAL_PENDING,
     REASON_NO_WITHDRAWAL_PENDING,
+    REASON_WITHDRAWAL_UNSETTLED,
     REASON_DELIVERED,
-    REASON_CANNOT_BACK_RESTORE,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })
@@ -300,6 +301,12 @@ class Policy:
     slash_floor        - substantiated below this slashes the bond
     release_floor      - substantiated at or above this releases it in full
     bond_lock_seconds  - how long a releasable bond stays locked before reclaim
+    withdrawal_settle_seconds
+                       - how long `reclaim` waits before it will judge an emitted
+                         withdrawal. Below the time a transfer takes to land,
+                         a claim could be restored and then delivered as well;
+                         `WITHDRAWAL_SETTLE_SECONDS` is the production figure and
+                         zero is only sensible on a throwaway test instance.
 
     The last three price *work collateral*, which is a different mechanism from
     the bond above and the one the score actually feeds:
@@ -331,6 +338,7 @@ class Policy:
     slash_floor: int = 20
     release_floor: int = 50
     bond_lock_seconds: int = 1209600  # 14 days
+    withdrawal_settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS
     collateral_ceiling_bp: int = 15000  # 150% of stake at score 0
     collateral_floor_bp: int = 2500  # 25% of stake at a perfect score
     collateral_forfeit_bp: int = 2500  # fulfilled below 25% forfeits
@@ -338,6 +346,8 @@ class Policy:
     def validate(self) -> None:
         if self.half_life_seconds < 1:
             raise ValueError("half_life_seconds must be >= 1")
+        if self.withdrawal_settle_seconds < 0:
+            raise ValueError("withdrawal_settle_seconds must be >= 0")
         if self.prior_weight < 0:
             raise ValueError("prior_weight must be >= 0")
         if not 0 <= self.min_substantiated <= 100:
@@ -932,6 +942,68 @@ def grades_agree(mine: dict, theirs: dict, policy: Policy) -> bool:
 
 
 # --- content addressing ---------------------------------------------------
+
+
+WITHDRAWAL_UNSETTLED = "unsettled"
+WITHDRAWAL_RESTORED = "restored"
+WITHDRAWAL_DELIVERED = "delivered"
+WITHDRAWAL_OUTCOMES = (WITHDRAWAL_UNSETTLED, WITHDRAWAL_RESTORED, WITHDRAWAL_DELIVERED)
+
+
+def resolve_withdrawal(
+    *,
+    elapsed_seconds: int,
+    held: int,
+    obligations: int,
+    settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS,
+) -> str:
+    """Decide what became of an emitted withdrawal. Pure arithmetic.
+
+    This is the recovery mechanism, and it lives here rather than in the
+    contract shell so that it can be *run* by tests. Everything it needs is a
+    number the contract already maintains:
+
+    ``elapsed_seconds``
+        consensus time since the withdrawal was emitted.
+    ``held``
+        what the contract's balance is now.
+    ``obligations``
+        everything the contract is holding for somebody else, **including the
+        withdrawal being judged**: entitlements, other withdrawals in flight,
+        locked bonds and posted collateral.
+
+    Three outcomes:
+
+    * ``unsettled`` -- not enough time has passed for the transfer to have
+      landed or failed. Nothing is decided and nothing is changed; ask again
+      later. This is the guard against the one way a recovery path can pay
+      twice: restore the claim, then have the transfer arrive as well.
+    * ``restored`` -- the contract still holds enough to cover every obligation
+      with this claim on its books, which means the value never left. The
+      entitlement is credited back.
+    * ``delivered`` -- it does not, which means the value left. The claim is
+      closed.
+
+    **Why the contract's own balance and not the recipient's.** Three earlier
+    designs read the recipient's balance and each was wrong in its own way: any
+    unrelated payment to the recipient reads as delivery, and a recipient that
+    spends what it receives reads as failure. Neither mistake is possible here,
+    because obligations move with the money. A bond paid in raises `held` and
+    `obligations` by the same amount and changes no answer.
+
+    **What "restored" costs when it is wrong.** The one residual is a contract
+    holding surplus -- slashed bonds, value sent in by mistake -- larger than
+    the withdrawal. Then a delivered claim can still satisfy the test and be
+    restored, paying it a second time out of that surplus. It is bounded by the
+    surplus and it can never reach an entitlement, a bond or a collateral,
+    because those are what `obligations` counts. A restore never spends money
+    owed to anybody else; at worst it spends money the contract owns outright.
+    """
+    if elapsed_seconds < settle_seconds:
+        return WITHDRAWAL_UNSETTLED
+    if held >= obligations:
+        return WITHDRAWAL_RESTORED
+    return WITHDRAWAL_DELIVERED
 
 
 def scope_digest(scope: str) -> str:

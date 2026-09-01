@@ -129,11 +129,16 @@ NEUTRAL_BP = 5000
 # a classified rejection every node derives identically.
 U256_MAX = (1 << 256) - 1
 
-# What `prove_recipient` pays a candidate recipient so it can demonstrate it is
-# payable. Small, because it is a real transfer and is not returned; nonzero,
-# because `emit_transfer` rejects a zero value and because the evidence is the
-# credit itself. 0.000001 GEN.
-PROBE_WEI = 1_000_000_000_000
+# How long `reclaim` waits before it will judge a withdrawal.
+#
+# `withdraw` emits the transfer and returns; the transfer is dispatched by
+# consensus afterwards. Measured on bradbury, it lands about 150 seconds later.
+# Until it has landed or failed there is nothing to judge, and judging early
+# would be the one way this mechanism could pay twice: read "the money is still
+# here", restore the claim, and then have the transfer land as well. Fifteen
+# minutes is six times the observed settlement time, and the cost of waiting is
+# a second transaction the recipient was going to send anyway.
+WITHDRAWAL_SETTLE_SECONDS = 900
 
 # The view method a push-payment recipient must implement, and the exact string
 # it must return. This is the one *exact* recipient test available: a wallet has
@@ -253,14 +258,12 @@ REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
 REASON_PROBE_OUTSTANDING = "a_probe_is_already_outstanding"
-REASON_PROBE_NOT_RECEIVED = "the_probe_value_did_not_arrive"
-REASON_PROBE_UNFUNDED = "the_entitlement_cannot_fund_the_probe"
 REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
 REASON_WRONG_RECIPIENT_MARKER = "the_caller_is_not_a_credent_recipient"
 REASON_WITHDRAWAL_PENDING = "a_withdrawal_is_already_pending"
 REASON_NO_WITHDRAWAL_PENDING = "no_withdrawal_pending"
+REASON_WITHDRAWAL_UNSETTLED = "the_withdrawal_has_not_settled_yet"
 REASON_DELIVERED = "the_withdrawal_was_delivered"
-REASON_CANNOT_BACK_RESTORE = "the_contract_cannot_back_the_restore"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
@@ -289,14 +292,12 @@ REASONS = frozenset({
     REASON_ALREADY_PROVEN,
     REASON_NO_PROBE_OUTSTANDING,
     REASON_PROBE_OUTSTANDING,
-    REASON_PROBE_NOT_RECEIVED,
-    REASON_PROBE_UNFUNDED,
     REASON_CALLER_IS_ORIGIN,
     REASON_WRONG_RECIPIENT_MARKER,
     REASON_WITHDRAWAL_PENDING,
     REASON_NO_WITHDRAWAL_PENDING,
+    REASON_WITHDRAWAL_UNSETTLED,
     REASON_DELIVERED,
-    REASON_CANNOT_BACK_RESTORE,
     REASON_BAD_RECIPIENT,
     REASON_ZERO_RECIPIENT,
 })
@@ -380,6 +381,12 @@ class Policy:
     slash_floor        - substantiated below this slashes the bond
     release_floor      - substantiated at or above this releases it in full
     bond_lock_seconds  - how long a releasable bond stays locked before reclaim
+    withdrawal_settle_seconds
+                       - how long `reclaim` waits before it will judge an emitted
+                         withdrawal. Below the time a transfer takes to land,
+                         a claim could be restored and then delivered as well;
+                         `WITHDRAWAL_SETTLE_SECONDS` is the production figure and
+                         zero is only sensible on a throwaway test instance.
 
     The last three price *work collateral*, which is a different mechanism from
     the bond above and the one the score actually feeds:
@@ -411,6 +418,7 @@ class Policy:
     slash_floor: int = 20
     release_floor: int = 50
     bond_lock_seconds: int = 1209600  # 14 days
+    withdrawal_settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS
     collateral_ceiling_bp: int = 15000  # 150% of stake at score 0
     collateral_floor_bp: int = 2500  # 25% of stake at a perfect score
     collateral_forfeit_bp: int = 2500  # fulfilled below 25% forfeits
@@ -418,6 +426,8 @@ class Policy:
     def validate(self) -> None:
         if self.half_life_seconds < 1:
             raise ValueError("half_life_seconds must be >= 1")
+        if self.withdrawal_settle_seconds < 0:
+            raise ValueError("withdrawal_settle_seconds must be >= 0")
         if self.prior_weight < 0:
             raise ValueError("prior_weight must be >= 0")
         if not 0 <= self.min_substantiated <= 100:
@@ -1014,6 +1024,68 @@ def grades_agree(mine: dict, theirs: dict, policy: Policy) -> bool:
 # --- content addressing ---------------------------------------------------
 
 
+WITHDRAWAL_UNSETTLED = "unsettled"
+WITHDRAWAL_RESTORED = "restored"
+WITHDRAWAL_DELIVERED = "delivered"
+WITHDRAWAL_OUTCOMES = (WITHDRAWAL_UNSETTLED, WITHDRAWAL_RESTORED, WITHDRAWAL_DELIVERED)
+
+
+def resolve_withdrawal(
+    *,
+    elapsed_seconds: int,
+    held: int,
+    obligations: int,
+    settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS,
+) -> str:
+    """Decide what became of an emitted withdrawal. Pure arithmetic.
+
+    This is the recovery mechanism, and it lives here rather than in the
+    contract shell so that it can be *run* by tests. Everything it needs is a
+    number the contract already maintains:
+
+    ``elapsed_seconds``
+        consensus time since the withdrawal was emitted.
+    ``held``
+        what the contract's balance is now.
+    ``obligations``
+        everything the contract is holding for somebody else, **including the
+        withdrawal being judged**: entitlements, other withdrawals in flight,
+        locked bonds and posted collateral.
+
+    Three outcomes:
+
+    * ``unsettled`` -- not enough time has passed for the transfer to have
+      landed or failed. Nothing is decided and nothing is changed; ask again
+      later. This is the guard against the one way a recovery path can pay
+      twice: restore the claim, then have the transfer arrive as well.
+    * ``restored`` -- the contract still holds enough to cover every obligation
+      with this claim on its books, which means the value never left. The
+      entitlement is credited back.
+    * ``delivered`` -- it does not, which means the value left. The claim is
+      closed.
+
+    **Why the contract's own balance and not the recipient's.** Three earlier
+    designs read the recipient's balance and each was wrong in its own way: any
+    unrelated payment to the recipient reads as delivery, and a recipient that
+    spends what it receives reads as failure. Neither mistake is possible here,
+    because obligations move with the money. A bond paid in raises `held` and
+    `obligations` by the same amount and changes no answer.
+
+    **What "restored" costs when it is wrong.** The one residual is a contract
+    holding surplus -- slashed bonds, value sent in by mistake -- larger than
+    the withdrawal. Then a delivered claim can still satisfy the test and be
+    restored, paying it a second time out of that surplus. It is bounded by the
+    surplus and it can never reach an entitlement, a bond or a collateral,
+    because those are what `obligations` counts. A restore never spends money
+    owed to anybody else; at worst it spends money the contract owns outright.
+    """
+    if elapsed_seconds < settle_seconds:
+        return WITHDRAWAL_UNSETTLED
+    if held >= obligations:
+        return WITHDRAWAL_RESTORED
+    return WITHDRAWAL_DELIVERED
+
+
 def scope_digest(scope: str) -> str:
     """Content address of an engagement's scope.
 
@@ -1527,6 +1599,7 @@ class ReputationOracle(gl.Contract):
     p_slash_floor: u256
     p_release_floor: u256
     p_bond_lock_seconds: u256
+    p_withdrawal_settle_seconds: u256
     p_collateral_ceiling_bp: u256
     p_collateral_floor_bp: u256
     p_collateral_forfeit_bp: u256
@@ -1595,11 +1668,6 @@ class ReputationOracle(gl.Contract):
     # Addresses with a probe outstanding. `confirm_recipient` consumes one, so a
     # confirmation cannot be replayed and cannot arrive unrequested.
     probing: TreeMap[str, bool]
-    # What a probed address held when its probe was emitted. `confirm_recipient`
-    # compares against this: the probe carries value, and only a contract is
-    # credited by `emit_transfer`, so a balance that has not risen by
-    # `PROBE_WEI` is an address that cannot be paid.
-    probe_baseline: TreeMap[str, u256]
     total_owed: u256
 
     # A withdrawal that has been emitted and not yet resolved.
@@ -1615,8 +1683,12 @@ class ReputationOracle(gl.Contract):
     # account. So the recipient's own balance answers the question. `baseline`
     # is what it held when the withdrawal was emitted; if it has not risen by
     # the amount, the value did not arrive.
+    # A withdrawal that has been emitted and not yet resolved, and the consensus
+    # second it was emitted at. `reclaim` needs both: the amount to give back,
+    # and the age, because a transfer that has not had time to land is a
+    # question that cannot be answered yet.
     in_flight: TreeMap[str, u256]
-    in_flight_baseline: TreeMap[str, u256]
+    in_flight_at: TreeMap[str, u256]
     total_in_flight: u256
     # Money this contract is holding for somebody else that is *not* an
     # entitlement yet: bonds it may have to hand back, and work collateral owed
@@ -1649,6 +1721,7 @@ class ReputationOracle(gl.Contract):
         slash_floor: u256 = 20,
         release_floor: u256 = 50,
         bond_lock_seconds: u256 = 1209600,
+        withdrawal_settle_seconds: u256 = 900,
         collateral_ceiling_bp: u256 = 15000,
         collateral_floor_bp: u256 = 2500,
         collateral_forfeit_bp: u256 = 2500,
@@ -1692,6 +1765,7 @@ class ReputationOracle(gl.Contract):
         self.p_slash_floor = slash_floor
         self.p_release_floor = release_floor
         self.p_bond_lock_seconds = bond_lock_seconds
+        self.p_withdrawal_settle_seconds = withdrawal_settle_seconds
         self.p_collateral_ceiling_bp = collateral_ceiling_bp
         self.p_collateral_floor_bp = collateral_floor_bp
         self.p_collateral_forfeit_bp = collateral_forfeit_bp
@@ -1736,6 +1810,7 @@ class ReputationOracle(gl.Contract):
             slash_floor=int(self.p_slash_floor),
             release_floor=int(self.p_release_floor),
             bond_lock_seconds=int(self.p_bond_lock_seconds),
+            withdrawal_settle_seconds=int(self.p_withdrawal_settle_seconds),
             collateral_ceiling_bp=int(self.p_collateral_ceiling_bp),
             collateral_floor_bp=int(self.p_collateral_floor_bp),
             collateral_forfeit_bp=int(self.p_collateral_forfeit_bp),
@@ -2244,124 +2319,64 @@ class ReputationOracle(gl.Contract):
 
     @gl.public.write
     def prove_recipient(self) -> dict:
-        """Ask this contract to pay you a token amount, so you can prove you can be paid.
+        """Open the handshake that makes you eligible to be paid.
 
-        The probe **carries value**, and that is the whole point. `emit_transfer`
-        credits a contract and never credits an externally owned account --
-        measured on both networks, against a working `__receive__`, one that
-        raises, one absent, and a fresh wallet. So an address that can be paid
-        will see its balance rise by `PROBE_WEI`, and an address that cannot
-        will not. `confirm_recipient` reads that balance rather than trusting
-        anyone's account of it.
+        Moves no value. This method and `confirm_recipient` are a two-step
+        opt-in, and the work is done by `_require_recipient_contract`, which
+        both of them call: a view call into the caller's own address for
+        `credent_recipient()`, which a wallet has no code to answer and which
+        cannot be caught and turned into a branch. That check is exact on both
+        networks, and it is what makes it impossible for a wallet to mark itself
+        proven.
 
-        An earlier version emitted a *zero-value* call and treated answering it
-        as the proof. That tested the wrong thing: it showed the caller could
-        run code, not that it could be paid, and on a network where
-        `origin_address` is not the transaction initiator a wallet could simply
-        call both halves itself. This version cannot be answered by an address
-        that is not credited, because the evidence is the credit.
+        An earlier build had this emit a real `PROBE_WEI` transfer, debited from
+        the caller's own entitlement, so that `confirm_recipient` could read the
+        recipient's balance and see that it had risen. It was removed, for two
+        reasons that both matter more than the evidence it bought:
 
-        The probe is a real payment and it is not returned, which is why it is
-        small and why it comes out of the caller's own entitlement rather than
-        out of the pool.
+        1. It cleared owed value and then emitted a transfer, with no record
+           that could recover it -- the exact shape of the defect this whole
+           rework exists to remove, reintroduced in miniature.
+        2. It added nothing. `credent_recipient()` already establishes that the
+           caller is a contract, and every contract is credited by
+           `emit_transfer` whatever its code does -- measured against a working
+           `__receive__`, one that raises, and none at all. Paying a token
+           amount to re-confirm a measured platform property is not evidence,
+           it is ceremony with a failure mode.
 
-        Calling this again while a probe is outstanding re-issues it rather than
-        being refused, at the cost of another `PROBE_WEI`. That is what keeps a
-        recipient that spends what it receives from being locked out for good:
-        without it, the confirmation refuses because the balance is back at the
-        baseline and a fresh probe refuses because the old one is still open.
-        A recipient that can never hold `PROBE_WEI` across two transactions
-        cannot be paid by push at all, and should be sent its entitlement with
-        `assign_to` instead.
-
-        Before any of that, `_require_recipient_contract` establishes that the
-        caller is a Credent recipient contract at all. That check is exact on
-        both networks and a wallet cannot pass it, so the probe is a second
-        line rather than the only one.
+        Calling this again while a handshake is open is allowed and simply
+        re-opens it. Nothing is spent, so there is nothing to protect against.
         """
         _require_recipient_contract()
         key = _owed_key(gl.message.sender_address)
         if bool(self.proven.get(key, False)):
             _fail(REASON_ALREADY_PROVEN)
-
-        # An outstanding probe is **re-issued**, not refused. A recipient whose
-        # balance falls back to the baseline before it gets to
-        # `confirm_recipient` -- one that forwards what it receives, say --
-        # would otherwise be locked out for good: the confirmation refuses
-        # because the balance is not elevated, and a second probe refuses
-        # because the first is still on the books. Re-issuing costs the caller
-        # another `PROBE_WEI` out of its own entitlement and overwrites the
-        # baseline, so it is self-limiting and reaches nobody else's money.
-        # `REASON_PROBE_OUTSTANDING` is kept in the reason set because it is
-        # part of the published surface and removing a reason string breaks
-        # anything matching on it.
-
-        # The probe is an **advance on the caller's own entitlement**, never a
-        # payment out of the pool. It is debited here and it is not returned, so
-        # what the probe costs comes off what the caller is owed and can never
-        # touch anybody else's money -- which also means it needs no surplus and
-        # cannot be used to drain one. Anyone with nothing owed has nothing to
-        # prove and is refused.
-        entitlement = int(self.owed.get(key, 0))
-        if entitlement < PROBE_WEI:
-            _fail(REASON_PROBE_UNFUNDED)
-        self.owed[key] = entitlement - PROBE_WEI
-        self.total_owed = int(self.total_owed) - PROBE_WEI
-
         self.probing[key] = True
-        self.probe_baseline[key] = int(
-            gl.get_contract_at(gl.message.sender_address).balance
-        )
-        # `on="accepted"`, for the reason given on `withdraw`.
-        gl.get_contract_at(gl.message.sender_address).emit_transfer(
-            value=PROBE_WEI, on="accepted"
-        )
-        return {"probing": key, "amount": PROBE_WEI}
+        return {"probing": key}
 
     @gl.public.write
     def confirm_recipient(self) -> dict:
-        """Claim the probe arrived. Refused unless the balance says it did.
-
-        Three independent guards, and none of them takes the caller's word:
+        """Close the handshake. Two guards, and neither takes the caller's word.
 
         1. `_require_recipient_contract` calls `credent_recipient()` by view on
            the caller's own address. A wallet has no code to answer with and the
            failure is not catchable, so the transaction ends there. This is the
-           exact one, it holds on both networks, and it is what actually closes
-           the bypass the other two only narrow.
+           exact one, it holds on both networks, and it is what closes the
+           bypass the review reported.
         2. `_refuse_the_transaction_origin` rejects a caller that is its own
            transaction's entry point. Where `origin_address` carries the
-           initiator this proves the caller is a contract; where it does not,
-           it cannot fire. See that helper for the measurements.
-        3. **The probe value must actually have arrived.** The address's balance
-           must have risen by `PROBE_WEI` since `prove_recipient` recorded it.
-           An externally owned account is never credited by `emit_transfer`, so
-           it cannot satisfy this by being paid -- it would have to be funded
-           from elsewhere, in the exact amount, between the two calls.
+           initiator this proves the caller is a contract; where it does not it
+           cannot fire. See that helper for the measurements. It is kept because
+           it is free and independent, not because anything rests on it.
 
-        Guards 2 and 3 are kept because they are independent and cheap, and
-        because 3 tests the exact mechanism the payout uses rather than a proxy
-        for it. Neither is load-bearing on its own: guard 3 alone could be
-        satisfied by a wallet funding itself the probe amount from a second
-        address, and guard 2 alone cannot fire on bradbury. Guard 1 is not
-        satisfiable by a wallet under any funding.
-
-        Call this after the probe has settled, not in the same breath: the
-        transfer is emitted and lands afterwards. Reading the balance too early
-        is a refusal, not a failure -- try again once it has arrived.
-
-        The probe is consumed either way, so a confirmation cannot be replayed.
+        An open handshake is required and is consumed, so a confirmation can
+        neither arrive unrequested nor be replayed.
         """
         _require_recipient_contract()
         _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
         if not bool(self.probing.get(key, False)):
             _fail(REASON_NO_PROBE_OUTSTANDING)
-
-        baseline = int(self.probe_baseline.get(key, 0))
-        now = int(gl.get_contract_at(gl.message.sender_address).balance)
-        if now < baseline + PROBE_WEI:
-            _fail(REASON_PROBE_NOT_RECEIVED)
 
         self.probing[key] = False
         self.proven[key] = True
@@ -2442,10 +2457,10 @@ class ReputationOracle(gl.Contract):
         if int(self.in_flight.get(key, 0)) > 0:
             _fail(REASON_WITHDRAWAL_PENDING)
 
-        # What the recipient holds before the transfer is emitted. `reclaim`
-        # compares against this, which is why it is taken here and stored rather
-        # than recomputed later.
-        baseline = int(gl.get_contract_at(gl.message.sender_address).balance)
+        # When the transfer is emitted. `reclaim` refuses to judge a withdrawal
+        # younger than `WITHDRAWAL_SETTLE_SECONDS`, because a transfer that has
+        # not had time to land or fail is a question with no answer yet.
+        opened_at = _now_seconds()
 
         # The entitlement is *parked*, not discarded. It leaves `owed` so it
         # cannot be withdrawn twice while the transfer is outstanding, and it is
@@ -2454,7 +2469,7 @@ class ReputationOracle(gl.Contract):
         self.owed[key] = 0
         self.total_owed = int(self.total_owed) - amount
         self.in_flight[key] = amount
-        self.in_flight_baseline[key] = baseline
+        self.in_flight_at[key] = opened_at
         self.total_in_flight = int(self.total_in_flight) + amount
 
         # `on="accepted"`, not the SDK's safer-by-default `on="finalized"`:
@@ -2470,97 +2485,91 @@ class ReputationOracle(gl.Contract):
     def reclaim(self) -> dict:
         """Resolve your own outstanding withdrawal: settle it, or take it back.
 
-        This is the answer to "a failed emitted transfer must leave the
-        entitlement recoverable", and it is possible because of one measured
-        fact rather than an assumption: **`emit_transfer` credits a contract and
-        never credits an externally owned account.** The recipient's own balance
-        therefore says whether the value arrived, and this contract can read any
-        address's balance.
+        This is the answer to *"ensure a failed emitted transfer leaves the
+        entitlement recoverable"*. `withdraw` moves the claim out of `owed` so
+        it cannot be spent twice, but into `in_flight` rather than into nothing,
+        where `in_flight_to` and `withdrawal_of` can read it. This method
+        decides what became of it.
 
-        Two outcomes, both terminal:
+        The decision itself is `resolve_withdrawal` in `reputation_core`, which
+        is pure arithmetic over four numbers and is driven by the engine's test
+        suite through every branch. Nothing is judged here that cannot be tested
+        without a chain, which is the whole reason it lives there. The three
+        outcomes:
 
-        * The balance rose by at least the amount -- the value arrived. The
-          withdrawal is settled and nothing is restored. Calling again is
-          refused rather than silently repeated.
-        * It did not -- the value did not arrive. The entitlement is credited
-          back to the same key it was debited from, and can be withdrawn again
-          or moved with `assign_to`.
+        * **Too soon.** Less than `WITHDRAWAL_SETTLE_SECONDS` has passed, so the
+          transfer has not had time to land or fail. Refused, with a classified
+          reason, changing nothing. Ask again later. This guard is what stops
+          the one way a recovery path can pay twice.
+        * **Restored.** The contract still covers every obligation with this
+          claim on its books, so the value never left. It goes back into `owed`
+          under the same key and can be withdrawn again or moved with
+          `assign_to`.
+        * **Delivered.** It does not, so the value left. The claim is closed.
 
-        **The restore is refused unless this contract can actually back it.**
-        `self.balance` must still cover every entitlement including the one
-        being restored. That guard is what makes the mechanism safe rather than
-        merely useful: a recipient that received the value and then emptied
-        itself would present the same balance evidence as one that never
-        received it, and without the guard could obtain a second credit out of
-        the pool that backs everybody else. With it, the worst such a caller can
-        do is be refused. No other party's entitlement can be spent this way.
+        `obligations` is the whole of what this contract holds for other people
+        -- entitlements, other withdrawals in flight, locked bonds, posted
+        collateral -- which is what makes the test immune to unrelated payments
+        moving the balance: money arriving raises `held` and `obligations`
+        together and changes no answer. See `_obligations`.
 
         The key is `gl.message.sender_address`, so a caller resolves only its
-        own withdrawal and can neither settle nor restore anyone else's.
-
-        Two consequences of the solvency guard, both correct and neither
-        obvious:
-
-        * **Called too early it is refused, not wrong.** While a transfer is
-          still settling the balance has already left this contract and has not
-          yet arrived at the recipient, so the evidence says "not delivered" and
-          the guard says "cannot back it". Refusal is the right answer to a
-          question asked too soon. Try again once the transfer has settled.
-        * **Where a failed transfer destroys the value, there is nothing to
-          restore, and this says so.** Measured: on studionet an undeliverable
-          transfer debits the sender and the value is gone; on bradbury it stays
-          in this contract. In the first case the balance is short and the
-          restore is refused -- which is the honest outcome, because restoring
-          would credit the claim out of money belonging to other parties. In the
-          second the value is still here and the restore goes through. The guard
-          is what makes the difference between the two automatic instead of a
-          policy this contract would have to guess at.
+        own withdrawal, and every outcome is terminal for that withdrawal
+        except "too soon", which is retryable by construction. There is no state
+        this method can leave a claim stuck in.
         """
         key = _owed_key(gl.message.sender_address)
         amount = int(self.in_flight.get(key, 0))
         if amount <= 0:
             _fail(REASON_NO_WITHDRAWAL_PENDING)
 
-        baseline = int(self.in_flight_baseline.get(key, 0))
-        now = int(gl.get_contract_at(gl.message.sender_address).balance)
+        outcome = resolve_withdrawal(
+            elapsed_seconds=_now_seconds() - int(self.in_flight_at.get(key, 0)),
+            held=int(self.balance),
+            obligations=self._obligations(),
+            settle_seconds=int(self.p_withdrawal_settle_seconds),
+        )
 
-        if now >= baseline + amount:
-            # Delivered. Close it out; there is nothing to give back.
-            self.in_flight[key] = 0
-            self.total_in_flight = int(self.total_in_flight) - amount
-            return {"to": key, "amount": amount, "outcome": "delivered"}
-
-        # Not delivered by the balance evidence. Restore only if this contract
-        # still holds enough to cover **every** obligation with this one back on
-        # the books -- entitlements, other withdrawals in flight, locked bonds
-        # and posted collateral alike.
-        #
-        # Restoring moves `amount` from `total_in_flight` to `total_owed`, so
-        # `_obligations()` is the same number before and after and this is
-        # exactly the question "is the contract solvent once it is restored".
-        #
-        # This guard is the whole defence against a recipient that *was* paid
-        # and spent it. Such a recipient presents the same balance evidence as
-        # one that was never paid, so the evidence alone cannot separate them --
-        # but the money can. If the transfer really failed the value is still
-        # here and this passes; if it succeeded the balance is short by exactly
-        # `amount` and this refuses, unless the contract holds that much genuine
-        # surplus on top of everything it owes. An earlier version compared the
-        # balance to entitlements only, which counted every locked bond and
-        # every posted collateral as surplus and would have paid a second time
-        # out of them.
-        held = int(self.balance)
-        if held < self._obligations():
-            _fail(REASON_CANNOT_BACK_RESTORE)
+        if outcome == WITHDRAWAL_UNSETTLED:
+            _fail(REASON_WITHDRAWAL_UNSETTLED)
 
         self.in_flight[key] = 0
+        self.in_flight_at[key] = 0
         self.total_in_flight = int(self.total_in_flight) - amount
+
+        if outcome == WITHDRAWAL_DELIVERED:
+            return {"to": key, "amount": amount, "outcome": WITHDRAWAL_DELIVERED}
+
         restored = int(self.owed.get(key, 0)) + amount
         if restored > U256_MAX:
             _fail("entitlement_overflow")
         self.owed[key] = restored
         self.total_owed = int(self.total_owed) + amount
-        return {"to": key, "amount": amount, "outcome": "restored"}
+        return {"to": key, "amount": amount, "outcome": WITHDRAWAL_RESTORED}
+    @gl.public.view
+    def withdrawal_of(self, recipient: str) -> dict:
+        """An outstanding withdrawal in full, so it can be watched from outside.
+
+        `amount` is what is in flight, `opened_at` the consensus second
+        `withdraw` emitted it, and `resolvable_at` the second from which
+        `reclaim` will judge it. Zeroes mean there is nothing outstanding.
+
+        This exists because a claim that is invisible while it is in flight is
+        indistinguishable, to whoever is owed it, from one that was lost.
+        """
+        key = _owed_key(_clean_recipient(recipient))
+        amount = int(self.in_flight.get(key, 0))
+        opened_at = int(self.in_flight_at.get(key, 0))
+        return {
+            "recipient": key,
+            "amount": amount,
+            "opened_at": opened_at,
+            "resolvable_at": 0
+            if amount <= 0
+            else opened_at + int(self.p_withdrawal_settle_seconds),
+            "resolvable_now": amount > 0
+            and _now_seconds() >= opened_at + int(self.p_withdrawal_settle_seconds),
+        }
 
     @gl.public.view
     def in_flight_to(self, recipient: str) -> int:
@@ -2966,6 +2975,7 @@ class ReputationOracle(gl.Contract):
             "slash_floor": policy.slash_floor,
             "release_floor": policy.release_floor,
             "bond_lock_seconds": policy.bond_lock_seconds,
+            "withdrawal_settle_seconds": policy.withdrawal_settle_seconds,
             "collateral_ceiling_bp": policy.collateral_ceiling_bp,
             "collateral_floor_bp": policy.collateral_floor_bp,
             "collateral_forfeit_bp": policy.collateral_forfeit_bp,

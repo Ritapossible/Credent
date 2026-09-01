@@ -643,7 +643,7 @@ export function assignTo(account: string, recipient: string): Promise<WriteResul
  * Pull your own entitlement out of the contract.
  *
  * The only call that emits value. Refused unless the caller has answered the
- * contract's probe, so a browser wallet can never reach the delivering path --
+ * contract's handshake, so a browser wallet can never reach the delivering path --
  * it should use `assignTo` instead. There is no flag: the previous signature
  * took an unverifiable claim about the caller's own address.
  */

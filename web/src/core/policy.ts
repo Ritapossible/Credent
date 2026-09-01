@@ -45,6 +45,8 @@ export interface Policy {
   releaseFloor: number
   /** How long a releasable bond stays locked before reclaim. */
   bondLockSeconds: number
+  /** How long `reclaim` waits before it will judge an emitted withdrawal. */
+  withdrawalSettleSeconds: number
   /** Collateral an agent scoring 0 posts, in basis points of the stake. */
   collateralCeilingBp: number
   /** What the same stake costs an agent scoring 10000. */
@@ -64,6 +66,7 @@ export const DEFAULT_POLICY: Policy = {
   slashFloor: 20,
   releaseFloor: 50,
   bondLockSeconds: 1_209_600, // 14 days
+  withdrawalSettleSeconds: 900, // 15 minutes
   collateralCeilingBp: 15_000, // 150% of the stake at score 0
   collateralFloorBp: 2_500, // 25% of it at a perfect score
   collateralForfeitBp: 2_500, // fulfilled below 25% forfeits

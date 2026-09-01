@@ -88,6 +88,9 @@ function toPolicy(raw: Record<string, number | string>): Policy {
     slashFloor: Number(raw.slashFloor),
     releaseFloor: Number(raw.releaseFloor),
     bondLockSeconds: Number(raw.bondLockSeconds),
+    // Not part of any scoring vector -- it is a payout-timing parameter, and
+    // the generator has no reason to emit it. Defaulted so the shape matches.
+    withdrawalSettleSeconds: Number(raw.withdrawalSettleSeconds ?? 900),
     collateralCeilingBp: Number(raw.collateralCeilingBp),
     collateralFloorBp: Number(raw.collateralFloorBp),
     collateralForfeitBp: Number(raw.collateralForfeitBp),

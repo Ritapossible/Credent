@@ -485,6 +485,7 @@ export async function getPolicy(): Promise<Policy> {
     slashFloor: int(source, 'slash_floor', 'get_policy'),
     releaseFloor: int(source, 'release_floor', 'get_policy'),
     bondLockSeconds: int(source, 'bond_lock_seconds', 'get_policy'),
+    withdrawalSettleSeconds: int(source, 'withdrawal_settle_seconds', 'get_policy'),
     collateralCeilingBp: int(source, 'collateral_ceiling_bp', 'get_policy'),
     collateralFloorBp: int(source, 'collateral_floor_bp', 'get_policy'),
     collateralForfeitBp: int(source, 'collateral_forfeit_bp', 'get_policy'),
@@ -534,7 +535,7 @@ export async function owedTo(recipient: string): Promise<bigint> {
 /**
  * Whether `withdraw` will deliver to this address.
  *
- * True only once the address has answered the contract's zero-value probe,
+ * True only once the address has completed the contract's payout handshake,
  * which needs code to run and so cannot be faked by a wallet. `withdraw` is
  * refused for anything else, which is what stops value being emitted at an
  * address that cannot receive it.

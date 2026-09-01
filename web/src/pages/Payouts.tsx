@@ -229,7 +229,7 @@ export default function Payouts() {
             <h2 className="card__title">Withdraw to yourself</h2>
             <p className="muted">
               Emits the value to the caller, and is refused unless this address has answered the
-              contract&rsquo;s zero-value probe. Answering it from a browser wallet means signing two
+              contract&rsquo;s payout handshake. Completing it from a browser wallet means signing two
               deliberate transactions and claiming something about yourself that the contract cannot
               check — so this button stays disabled here, and the safe path above is the one to use.
               It is offered because a contract driving this site&rsquo;s calls can answer the probe

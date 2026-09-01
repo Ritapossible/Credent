@@ -71,7 +71,7 @@ def emits_value(fn: ast.FunctionDef) -> bool:
     """Does this function send value anywhere?
 
     `emit_transfer` always does. `emit(...)` only does when a `value=` keyword
-    is present -- `prove_recipient` uses a zero-value `emit(...).credent_probe()`
+    is present -- `prove_recipient` opens a handshake that moves no value
     to ask a recipient to identify itself, and counting that as a value transfer
     would flag the one method whose whole point is that it risks nothing.
     """
@@ -118,8 +118,8 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
         # can never reach anybody else's money. Anything beyond these two would
         # be a payout path nothing in this audit is checking.
         (
-            "only withdraw and the probe emit value",
-            emitters == ["prove_recipient", "withdraw"],
+            "withdraw is the only method that emits value",
+            emitters == ["withdraw"],
             f"emitters: {emitters}",
         ),
         (
@@ -133,11 +133,10 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             "recipient_is_a_contract was unverifiable and cost the entitlement",
         ),
         (
-            "the probe carries value, and it is the caller's own",
-            "emit_transfer" in probe and "value=PROBE_WEI" in probe
-            and "REASON_PROBE_UNFUNDED" in probe,
-            "a zero-value probe shows only that the caller runs code, not that "
-            "it can be paid; a probe funded from the balance spends the pool",
+            "the handshake moves no value",
+            "emit_transfer" not in probe and "self.owed[" not in probe,
+            "a handshake that moves money can lose money, and buys nothing that "
+            "_require_recipient_contract has not already established",
         ),
         (
             "a confirmation must answer an outstanding probe",
@@ -199,9 +198,17 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             "a wallet must not be able to mark itself proven on any network",
         ),
         (
-            "the probe comes out of the caller's own entitlement",
-            "self.owed[key] = entitlement - PROBE_WEI" in code(fns["prove_recipient"]),
-            "a probe paid out of the pool spends money belonging to other parties",
+            "the recovery decision is testable arithmetic, not inline judgement",
+            "resolve_withdrawal" in code(fns["reclaim"])
+            and "settle_seconds" in code(fns["reclaim"]),
+            "a decision that only exists inside the contract cannot be executed "
+            "by a test, only grepped for",
+        ),
+        (
+            "an unsettled withdrawal is refused rather than judged",
+            "REASON_WITHDRAWAL_UNSETTLED" in code(fns["reclaim"]),
+            "judging before the transfer can have landed is the one way a "
+            "recovery path pays twice",
         ),
         (
             "solvency counts every obligation, not entitlements alone",
@@ -215,15 +222,22 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
         (
             "an undelivered withdrawal can be recovered",
             "reclaim" in fns
-            and "REASON_CANNOT_BACK_RESTORE" in code(fns["reclaim"])
+            and "self._obligations()" in code(fns["reclaim"])
             and "self.owed[key] = restored" in code(fns["reclaim"]),
             "a failed emitted transfer must leave the entitlement recoverable",
         ),
         (
+            "an outstanding withdrawal is readable from outside",
+            "withdrawal_of" in fns and "in_flight_to" in fns,
+            "a claim nobody can see while it is in flight is indistinguishable "
+            "from a lost one",
+        ),
+        (
             "the entitlement is parked, not discarded",
             "self.in_flight[key] = amount" in code(fns["withdraw"])
-            and "self.in_flight_baseline[key] = baseline" in code(fns["withdraw"]),
-            "withdraw must preserve the claim while the transfer is outstanding",
+            and "self.in_flight_at[key] = opened_at" in code(fns["withdraw"]),
+            "withdraw must preserve the claim while the transfer is outstanding, "
+            "and record when, so reclaim can tell a failure from a delay",
         ),
         (
             "no __on_errored_message__ is claimed",

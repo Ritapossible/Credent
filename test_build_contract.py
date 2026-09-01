@@ -68,6 +68,7 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         "assign_to",
         "agreement_check",
         "reclaim",
+        "withdrawal_of",
         "in_flight_to",
         "prove_recipient",
         "confirm_recipient",
@@ -236,7 +237,7 @@ def test_genvm_lint_validates_the_artifact_and_extracts_a_full_schema() -> None:
     # The schema is the ABI a client reads to learn what it can call. A missing
     # or partial one is the symptom both defects above produced.
     assert report["validate"]["methods"] == len(EXPECTED_PUBLIC_METHODS)
-    assert report["validate"]["ctor_params"] == 13, "the thirteen policy parameters"
+    assert report["validate"]["ctor_params"] == 14, "the fourteen policy parameters"
 
 
 def test_the_artifact_has_no_future_import(artifact_source: str) -> None:
@@ -567,37 +568,25 @@ def test_value_is_never_emitted_at_an_unproven_recipient(artifact_source: str) -
     emitted = code.index("emit_transfer")
     assert zeroed < emitted, "withdraw must clear the entitlement before emitting"
 
-    # The probe carries value on purpose. A zero-value call could only show the
-    # caller runs code, which is not the question -- the question is whether the
-    # caller can be *paid*, and the only honest test of that is paying it.
+    # The handshake moves no value, and that is the correction. An earlier
+    # build had `prove_recipient` emit a real transfer debited from the caller's
+    # own entitlement so the confirmation could see the recipient's balance
+    # rise. It cleared owed value and then emitted -- the exact shape of the
+    # defect this rework removes -- to re-confirm a platform property already
+    # measured. `credent_recipient()` is the guard; the handshake is an opt-in.
     probe = _code_of(fns["prove_recipient"])
-    assert "emit_transfer" in probe, "the probe must transfer value; that is the evidence"
-    assert "value=PROBE_WEI" in probe, "the probe must carry PROBE_WEI"
-    # Re-issue rather than refuse: a recipient whose balance falls back to the
-    # baseline before it confirms would otherwise be locked out for ever, with
-    # the confirmation refusing on the balance and a fresh probe refusing on the
-    # outstanding one.
-    assert "REASON_PROBE_OUTSTANDING" not in probe, (
-        "prove_recipient refuses an outstanding probe instead of re-issuing it; "
-        "a recipient that spends what it receives can never become proven"
+    assert "emit_transfer" not in probe, (
+        "prove_recipient emits value again; a handshake that moves money can "
+        "lose money, and it buys nothing _require_recipient_contract has not "
+        "already established"
+    )
+    assert "self.owed[" not in probe, (
+        "prove_recipient touches the entitlement; the handshake must not be able "
+        "to reduce what a recipient is owed"
     )
     assert "self.probing[key] = True" in probe, (
-        "prove_recipient must record the outstanding probe, or confirm_recipient "
+        "prove_recipient must record the open handshake, or confirm_recipient "
         "has nothing to check against"
-    )
-    assert "self.probe_baseline[key]" in probe, (
-        "prove_recipient must record the recipient's balance, or arrival cannot be judged"
-    )
-    assert "REASON_PROBE_UNFUNDED" in probe, (
-        "a probe must never be paid out of another party's entitlement"
-    )
-    assert "self.owed[key] = entitlement - PROBE_WEI" in probe, (
-        "the probe must be debited from the caller's own entitlement; funding it "
-        "from the contract's balance spends money that belongs to somebody else"
-    )
-    assert "self.total_owed = int(self.total_owed) - PROBE_WEI" in probe, (
-        "the probe debit must be reflected in total_owed, or the contract "
-        "over-reports what it owes for ever"
     )
 
     # A confirmation must answer a probe this contract actually issued, and must
@@ -612,16 +601,10 @@ def test_value_is_never_emitted_at_an_unproven_recipient(artifact_source: str) -
         "an unrequested confirmation must be a classified refusal, not a bare "
         "exception that rotates validators"
     )
-    # The guard that closes the gap the origin check leaves where
-    # `origin_address` is not the transaction initiator: the probe value must
-    # actually have arrived, and an externally owned account is never credited.
-    assert "REASON_PROBE_NOT_RECEIVED" in confirm, (
-        "confirm_recipient takes the caller's word that the probe arrived"
+    assert ".balance" not in confirm, (
+        "confirm_recipient reads a balance again; what makes a caller eligible is "
+        "_require_recipient_contract, not a figure it could be handed"
     )
-    assert "baseline + PROBE_WEI" in confirm, (
-        "confirm_recipient must compare the recipient's balance against the baseline"
-    )
-    assert ".balance" in confirm, "arrival must be read from the recipient's balance"
     assert "self.probing[key] = False" in confirm, (
         "confirm_recipient does not consume the probe; the confirmation is replayable"
     )
@@ -750,18 +733,16 @@ def test_the_agreement_view_delegates_to_the_consensus_rule(artifact_source: str
 
 
 def test_a_failed_transfer_leaves_the_entitlement_recoverable(artifact_source: str) -> None:
-    """The review's third item, as a structural guarantee.
+    """The review's item, as a structural guarantee about the wiring.
 
-    "Ensure a failed emitted transfer leaves the entitlement recoverable." The
-    answer is not to guess afterwards whether the value landed -- two earlier
-    designs guessed and both were wrong -- but to *park* the entitlement instead
-    of discarding it, and to judge it against the one thing that is observable:
-    the recipient's own balance, which rises only if the value arrived.
+    The *decision* is `resolve_withdrawal` in `reputation_core`, where
+    `TestResolveWithdrawal` drives every branch with real numbers. What this
+    checks is that the contract is wired to it: that `withdraw` parks the
+    entitlement instead of dropping it, records when it did so, and that
+    `reclaim` reads both and can put the claim back.
 
-    So `withdraw` must move the entitlement into `in_flight` rather than drop
-    it, must record the baseline it will later be judged against, and `reclaim`
-    must be able to put it back. The solvency guard is checked too, because
-    without it the restore is a way to spend the pool that backs everybody else.
+    Kept separate on purpose. A structural test cannot tell you the arithmetic
+    is right, and an arithmetic test cannot tell you the contract calls it.
     """
     tree = ast.parse(artifact_source)
     fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
@@ -771,38 +752,49 @@ def test_a_failed_transfer_leaves_the_entitlement_recoverable(artifact_source: s
         "withdraw discards the entitlement instead of parking it; a failed "
         "transfer would leave nothing to recover"
     )
-    assert "self.in_flight_baseline[key] = baseline" in withdraw, (
-        "withdraw records no baseline, so reclaim has nothing to judge delivery against"
+    assert "self.in_flight_at[key] = opened_at" in withdraw, (
+        "withdraw records no timestamp, so reclaim cannot tell a transfer that "
+        "failed from one that has not landed yet"
     )
-    assert ".balance" in withdraw, "the baseline must be read from the recipient's balance"
     parked = withdraw.index("self.in_flight[key] = amount")
     emitted = withdraw.index("emit_transfer")
     assert parked < emitted, "the entitlement must be parked before the transfer is emitted"
 
     assert "reclaim" in fns, "there is no way to recover an undelivered withdrawal"
     reclaim = _code_of(fns["reclaim"])
+    assert "resolve_withdrawal" in reclaim, (
+        "reclaim decides delivery inline again; the decision belongs in the "
+        "engine, where it can be executed by a test"
+    )
+    for argument in ("elapsed_seconds", "held", "obligations", "settle_seconds"):
+        assert argument in reclaim, f"reclaim does not pass {argument} to the decision"
+    assert "self.p_withdrawal_settle_seconds" in reclaim, (
+        "reclaim uses the module constant instead of the deployed policy, so a "
+        "test instance and a production one could not differ"
+    )
+    assert "self._obligations()" in reclaim, (
+        "reclaim must weigh every obligation, not entitlements alone; a restore "
+        "judged against total_owed reads locked bonds and posted collateral as "
+        "free money"
+    )
+    assert "REASON_WITHDRAWAL_UNSETTLED" in reclaim, (
+        "reclaim does not refuse an unsettled withdrawal; judging one before the "
+        "transfer can have landed is the one way this can pay twice"
+    )
+    assert "self.owed[key] = restored" in reclaim, "reclaim never restores the entitlement"
     assert "REASON_NO_WITHDRAWAL_PENDING" in reclaim, (
         "reclaim must refuse when nothing is outstanding, rather than crediting silently"
     )
-    assert "self.owed[key] = restored" in reclaim, "reclaim never restores the entitlement"
-    assert "REASON_CANNOT_BACK_RESTORE" in reclaim, (
-        "reclaim has no solvency guard; a restore could spend the balance backing "
-        "other parties' entitlements"
+
+    # Nothing may leave a claim stuck. Every path out of `reclaim` either
+    # resolves the withdrawal or is retryable, and `withdrawal_of` says when.
+    assert ".balance" in reclaim and "sender_address).balance" not in reclaim, (
+        "reclaim reads the recipient's balance again; unrelated money arriving "
+        "there reads as delivery, and a recipient that spends reads as failure"
     )
-    # The guard has to compare against *everything* the contract is holding for
-    # somebody else, not just entitlements. A recipient that was paid and then
-    # spent it presents the same balance evidence as one that was never paid; a
-    # guard that counts locked bonds and posted collateral as surplus would pay
-    # such a caller a second time out of them.
-    assert "self._obligations()" in reclaim, (
-        "the solvency guard must weigh every obligation, not entitlements alone; "
-        "a restore paid out of a locked bond is a restore paid out of somebody "
-        "else's money"
-    )
-    assert "held" in reclaim, "the solvency guard must read the contract's balance"
-    # Delivered and undelivered must be distinguished by evidence, not assumed.
-    assert "baseline + amount" in reclaim, (
-        "reclaim must decide delivery from the recipient's balance against its baseline"
+    assert "withdrawal_of" in fns, (
+        "an outstanding withdrawal must be readable from outside, or it is "
+        "indistinguishable from a lost one"
     )
 
 

@@ -21,6 +21,7 @@ const RENDER: Record<keyof Policy, (policy: Policy) => string> = {
   slashFloor: (policy) => `${policy.slashFloor} substantiated`,
   releaseFloor: (policy) => `${policy.releaseFloor} substantiated`,
   bondLockSeconds: (policy) => formatDuration(policy.bondLockSeconds),
+  withdrawalSettleSeconds: (policy) => formatDuration(policy.withdrawalSettleSeconds),
   collateralCeilingBp: (policy) => `${bpToPercent(policy.collateralCeilingBp)} of stake`,
   collateralFloorBp: (policy) => `${bpToPercent(policy.collateralFloorBp)} of stake`,
   collateralForfeitBp: (policy) => `fulfilled below ${bpToPercent(policy.collateralForfeitBp)}`,

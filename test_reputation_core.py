@@ -1175,3 +1175,153 @@ class TestAgreementPreservesTheMoneyOutcome:
         mine = {"verdict": core.VERDICT_UNGRADED}
         theirs = {"verdict": core.VERDICT_UNGRADED}
         assert core.grades_agree(mine, theirs, POLICY)
+
+
+class TestResolveWithdrawal:
+    """The recovery mechanism, executed rather than inspected.
+
+    `withdraw` moves an entitlement out of `owed` and into `in_flight` before it
+    emits, so a transfer that never arrives leaves a claim that is still on the
+    books and still readable. `resolve_withdrawal` is what decides whether to
+    give it back. These are the cases it has to get right.
+    """
+
+    SETTLE = core.WITHDRAWAL_SETTLE_SECONDS
+
+    def test_nothing_is_decided_before_the_transfer_can_have_settled(self):
+        """The one way a recovery path can pay twice is by deciding too early."""
+        assert (
+            core.resolve_withdrawal(elapsed_seconds=0, held=1000, obligations=1000)
+            == core.WITHDRAWAL_UNSETTLED
+        )
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE - 1, held=1000, obligations=1000
+            )
+            == core.WITHDRAWAL_UNSETTLED
+        )
+
+    def test_the_window_opens_exactly_on_the_boundary(self):
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=1000, obligations=1000
+            )
+            == core.WITHDRAWAL_RESTORED
+        )
+
+    def test_money_still_here_means_the_transfer_failed(self):
+        """The contract covers every obligation with the claim on its books."""
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=1000, obligations=1000
+            )
+            == core.WITHDRAWAL_RESTORED
+        )
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=1001, obligations=1000
+            )
+            == core.WITHDRAWAL_RESTORED
+        )
+
+    def test_money_gone_means_the_transfer_landed(self):
+        """One wei short is enough: the value is not here, so it left."""
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=999, obligations=1000
+            )
+            == core.WITHDRAWAL_DELIVERED
+        )
+
+    def test_a_delivered_payout_is_not_restored(self):
+        """The realistic delivered case, with the numbers laid out.
+
+        A contract holding 100 for one entitlement of 100 pays it out. Its
+        balance is 0; the claim is in flight, so obligations are still 100. It
+        cannot cover a restore, and it must not try.
+        """
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=0, obligations=100
+            )
+            == core.WITHDRAWAL_DELIVERED
+        )
+
+    def test_an_undelivered_payout_is_restored(self):
+        """The bradbury case, where a failed transfer leaves the value here.
+
+        The same contract, same claim, but the transfer never landed. The
+        balance is untouched, so it covers the obligation and the entitlement
+        goes back.
+        """
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=100, obligations=100
+            )
+            == core.WITHDRAWAL_RESTORED
+        )
+
+    def test_money_paid_in_meanwhile_changes_no_answer(self):
+        """A bond arriving raises the balance *and* the obligation together.
+
+        This is what reading the recipient's balance got wrong: an unrelated
+        payment looked like delivery. Here it cancels out exactly.
+        """
+        for inbound in (1, 50, 10_000):
+            assert (
+                core.resolve_withdrawal(
+                    elapsed_seconds=self.SETTLE,
+                    held=0 + inbound,
+                    obligations=100 + inbound,
+                )
+                == core.WITHDRAWAL_DELIVERED
+            ), inbound
+            assert (
+                core.resolve_withdrawal(
+                    elapsed_seconds=self.SETTLE,
+                    held=100 + inbound,
+                    obligations=100 + inbound,
+                )
+                == core.WITHDRAWAL_RESTORED
+            ), inbound
+
+    def test_a_restore_never_reaches_another_party_s_money(self):
+        """The property that makes the mechanism safe rather than merely useful.
+
+        Whatever else is outstanding — other entitlements, locked bonds, posted
+        collateral — a restore is only allowed when the balance covers all of it
+        with this claim included. Add a second party's 500 to the obligations
+        and the same balance that restored before is refused.
+        """
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=100, obligations=100
+            )
+            == core.WITHDRAWAL_RESTORED
+        )
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=100, obligations=600
+            )
+            == core.WITHDRAWAL_DELIVERED
+        )
+
+    def test_the_settle_window_is_overridable_for_tests_only(self):
+        """The contract passes the constant; the parameter exists so this file
+        can drive the boundary without waiting fifteen minutes."""
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=5, held=1, obligations=1, settle_seconds=1
+            )
+            == core.WITHDRAWAL_RESTORED
+        )
+
+    def test_every_outcome_is_one_of_the_declared_three(self):
+        for elapsed in (0, self.SETTLE):
+            for held, obligations in ((0, 0), (0, 1), (1, 0), (5, 5)):
+                assert (
+                    core.resolve_withdrawal(
+                        elapsed_seconds=elapsed, held=held, obligations=obligations
+                    )
+                    in core.WITHDRAWAL_OUTCOMES
+                )

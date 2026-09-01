@@ -212,35 +212,21 @@ if (!Number.isFinite(SETTLE_TIMEOUT_MS) || SETTLE_TIMEOUT_MS <= 0) {
  * needs to be able to tell those apart.
  */
 /**
- * Have a recipient contract prove it can receive, and wait until it has.
+ * Complete the payout handshake for a recipient contract.
  *
- * `withdraw` refuses an unproven address, so this is a required step rather
- * than a nicety. The oracle pays the recipient PROBE_WEI and the recipient
- * confirms once it has arrived. Only a contract is credited by
- * `emit_transfer`, so the arrival is itself the proof -- the mechanism the
- * payout will use is the mechanism being tested.
+ * `withdraw` refuses an address that has not done this, so it is a required
+ * step rather than a nicety. Neither call moves value: what makes a recipient
+ * eligible is that the oracle can view-call `credent_recipient()` on it, which
+ * a wallet has no code to answer.
  */
-// What `prove_recipient` pays the candidate, and debits from its entitlement.
-// The probe is the first slice of the recipient's own money rather than a
-// payment out of the pool, so a proven recipient is owed exactly this much less
-// by the time it withdraws -- and has already received it.
-const PROBE_WEI = 1_000_000_000_000n
-
 async function proveRecipient(client: Role, oracle: string, recipient: string): Promise<boolean> {
   if ((await view(oracle, 'is_proven', [recipient])) === true) return true
 
-  // Two transactions, and they cannot be one. The probe is an *emitted*
-  // transfer of PROBE_WEI, so it settles after the call that sends it: there
-  // is no moment during `prove` at which the recipient has already been paid.
-  // `confirm` is refused until the value has arrived, which is a refusal and
-  // not a failure -- so wait for the balance to move, then confirm.
-  const before = await balanceOf(recipient)
+  // Two transactions, and they cannot be one: the oracle records the open
+  // handshake in the first and consumes it in the second, so a confirmation
+  // cannot arrive unrequested. Neither moves value. What makes the recipient
+  // eligible is `credent_recipient()`, which the oracle view-calls on it.
   await send(client, recipient, 'prove', [])
-  const after = await settleTo(() => balanceOf(recipient), (value) => value > before, ATTEST_TIMEOUT_MS)
-  if (after <= before) {
-    console.log(`         the probe never arrived at ${recipient}; it cannot be paid`)
-    return false
-  }
   await send(client, recipient, 'confirm', [])
   const proven = await settleTo(
     async () => ((await view(oracle, 'is_proven', [recipient])) === true ? 1n : 0n),
@@ -586,9 +572,21 @@ async function withdrawal(
 ): Promise<void> {
   console.log(`\n  ${label}`)
 
+  // Wait for the entitlement to stop moving before snapshotting it. A credit
+  // emitted by an earlier step can land *after* this function starts, and then
+  // `withdraw` pays what is owed at execution time while the assertions below
+  // compare against a figure read before it arrived. That produced a false
+  // failure on bradbury: the contract paid 0.934999 GEN, correctly, against a
+  // snapshot of 0.924999 GEN taken 0.01 GEN too early.
+  let owedBefore = asBig(await view(oracle, 'owed_to', [owner]), 'owed_to')
+  for (let settledReads = 0; settledReads < 3; ) {
+    await sleep(5_000)
+    const again = asBig(await view(oracle, 'owed_to', [owner]), 'owed_to')
+    settledReads = again === owedBefore ? settledReads + 1 : 0
+    owedBefore = again
+  }
   const contractBefore = await balanceOf(oracle)
   const claimantBefore = await balanceOf(claimant)
-  const owedBefore = asBig(await view(oracle, 'owed_to', [owner]), 'owed_to')
   console.log(`    owed_to(${owner === claimant ? 'claimant' : 'owner'}) ${gen(owedBefore)}`)
 
   const sent = await act()
@@ -639,24 +637,21 @@ async function withdrawal(
   console.log(`    claimant  ${gen(claimantBefore)} -> ${gen(claimantAfter)}  (${delta(claimantAfter - claimantBefore)})`)
   console.log(`    owed_to   ${gen(owedBefore)} -> ${gen(owedAfter)}`)
 
-  // What moves *now* is what is on the books now, which is the credited amount
-  // less the probe if this recipient proved during this run. The probe is not
-  // a fee and it is not lost: it is the first `PROBE_WEI` of the same
-  // entitlement, paid early, by the same mechanism, to the same address. So the
-  // shortfall against `expected` is asserted to be exactly nothing or exactly
-  // the probe, and never anything else.
-  const shortfall = expected - owedBefore
-  check(
-    shortfall === 0n || shortfall === PROBE_WEI,
-    shortfall === 0n
-      ? `the entitlement on the books is the whole ${gen(expected)}`
-      : `the entitlement on the books is ${gen(expected)} less the ${gen(PROBE_WEI)} probe`,
-  )
+  // The handshake moves no value, so what is on the books is the whole of what
+  // was credited. Anything else is an accounting error, not a fee.
+  check(owedBefore === expected, `the entitlement on the books is the whole ${gen(expected)}`)
   const arrived = check(
     claimantAfter - claimantBefore >= owedBefore,
     `the claimant received the whole entitlement (${delta(claimantAfter - claimantBefore)})`,
   )
-  check(contractAfter === contractBefore - owedBefore, `the contract paid out exactly ${gen(owedBefore)}`)
+  // Race-free, and a stronger claim than comparing against the snapshot: every
+  // wei that left this contract arrived at the recipient, whatever else landed
+  // in the meantime. The snapshot is still asserted, as a lower bound, by the
+  // arrival check above.
+  check(
+    contractBefore - contractAfter === claimantAfter - claimantBefore,
+    `every wei that left the contract arrived at the recipient (${gen(contractBefore - contractAfter)})`,
+  )
   check(owedAfter === 0n, 'the entitlement was zeroed')
 
   if (settle) {
@@ -746,9 +741,16 @@ async function refund(
  * Positional, because the constructor is. Only two values differ from the
  * contract's own defaults: the bond lock drops to zero so `reclaim_bond` and the
  * unattested `release_collateral` path are reachable now rather than in a
- * fortnight, and `min_bond` is small so a full run costs little. Everything else
- * is the deployed policy, so the collateral arithmetic under test is the real
- * one.
+ * fortnight, `withdrawal_settle_seconds` is zero so `reclaim` can resolve a
+ * payout in the same run instead of fifteen minutes later, and `min_bond` is
+ * small so a full run costs little. Everything else is the deployed policy, so
+ * the collateral arithmetic under test is the real one.
+ *
+ * The settle window is the one of these that is a safety parameter rather than
+ * a convenience: at zero, `reclaim` will judge a withdrawal before the transfer
+ * has had time to land. That is fine here, where the suite waits for the payout
+ * to arrive before it calls `reclaim` at all, and it is why the production
+ * deployments run 900.
  */
 const POLICY = [
   7776000n, // half_life_seconds
@@ -760,7 +762,8 @@ const POLICY = [
   GEN / 100n, // min_bond - 0.01 GEN
   20n, // slash_floor
   50n, // release_floor
-  0n, // bond_lock_seconds - the one change that makes this runnable in one pass
+  0n, // bond_lock_seconds - one of two changes that make this runnable in one pass
+  0n, // withdrawal_settle_seconds - the other; production waits 900s
   15000n, // collateral_ceiling_bp
   2500n, // collateral_floor_bp
   2500n, // collateral_forfeit_bp

@@ -298,22 +298,11 @@ if (state !== 'releasable') {
   await settleTo(async () => asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()])), (v) => v >= required)
 }
 
-// The probe carries value, so proving is two calls: the oracle pays PROBE_WEI
-// and the recipient confirms once it has arrived. An externally owned account
-// is never credited by `emit_transfer`, so it can never complete this -- and
-// before any of it the oracle view-calls `credent_recipient()` on the caller,
-// which a wallet has no code to answer at all.
-//
-// The probe is paid out of the recipient's **own** entitlement rather than out
-// of the contract's balance, so what is left to withdraw afterwards is short by
-// exactly this much. Nothing is lost: it arrived earlier, at the same address,
-// by the same mechanism.
-const PROBE_WEI = 1_000_000_000_000n
-const probeBefore = await balanceOf(CLAIMANT)
-await call(CLAIMANT, 'prove', [], 0n, 'prove_recipient — the oracle pays the recipient a token amount')
-const probeAfter = await settleTo(() => balanceOf(CLAIMANT), (v) => v > probeBefore)
-check(probeAfter > probeBefore, `the probe arrived (${gen(probeAfter - probeBefore)}) — only a contract is credited`)
-await call(CLAIMANT, 'confirm', [], 0n, 'confirm_recipient — refused unless that value actually landed')
+// Two calls, and neither moves value. What makes the recipient eligible is the
+// view call the oracle makes into it for `credent_recipient()`, which a wallet
+// has no code to answer at all.
+await call(CLAIMANT, 'prove', [], 0n, 'prove_recipient — open the payout handshake')
+await call(CLAIMANT, 'confirm', [], 0n, 'confirm_recipient — close it')
 const proven = await settleTo(
   async () => ((await view<boolean>(ORACLE, 'is_proven', [CLAIMANT.toLowerCase()])) ? 1n : 0n),
   (v) => v === 1n,
@@ -322,16 +311,12 @@ check(proven === 1n, 'the claimant is a proven recipient')
 
 const claimantBefore = await balanceOf(CLAIMANT)
 const owedNow = asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()]))
-check(owedNow === required - PROBE_WEI, `the probe came out of the entitlement (${gen(PROBE_WEI)})`)
+check(owedNow === required, `the whole entitlement is still on the books (${gen(required)})`)
 await call(CLAIMANT, 'claim', [], 0n, 'withdraw — the method that pays out the rest of the entitlement')
 await settleTo(async () => asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()])), (v) => v === 0n)
 const claimantAfter = await settleTo(() => balanceOf(CLAIMANT), (v) => v >= claimantBefore + owedNow)
 console.log(`    claimant  ${gen(claimantBefore)} -> ${gen(claimantAfter)}`)
 check(claimantAfter - claimantBefore === owedNow, `the claimant received the rest of the entitlement (${gen(owedNow)})`)
-check(
-  claimantAfter - probeBefore === required,
-  `probe and withdrawal together are the whole entitlement (${gen(required)})`,
-)
 check(asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()])) === 0n, 'the entitlement was zeroed')
 
 // And the withdrawal is resolved rather than left outstanding: `reclaim` closes
@@ -340,7 +325,21 @@ check(asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()])) === 0n, 'th
 const parked = asBig(await view(ORACLE, 'in_flight_to', [CLAIMANT.toLowerCase()]))
 console.log(`    in flight ${gen(parked)}`)
 if (parked > 0n) {
-  await call(CLAIMANT, 'settle_withdrawal', [], 0n, 'reclaim — settle the withdrawal against the balance')
+  // `reclaim` refuses to judge a withdrawal younger than the policy's settle
+  // window, because a transfer that has not had time to land or fail is a
+  // question with no answer. The deployments run 900 seconds; the script waits
+  // it out rather than pretending the guard is not there.
+  const status = await view<Record<string, unknown>>(ORACLE, 'withdrawal_of', [CLAIMANT.toLowerCase()])
+  console.log(`    resolvable at ${String(status.resolvable_at)} (settle window ${policy.withdrawal_settle_seconds}s)`)
+  await settleTo(
+    async () => {
+      const now = await view<Record<string, unknown>>(ORACLE, 'withdrawal_of', [CLAIMANT.toLowerCase()])
+      return now.resolvable_now === true ? 1n : 0n
+    },
+    (v) => v === 1n,
+    Number(asBig(policy.withdrawal_settle_seconds)) * 1000 + 5 * 60_000,
+  )
+  await call(CLAIMANT, 'settle_withdrawal', [], 0n, 'reclaim — resolve the withdrawal')
   const resolved = await settleTo(
     async () => asBig(await view(ORACLE, 'in_flight_to', [CLAIMANT.toLowerCase()])),
     (v) => v === 0n,

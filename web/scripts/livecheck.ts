@@ -43,6 +43,10 @@ check(policy.collateralCeilingBp === 15000, `collateralCeilingBp = ${policy.coll
 check(policy.collateralFloorBp === 2500, `collateralFloorBp = ${policy.collateralFloorBp}`)
 check(policy.collateralForfeitBp === 2500, `collateralForfeitBp = ${policy.collateralForfeitBp}`)
 check(policy.minBond === 10n ** 18n, `minBond = ${formatBond(policy.minBond)}`)
+check(
+  policy.withdrawalSettleSeconds === 900,
+  `withdrawalSettleSeconds = ${policy.withdrawalSettleSeconds}s — reclaim waits this long before judging a withdrawal`,
+)
 
 console.log('registry')
 const count = await attestationCount()

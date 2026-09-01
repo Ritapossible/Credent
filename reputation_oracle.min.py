@@ -10,7 +10,7 @@ from typing import Iterable
 BP = 10000
 NEUTRAL_BP = 5000
 U256_MAX = (1 << 256) - 1
-PROBE_WEI = 1_000_000_000_000
+WITHDRAWAL_SETTLE_SECONDS = 900
 RECIPIENT_MARKER_METHOD = "credent_recipient"
 RECIPIENT_MARKER = "credent-recipient-v1"
 MAX_COLLATERAL_BP = 100 * BP
@@ -60,14 +60,12 @@ REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
 REASON_PROBE_OUTSTANDING = "a_probe_is_already_outstanding"
-REASON_PROBE_NOT_RECEIVED = "the_probe_value_did_not_arrive"
-REASON_PROBE_UNFUNDED = "the_entitlement_cannot_fund_the_probe"
 REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
 REASON_WRONG_RECIPIENT_MARKER = "the_caller_is_not_a_credent_recipient"
 REASON_WITHDRAWAL_PENDING = "a_withdrawal_is_already_pending"
 REASON_NO_WITHDRAWAL_PENDING = "no_withdrawal_pending"
+REASON_WITHDRAWAL_UNSETTLED = "the_withdrawal_has_not_settled_yet"
 REASON_DELIVERED = "the_withdrawal_was_delivered"
-REASON_CANNOT_BACK_RESTORE = "the_contract_cannot_back_the_restore"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 REASONS = frozenset({
@@ -95,14 +93,12 @@ REASON_RECIPIENT_UNPROVEN,
 REASON_ALREADY_PROVEN,
 REASON_NO_PROBE_OUTSTANDING,
 REASON_PROBE_OUTSTANDING,
-REASON_PROBE_NOT_RECEIVED,
-REASON_PROBE_UNFUNDED,
 REASON_CALLER_IS_ORIGIN,
 REASON_WRONG_RECIPIENT_MARKER,
 REASON_WITHDRAWAL_PENDING,
 REASON_NO_WITHDRAWAL_PENDING,
+REASON_WITHDRAWAL_UNSETTLED,
 REASON_DELIVERED,
-REASON_CANNOT_BACK_RESTORE,
 REASON_BAD_RECIPIENT,
 REASON_ZERO_RECIPIENT,
 })
@@ -144,12 +140,15 @@ class Policy:
  slash_floor: int = 20
  release_floor: int = 50
  bond_lock_seconds: int = 1209600
+ withdrawal_settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS
  collateral_ceiling_bp: int = 15000
  collateral_floor_bp: int = 2500
  collateral_forfeit_bp: int = 2500
  def validate(self) -> None:
   if self.half_life_seconds < 1:
    raise ValueError("half_life_seconds must be >= 1")
+  if self.withdrawal_settle_seconds < 0:
+   raise ValueError("withdrawal_settle_seconds must be >= 0")
   if self.prior_weight < 0:
    raise ValueError("prior_weight must be >= 0")
   if not 0 <= self.min_substantiated <= 100:
@@ -393,6 +392,22 @@ def grades_agree(mine: dict, theirs: dict, policy: Policy) -> bool:
  if collateral_outcome(mine, policy) != collateral_outcome(theirs, policy):
   return False
  return True
+WITHDRAWAL_UNSETTLED = "unsettled"
+WITHDRAWAL_RESTORED = "restored"
+WITHDRAWAL_DELIVERED = "delivered"
+WITHDRAWAL_OUTCOMES = (WITHDRAWAL_UNSETTLED, WITHDRAWAL_RESTORED, WITHDRAWAL_DELIVERED)
+def resolve_withdrawal(
+*,
+elapsed_seconds: int,
+held: int,
+obligations: int,
+settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS,
+) -> str:
+ if elapsed_seconds < settle_seconds:
+  return WITHDRAWAL_UNSETTLED
+ if held >= obligations:
+  return WITHDRAWAL_RESTORED
+ return WITHDRAWAL_DELIVERED
 def scope_digest(scope: str) -> str:
  payload = json.dumps(scope, ensure_ascii=True, separators=(",", ":"))
  return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -617,6 +632,7 @@ class ReputationOracle(gl.Contract):
  p_slash_floor: u256
  p_release_floor: u256
  p_bond_lock_seconds: u256
+ p_withdrawal_settle_seconds: u256
  p_collateral_ceiling_bp: u256
  p_collateral_floor_bp: u256
  p_collateral_forfeit_bp: u256
@@ -647,10 +663,9 @@ class ReputationOracle(gl.Contract):
  owed: TreeMap[str, u256]
  proven: TreeMap[str, bool]
  probing: TreeMap[str, bool]
- probe_baseline: TreeMap[str, u256]
  total_owed: u256
  in_flight: TreeMap[str, u256]
- in_flight_baseline: TreeMap[str, u256]
+ in_flight_at: TreeMap[str, u256]
  total_in_flight: u256
  total_bond_held: u256
  total_collateral_held: u256
@@ -671,6 +686,7 @@ min_bond: u256 = 0,
 slash_floor: u256 = 20,
 release_floor: u256 = 50,
 bond_lock_seconds: u256 = 1209600,
+withdrawal_settle_seconds: u256 = 900,
 collateral_ceiling_bp: u256 = 15000,
 collateral_floor_bp: u256 = 2500,
 collateral_forfeit_bp: u256 = 2500,
@@ -705,6 +721,7 @@ collateral_forfeit_bp=collateral_forfeit_bp,
   self.p_slash_floor = slash_floor
   self.p_release_floor = release_floor
   self.p_bond_lock_seconds = bond_lock_seconds
+  self.p_withdrawal_settle_seconds = withdrawal_settle_seconds
   self.p_collateral_ceiling_bp = collateral_ceiling_bp
   self.p_collateral_floor_bp = collateral_floor_bp
   self.p_collateral_forfeit_bp = collateral_forfeit_bp
@@ -731,6 +748,7 @@ min_bond=int(self.p_min_bond),
 slash_floor=int(self.p_slash_floor),
 release_floor=int(self.p_release_floor),
 bond_lock_seconds=int(self.p_bond_lock_seconds),
+withdrawal_settle_seconds=int(self.p_withdrawal_settle_seconds),
 collateral_ceiling_bp=int(self.p_collateral_ceiling_bp),
 collateral_floor_bp=int(self.p_collateral_floor_bp),
 collateral_forfeit_bp=int(self.p_collateral_forfeit_bp),
@@ -1000,19 +1018,8 @@ compare_user_errors=compare_errors,
   key = _owed_key(gl.message.sender_address)
   if bool(self.proven.get(key, False)):
    _fail(REASON_ALREADY_PROVEN)
-  entitlement = int(self.owed.get(key, 0))
-  if entitlement < PROBE_WEI:
-   _fail(REASON_PROBE_UNFUNDED)
-  self.owed[key] = entitlement - PROBE_WEI
-  self.total_owed = int(self.total_owed) - PROBE_WEI
   self.probing[key] = True
-  self.probe_baseline[key] = int(
-gl.get_contract_at(gl.message.sender_address).balance
-)
-  gl.get_contract_at(gl.message.sender_address).emit_transfer(
-value=PROBE_WEI, on="accepted"
-)
-  return {"probing": key, "amount": PROBE_WEI}
+  return {"probing": key}
  @gl.public.write
  def confirm_recipient(self) -> dict:
   _require_recipient_contract()
@@ -1020,10 +1027,6 @@ value=PROBE_WEI, on="accepted"
   key = _owed_key(gl.message.sender_address)
   if not bool(self.probing.get(key, False)):
    _fail(REASON_NO_PROBE_OUTSTANDING)
-  baseline = int(self.probe_baseline.get(key, 0))
-  now = int(gl.get_contract_at(gl.message.sender_address).balance)
-  if now < baseline + PROBE_WEI:
-   _fail(REASON_PROBE_NOT_RECEIVED)
   self.probing[key] = False
   self.proven[key] = True
   return {"proven": key}
@@ -1040,11 +1043,11 @@ value=PROBE_WEI, on="accepted"
    _fail(REASON_NOTHING_OWED)
   if int(self.in_flight.get(key, 0)) > 0:
    _fail(REASON_WITHDRAWAL_PENDING)
-  baseline = int(gl.get_contract_at(gl.message.sender_address).balance)
+  opened_at = _now_seconds()
   self.owed[key] = 0
   self.total_owed = int(self.total_owed) - amount
   self.in_flight[key] = amount
-  self.in_flight_baseline[key] = baseline
+  self.in_flight_at[key] = opened_at
   self.total_in_flight = int(self.total_in_flight) + amount
   gl.get_contract_at(gl.message.sender_address).emit_transfer(
 value=amount, on="accepted"
@@ -1056,23 +1059,40 @@ value=amount, on="accepted"
   amount = int(self.in_flight.get(key, 0))
   if amount <= 0:
    _fail(REASON_NO_WITHDRAWAL_PENDING)
-  baseline = int(self.in_flight_baseline.get(key, 0))
-  now = int(gl.get_contract_at(gl.message.sender_address).balance)
-  if now >= baseline + amount:
-   self.in_flight[key] = 0
-   self.total_in_flight = int(self.total_in_flight) - amount
-   return {"to": key, "amount": amount, "outcome": "delivered"}
-  held = int(self.balance)
-  if held < self._obligations():
-   _fail(REASON_CANNOT_BACK_RESTORE)
+  outcome = resolve_withdrawal(
+elapsed_seconds=_now_seconds() - int(self.in_flight_at.get(key, 0)),
+held=int(self.balance),
+obligations=self._obligations(),
+settle_seconds=int(self.p_withdrawal_settle_seconds),
+)
+  if outcome == WITHDRAWAL_UNSETTLED:
+   _fail(REASON_WITHDRAWAL_UNSETTLED)
   self.in_flight[key] = 0
+  self.in_flight_at[key] = 0
   self.total_in_flight = int(self.total_in_flight) - amount
+  if outcome == WITHDRAWAL_DELIVERED:
+   return {"to": key, "amount": amount, "outcome": WITHDRAWAL_DELIVERED}
   restored = int(self.owed.get(key, 0)) + amount
   if restored > U256_MAX:
    _fail("entitlement_overflow")
   self.owed[key] = restored
   self.total_owed = int(self.total_owed) + amount
-  return {"to": key, "amount": amount, "outcome": "restored"}
+  return {"to": key, "amount": amount, "outcome": WITHDRAWAL_RESTORED}
+ @gl.public.view
+ def withdrawal_of(self, recipient: str) -> dict:
+  key = _owed_key(_clean_recipient(recipient))
+  amount = int(self.in_flight.get(key, 0))
+  opened_at = int(self.in_flight_at.get(key, 0))
+  return {
+"recipient": key,
+"amount": amount,
+"opened_at": opened_at,
+"resolvable_at": 0
+if amount <= 0
+else opened_at + int(self.p_withdrawal_settle_seconds),
+"resolvable_now": amount > 0
+and _now_seconds() >= opened_at + int(self.p_withdrawal_settle_seconds),
+}
  @gl.public.view
  def in_flight_to(self, recipient: str) -> int:
   if not isinstance(recipient, str):
@@ -1310,6 +1330,7 @@ for raw in _slice(ids, int(offset), int(limit))
 "slash_floor": policy.slash_floor,
 "release_floor": policy.release_floor,
 "bond_lock_seconds": policy.bond_lock_seconds,
+"withdrawal_settle_seconds": policy.withdrawal_settle_seconds,
 "collateral_ceiling_bp": policy.collateral_ceiling_bp,
 "collateral_floor_bp": policy.collateral_floor_bp,
 "collateral_forfeit_bp": policy.collateral_forfeit_bp,

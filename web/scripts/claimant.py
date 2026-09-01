@@ -135,24 +135,18 @@ class Claimant(gl.Contract):
 
     @gl.public.write
     def prove(self) -> None:
-        """Ask the oracle to pay this contract a token amount.
+        """Open the payout handshake on the oracle.
 
-        The oracle emits `PROBE_WEI` here. Only a contract is credited by
-        `emit_transfer`, so the arrival of that value is itself the proof that
-        this address can be paid -- there is nothing to assert and nothing the
-        oracle has to take on trust.
+        Moves no value. The oracle view-calls `credent_recipient()` on this
+        contract before it will accept, which a wallet cannot answer.
         """
         gl.get_contract_at(self.oracle).emit(on="accepted").prove_recipient()
 
     @gl.public.write
     def confirm(self) -> None:
-        """Tell the oracle the probe arrived, once it has.
+        """Close the payout handshake, which makes this contract payable.
 
-        A separate transaction, deliberately. The probe is an *emitted*
-        transfer: it settles after the call that sent it, so there is no moment
-        during `prove` at which this contract has already been paid. Calling
-        this too early is a classified refusal -- `the_probe_value_did_not_arrive`
-        -- and costs nothing but the call. Wait and try again.
+        Send it after `prove` has been accepted, not in the same breath.
         """
         gl.get_contract_at(self.oracle).emit(on="accepted").confirm_recipient()
 
