@@ -954,7 +954,7 @@ def resolve_withdrawal(
     *,
     elapsed_seconds: int,
     held: int,
-    obligations: int,
+    committed: int,
     settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS,
 ) -> str:
     """Decide what became of an emitted withdrawal. Pure arithmetic.
@@ -967,10 +967,10 @@ def resolve_withdrawal(
         consensus time since the withdrawal was emitted.
     ``held``
         what the contract's balance is now.
-    ``obligations``
-        everything the contract is holding for somebody else, **including the
-        withdrawal being judged**: entitlements, other withdrawals in flight,
-        locked bonds and posted collateral.
+    ``committed``
+        every wei a restore must not reach, **including the withdrawal being
+        judged**: entitlements, other withdrawals in flight, locked bonds,
+        posted collateral, and bonds this contract has slashed and kept.
 
     Three outcomes:
 
@@ -978,7 +978,7 @@ def resolve_withdrawal(
       landed or failed. Nothing is decided and nothing is changed; ask again
       later. This is the guard against the one way a recovery path can pay
       twice: restore the claim, then have the transfer arrive as well.
-    * ``restored`` -- the contract still holds enough to cover every obligation
+    * ``restored`` -- the contract still holds everything it is committed to
       with this claim on its books, which means the value never left. The
       entitlement is credited back.
     * ``delivered`` -- it does not, which means the value left. The claim is
@@ -991,17 +991,26 @@ def resolve_withdrawal(
     because obligations move with the money. A bond paid in raises `held` and
     `obligations` by the same amount and changes no answer.
 
-    **What "restored" costs when it is wrong.** The one residual is a contract
-    holding surplus -- slashed bonds, value sent in by mistake -- larger than
-    the withdrawal. Then a delivered claim can still satisfy the test and be
-    restored, paying it a second time out of that surplus. It is bounded by the
-    surplus and it can never reach an entitlement, a bond or a collateral,
-    because those are what `obligations` counts. A restore never spends money
-    owed to anybody else; at worst it spends money the contract owns outright.
+    **What "restored" costs when it is wrong.** A delivered claim can still
+    satisfy the test if the contract holds free money larger than the
+    withdrawal, and would then be paid a second time out of it. Which money is
+    free is therefore the whole question, and it is why `committed` counts
+    slashed bonds as well as obligations.
+
+    A slashed bond is never paid to anybody -- it stays with the contract by
+    design -- so an earlier version of this treated it as surplus. That made the
+    one wrong answer *profitable*: an attacker with a delivered claim could
+    reclaim it and take the accumulated slashings. Counting it removes the
+    profit and leaves only money somebody deliberately sent the contract for no
+    reason, which pays back exactly what it cost to create and is therefore an
+    expensive way to break even.
+
+    Nothing in either case can reach an entitlement, a locked bond or a posted
+    collateral. A restore never spends money owed to anybody else.
     """
     if elapsed_seconds < settle_seconds:
         return WITHDRAWAL_UNSETTLED
-    if held >= obligations:
+    if held >= committed:
         return WITHDRAWAL_RESTORED
     return WITHDRAWAL_DELIVERED
 

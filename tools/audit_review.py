@@ -214,15 +214,22 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             "solvency counts every obligation, not entitlements alone",
             "_obligations" in fns
             and "total_bond_held" in code(fns["_obligations"])
-            and "total_collateral_held" in code(fns["_obligations"])
-            and "self._obligations()" in code(fns["reclaim"]),
+            and "total_collateral_held" in code(fns["_obligations"]),
             "a restore weighed only against total_owed would be paid out of "
             "locked bonds and posted collateral",
         ),
         (
+            "and the slashings, which are owed to nobody but are not free",
+            "_committed" in fns
+            and "total_slashed" in code(fns["_committed"])
+            and "self._committed()" in code(fns["reclaim"]),
+            "left out, the accumulated slashings are what make this "
+            "mechanism's one wrong answer worth attacking",
+        ),
+        (
             "an undelivered withdrawal can be recovered",
             "reclaim" in fns
-            and "self._obligations()" in code(fns["reclaim"])
+            and "self._committed()" in code(fns["reclaim"])
             and "self.owed[key] = restored" in code(fns["reclaim"]),
             "a failed emitted transfer must leave the entitlement recoverable",
         ),

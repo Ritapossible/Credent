@@ -1191,12 +1191,12 @@ class TestResolveWithdrawal:
     def test_nothing_is_decided_before_the_transfer_can_have_settled(self):
         """The one way a recovery path can pay twice is by deciding too early."""
         assert (
-            core.resolve_withdrawal(elapsed_seconds=0, held=1000, obligations=1000)
+            core.resolve_withdrawal(elapsed_seconds=0, held=1000, committed=1000)
             == core.WITHDRAWAL_UNSETTLED
         )
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE - 1, held=1000, obligations=1000
+                elapsed_seconds=self.SETTLE - 1, held=1000, committed=1000
             )
             == core.WITHDRAWAL_UNSETTLED
         )
@@ -1204,7 +1204,7 @@ class TestResolveWithdrawal:
     def test_the_window_opens_exactly_on_the_boundary(self):
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=1000, obligations=1000
+                elapsed_seconds=self.SETTLE, held=1000, committed=1000
             )
             == core.WITHDRAWAL_RESTORED
         )
@@ -1213,13 +1213,13 @@ class TestResolveWithdrawal:
         """The contract covers every obligation with the claim on its books."""
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=1000, obligations=1000
+                elapsed_seconds=self.SETTLE, held=1000, committed=1000
             )
             == core.WITHDRAWAL_RESTORED
         )
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=1001, obligations=1000
+                elapsed_seconds=self.SETTLE, held=1001, committed=1000
             )
             == core.WITHDRAWAL_RESTORED
         )
@@ -1228,7 +1228,7 @@ class TestResolveWithdrawal:
         """One wei short is enough: the value is not here, so it left."""
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=999, obligations=1000
+                elapsed_seconds=self.SETTLE, held=999, committed=1000
             )
             == core.WITHDRAWAL_DELIVERED
         )
@@ -1242,7 +1242,7 @@ class TestResolveWithdrawal:
         """
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=0, obligations=100
+                elapsed_seconds=self.SETTLE, held=0, committed=100
             )
             == core.WITHDRAWAL_DELIVERED
         )
@@ -1256,7 +1256,7 @@ class TestResolveWithdrawal:
         """
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=100, obligations=100
+                elapsed_seconds=self.SETTLE, held=100, committed=100
             )
             == core.WITHDRAWAL_RESTORED
         )
@@ -1272,7 +1272,7 @@ class TestResolveWithdrawal:
                 core.resolve_withdrawal(
                     elapsed_seconds=self.SETTLE,
                     held=0 + inbound,
-                    obligations=100 + inbound,
+                    committed=100 + inbound,
                 )
                 == core.WITHDRAWAL_DELIVERED
             ), inbound
@@ -1280,7 +1280,7 @@ class TestResolveWithdrawal:
                 core.resolve_withdrawal(
                     elapsed_seconds=self.SETTLE,
                     held=100 + inbound,
-                    obligations=100 + inbound,
+                    committed=100 + inbound,
                 )
                 == core.WITHDRAWAL_RESTORED
             ), inbound
@@ -1295,33 +1295,59 @@ class TestResolveWithdrawal:
         """
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=100, obligations=100
+                elapsed_seconds=self.SETTLE, held=100, committed=100
             )
             == core.WITHDRAWAL_RESTORED
         )
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=100, obligations=600
+                elapsed_seconds=self.SETTLE, held=100, committed=600
             )
             == core.WITHDRAWAL_DELIVERED
         )
+
+    def test_a_slashed_bond_is_not_free_money(self):
+        """The case that made the one wrong answer profitable.
+
+        A slashed bond is never paid to anybody, so it looks like surplus. If a
+        restore could reach it, a recipient whose payout *had* arrived could
+        reclaim the claim as well and take the accumulated slashings. Counting
+        it in `committed` is what stops that, and the arithmetic is the same
+        whether the free money came from a slashing or from anywhere else: with
+        it counted, a delivered claim is refused.
+        """
+        # 100 paid out, 100 still owed to others, and 500 of slashed bonds.
+        # Without the slashings counted, held (500) covers obligations (100) and
+        # the delivered claim would be restored out of them.
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=500, committed=100
+            )
+            == core.WITHDRAWAL_RESTORED
+        ), "the arithmetic itself is unchanged; what changes is what is counted"
+        assert (
+            core.resolve_withdrawal(
+                elapsed_seconds=self.SETTLE, held=500, committed=100 + 500
+            )
+            == core.WITHDRAWAL_DELIVERED
+        ), "with the slashings counted, the delivered claim is refused"
 
     def test_the_settle_window_is_overridable_for_tests_only(self):
         """The contract passes the constant; the parameter exists so this file
         can drive the boundary without waiting fifteen minutes."""
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=5, held=1, obligations=1, settle_seconds=1
+                elapsed_seconds=5, held=1, committed=1, settle_seconds=1
             )
             == core.WITHDRAWAL_RESTORED
         )
 
     def test_every_outcome_is_one_of_the_declared_three(self):
         for elapsed in (0, self.SETTLE):
-            for held, obligations in ((0, 0), (0, 1), (1, 0), (5, 5)):
+            for held, committed in ((0, 0), (0, 1), (1, 0), (5, 5)):
                 assert (
                     core.resolve_withdrawal(
-                        elapsed_seconds=elapsed, held=held, obligations=obligations
+                        elapsed_seconds=elapsed, held=held, committed=committed
                     )
                     in core.WITHDRAWAL_OUTCOMES
                 )

@@ -1034,7 +1034,7 @@ def resolve_withdrawal(
     *,
     elapsed_seconds: int,
     held: int,
-    obligations: int,
+    committed: int,
     settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS,
 ) -> str:
     """Decide what became of an emitted withdrawal. Pure arithmetic.
@@ -1047,10 +1047,10 @@ def resolve_withdrawal(
         consensus time since the withdrawal was emitted.
     ``held``
         what the contract's balance is now.
-    ``obligations``
-        everything the contract is holding for somebody else, **including the
-        withdrawal being judged**: entitlements, other withdrawals in flight,
-        locked bonds and posted collateral.
+    ``committed``
+        every wei a restore must not reach, **including the withdrawal being
+        judged**: entitlements, other withdrawals in flight, locked bonds,
+        posted collateral, and bonds this contract has slashed and kept.
 
     Three outcomes:
 
@@ -1058,7 +1058,7 @@ def resolve_withdrawal(
       landed or failed. Nothing is decided and nothing is changed; ask again
       later. This is the guard against the one way a recovery path can pay
       twice: restore the claim, then have the transfer arrive as well.
-    * ``restored`` -- the contract still holds enough to cover every obligation
+    * ``restored`` -- the contract still holds everything it is committed to
       with this claim on its books, which means the value never left. The
       entitlement is credited back.
     * ``delivered`` -- it does not, which means the value left. The claim is
@@ -1071,17 +1071,26 @@ def resolve_withdrawal(
     because obligations move with the money. A bond paid in raises `held` and
     `obligations` by the same amount and changes no answer.
 
-    **What "restored" costs when it is wrong.** The one residual is a contract
-    holding surplus -- slashed bonds, value sent in by mistake -- larger than
-    the withdrawal. Then a delivered claim can still satisfy the test and be
-    restored, paying it a second time out of that surplus. It is bounded by the
-    surplus and it can never reach an entitlement, a bond or a collateral,
-    because those are what `obligations` counts. A restore never spends money
-    owed to anybody else; at worst it spends money the contract owns outright.
+    **What "restored" costs when it is wrong.** A delivered claim can still
+    satisfy the test if the contract holds free money larger than the
+    withdrawal, and would then be paid a second time out of it. Which money is
+    free is therefore the whole question, and it is why `committed` counts
+    slashed bonds as well as obligations.
+
+    A slashed bond is never paid to anybody -- it stays with the contract by
+    design -- so an earlier version of this treated it as surplus. That made the
+    one wrong answer *profitable*: an attacker with a delivered claim could
+    reclaim it and take the accumulated slashings. Counting it removes the
+    profit and leaves only money somebody deliberately sent the contract for no
+    reason, which pays back exactly what it cost to create and is therefore an
+    expensive way to break even.
+
+    Nothing in either case can reach an entitlement, a locked bond or a posted
+    collateral. A restore never spends money owed to anybody else.
     """
     if elapsed_seconds < settle_seconds:
         return WITHDRAWAL_UNSETTLED
-    if held >= obligations:
+    if held >= committed:
         return WITHDRAWAL_RESTORED
     return WITHDRAWAL_DELIVERED
 
@@ -1701,6 +1710,11 @@ class ReputationOracle(gl.Contract):
     # paid out of that surplus is a restore paid out of somebody else's money.
     total_bond_held: u256
     total_collateral_held: u256
+    # Bonds this contract slashed and kept. Not owed to anybody -- that is the
+    # point of slashing -- but counted all the same, because "not owed to
+    # anybody" and "free for a restore to spend" are different things, and
+    # treating them as the same made `reclaim`'s one wrong answer profitable.
+    total_slashed: u256
 
     # Indexes.
     subject_atts: TreeMap[Address, DynArray[u256]]
@@ -1776,6 +1790,7 @@ class ReputationOracle(gl.Contract):
         self.total_in_flight = 0
         self.total_bond_held = 0
         self.total_collateral_held = 0
+        self.total_slashed = 0
 
     def _obligations(self) -> int:
         """Every wei this contract is holding on somebody else's behalf.
@@ -1796,6 +1811,20 @@ class ReputationOracle(gl.Contract):
             + int(self.total_bond_held)
             + int(self.total_collateral_held)
         )
+
+    def _committed(self) -> int:
+        """Every wei a restore must not reach.
+
+        `_obligations` plus the bonds this contract has slashed. A slashed bond
+        is not owed to anybody, which is exactly why it needs saying: money that
+        nobody can claim still is not money a recovery path may spend. Left out,
+        it is the pot that makes `reclaim`'s one wrong answer worth attacking --
+        a recipient whose payout *did* arrive could reclaim the claim as well
+        and take the accumulated slashings with it. Counted, the only free money
+        left is what somebody deliberately sent this contract for no reason,
+        and taking that back pays exactly what it cost to put there.
+        """
+        return self._obligations() + int(self.total_slashed)
 
     def _policy(self) -> Policy:
         """Rebuild the in-memory policy from storage."""
@@ -2081,6 +2110,9 @@ class ReputationOracle(gl.Contract):
         self.att_bond_state.append(bond_state)
         if bond_state == _BOND_LOCKED:
             self.total_bond_held = int(self.total_bond_held) + required
+        elif bond_state == _BOND_SLASHED:
+            # Kept, not owed. Counted so a restore cannot reach it.
+            self.total_slashed = int(self.total_slashed) + required
 
         self.subject_atts.get_or_insert_default(subject).append(attestation_id)
         self.pair_count[pair] = repeat_index + 1
@@ -2526,7 +2558,7 @@ class ReputationOracle(gl.Contract):
         outcome = resolve_withdrawal(
             elapsed_seconds=_now_seconds() - int(self.in_flight_at.get(key, 0)),
             held=int(self.balance),
-            obligations=self._obligations(),
+            committed=self._committed(),
             settle_seconds=int(self.p_withdrawal_settle_seconds),
         )
 
@@ -2620,6 +2652,8 @@ class ReputationOracle(gl.Contract):
             "total_bond": int(self.total_bond_held),
             "total_collateral": int(self.total_collateral_held),
             "obligations": self._obligations(),
+            "slashed": int(self.total_slashed),
+            "committed": self._committed(),
             "held": int(gl.get_contract_at(gl.message.contract_address).balance),
         }
 

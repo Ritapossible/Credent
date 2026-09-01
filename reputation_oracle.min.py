@@ -400,12 +400,12 @@ def resolve_withdrawal(
 *,
 elapsed_seconds: int,
 held: int,
-obligations: int,
+committed: int,
 settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS,
 ) -> str:
  if elapsed_seconds < settle_seconds:
   return WITHDRAWAL_UNSETTLED
- if held >= obligations:
+ if held >= committed:
   return WITHDRAWAL_RESTORED
  return WITHDRAWAL_DELIVERED
 def scope_digest(scope: str) -> str:
@@ -669,6 +669,7 @@ class ReputationOracle(gl.Contract):
  total_in_flight: u256
  total_bond_held: u256
  total_collateral_held: u256
+ total_slashed: u256
  subject_atts: TreeMap[Address, DynArray[u256]]
  pair_count: TreeMap[str, u256]
  engagement_attested: TreeMap[str, bool]
@@ -729,6 +730,7 @@ collateral_forfeit_bp=collateral_forfeit_bp,
   self.total_in_flight = 0
   self.total_bond_held = 0
   self.total_collateral_held = 0
+  self.total_slashed = 0
  def _obligations(self) -> int:
   return (
 int(self.total_owed)
@@ -736,6 +738,8 @@ int(self.total_owed)
 + int(self.total_bond_held)
 + int(self.total_collateral_held)
 )
+ def _committed(self) -> int:
+  return self._obligations() + int(self.total_slashed)
  def _policy(self) -> Policy:
   return Policy(
 half_life_seconds=int(self.p_half_life_seconds),
@@ -900,6 +904,8 @@ compare_user_errors=compare_errors,
   self.att_bond_state.append(bond_state)
   if bond_state == _BOND_LOCKED:
    self.total_bond_held = int(self.total_bond_held) + required
+  elif bond_state == _BOND_SLASHED:
+   self.total_slashed = int(self.total_slashed) + required
   self.subject_atts.get_or_insert_default(subject).append(attestation_id)
   self.pair_count[pair] = repeat_index + 1
   self.engagement_attested[seen_key] = True
@@ -1062,7 +1068,7 @@ value=amount, on="accepted"
   outcome = resolve_withdrawal(
 elapsed_seconds=_now_seconds() - int(self.in_flight_at.get(key, 0)),
 held=int(self.balance),
-obligations=self._obligations(),
+committed=self._committed(),
 settle_seconds=int(self.p_withdrawal_settle_seconds),
 )
   if outcome == WITHDRAWAL_UNSETTLED:
@@ -1111,6 +1117,8 @@ and _now_seconds() >= opened_at + int(self.p_withdrawal_settle_seconds),
 "total_bond": int(self.total_bond_held),
 "total_collateral": int(self.total_collateral_held),
 "obligations": self._obligations(),
+"slashed": int(self.total_slashed),
+"committed": self._committed(),
 "held": int(gl.get_contract_at(gl.message.contract_address).balance),
 }
  @gl.public.view

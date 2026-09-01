@@ -766,16 +766,17 @@ def test_a_failed_transfer_leaves_the_entitlement_recoverable(artifact_source: s
         "reclaim decides delivery inline again; the decision belongs in the "
         "engine, where it can be executed by a test"
     )
-    for argument in ("elapsed_seconds", "held", "obligations", "settle_seconds"):
+    for argument in ("elapsed_seconds", "held", "committed", "settle_seconds"):
         assert argument in reclaim, f"reclaim does not pass {argument} to the decision"
     assert "self.p_withdrawal_settle_seconds" in reclaim, (
         "reclaim uses the module constant instead of the deployed policy, so a "
         "test instance and a production one could not differ"
     )
-    assert "self._obligations()" in reclaim, (
-        "reclaim must weigh every obligation, not entitlements alone; a restore "
-        "judged against total_owed reads locked bonds and posted collateral as "
-        "free money"
+    assert "self._committed()" in reclaim, (
+        "reclaim must weigh everything a restore may not reach, not entitlements "
+        "alone; judged against total_owed it reads locked bonds and posted "
+        "collateral as free money, and judged against obligations alone it reads "
+        "the slashed bonds that way"
     )
     assert "REASON_WITHDRAWAL_UNSETTLED" in reclaim, (
         "reclaim does not refuse an unsettled withdrawal; judging one before the "
@@ -921,7 +922,18 @@ def test_every_obligation_is_counted(artifact_source: str) -> None:
             f"{settle} pays the collateral out without clearing the obligation"
         )
 
+    # Slashed bonds are kept, not owed — and counted, because a restore must
+    # not be able to spend them. That is the difference between the one wrong
+    # answer being harmless and being worth attacking.
+    assert "self.total_slashed = int(self.total_slashed) + required" in attest, (
+        "a slashed bond is not counted, so it reads as free money to a restore"
+    )
+    committed = _code_of(fns["_committed"])
+    assert "self._obligations()" in committed and "total_slashed" in committed, (
+        "_committed must be obligations plus what was slashed"
+    )
+
     # And the reader sees the same figures the contract decides on.
     liabilities = _code_of(fns["liabilities"])
-    for key in ("total_bond", "total_collateral", "obligations"):
+    for key in ("total_bond", "total_collateral", "obligations", "slashed", "committed"):
         assert key in liabilities, f"liabilities does not report {key}"

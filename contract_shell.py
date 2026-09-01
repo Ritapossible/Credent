@@ -401,6 +401,11 @@ class ReputationOracle(gl.Contract):
     # paid out of that surplus is a restore paid out of somebody else's money.
     total_bond_held: u256
     total_collateral_held: u256
+    # Bonds this contract slashed and kept. Not owed to anybody -- that is the
+    # point of slashing -- but counted all the same, because "not owed to
+    # anybody" and "free for a restore to spend" are different things, and
+    # treating them as the same made `reclaim`'s one wrong answer profitable.
+    total_slashed: u256
 
     # Indexes.
     subject_atts: TreeMap[Address, DynArray[u256]]
@@ -476,6 +481,7 @@ class ReputationOracle(gl.Contract):
         self.total_in_flight = 0
         self.total_bond_held = 0
         self.total_collateral_held = 0
+        self.total_slashed = 0
 
     def _obligations(self) -> int:
         """Every wei this contract is holding on somebody else's behalf.
@@ -496,6 +502,20 @@ class ReputationOracle(gl.Contract):
             + int(self.total_bond_held)
             + int(self.total_collateral_held)
         )
+
+    def _committed(self) -> int:
+        """Every wei a restore must not reach.
+
+        `_obligations` plus the bonds this contract has slashed. A slashed bond
+        is not owed to anybody, which is exactly why it needs saying: money that
+        nobody can claim still is not money a recovery path may spend. Left out,
+        it is the pot that makes `reclaim`'s one wrong answer worth attacking --
+        a recipient whose payout *did* arrive could reclaim the claim as well
+        and take the accumulated slashings with it. Counted, the only free money
+        left is what somebody deliberately sent this contract for no reason,
+        and taking that back pays exactly what it cost to put there.
+        """
+        return self._obligations() + int(self.total_slashed)
 
     def _policy(self) -> Policy:
         """Rebuild the in-memory policy from storage."""
@@ -781,6 +801,9 @@ class ReputationOracle(gl.Contract):
         self.att_bond_state.append(bond_state)
         if bond_state == _BOND_LOCKED:
             self.total_bond_held = int(self.total_bond_held) + required
+        elif bond_state == _BOND_SLASHED:
+            # Kept, not owed. Counted so a restore cannot reach it.
+            self.total_slashed = int(self.total_slashed) + required
 
         self.subject_atts.get_or_insert_default(subject).append(attestation_id)
         self.pair_count[pair] = repeat_index + 1
@@ -1226,7 +1249,7 @@ class ReputationOracle(gl.Contract):
         outcome = resolve_withdrawal(
             elapsed_seconds=_now_seconds() - int(self.in_flight_at.get(key, 0)),
             held=int(self.balance),
-            obligations=self._obligations(),
+            committed=self._committed(),
             settle_seconds=int(self.p_withdrawal_settle_seconds),
         )
 
@@ -1320,6 +1343,8 @@ class ReputationOracle(gl.Contract):
             "total_bond": int(self.total_bond_held),
             "total_collateral": int(self.total_collateral_held),
             "obligations": self._obligations(),
+            "slashed": int(self.total_slashed),
+            "committed": self._committed(),
             "held": int(gl.get_contract_at(gl.message.contract_address).balance),
         }
 

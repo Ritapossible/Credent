@@ -83,8 +83,8 @@ vectors pinning the TypeScript port used by the site to the same answers.
 
 | Network | Address | Artifact |
 |---|---|---|
-| GenLayer Studio | [`0xA1aF0A652f8d94d2B98482603d783C858B31Ac44`](https://explorer-studio.genlayer.com/address/0xA1aF0A652f8d94d2B98482603d783C858B31Ac44) | `reputation_oracle.py` |
-| Testnet Bradbury | [`0xb08f12dA983C36888494388C51CbC39C9d6FDe4d`](https://explorer-bradbury.genlayer.com/address/0xb08f12dA983C36888494388C51CbC39C9d6FDe4d) | `reputation_oracle.min.py` |
+| GenLayer Studio | [`0x0E78A40BEf6d0Fe85375648aFE0B3bF787A26238`](https://explorer-studio.genlayer.com/address/0x0E78A40BEf6d0Fe85375648aFE0B3bF787A26238) | `reputation_oracle.py` |
+| Testnet Bradbury | [`0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5`](https://explorer-bradbury.genlayer.com/address/0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5) | `reputation_oracle.min.py` |
 
 Both run the **production policy**, which is deliberately not the constructor's
 defaults: the defaults leave `min_bond` at zero, which makes attestations free
@@ -97,7 +97,7 @@ whitespace and nothing else: comments and docstrings are cut, indentation is
 rewritten as one space per level, and continuation lines inside brackets go
 flush left. Every row covered by a multi-line string is preserved byte for byte,
 because the grading prompts are triple-quoted and validators grade against them.
-138,173 bytes become 47,894, and `ast.dump` on both files is compared before
+140,044 bytes become 48,180, and `ast.dump` on both files is compared before
 either is written.
 
 Verify any deployment before trusting it:
@@ -119,7 +119,7 @@ cd credent
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest                  # 363 tests, no network
+python -m pytest                  # 364 tests, no network
 
 cd web
 npm install
@@ -170,6 +170,7 @@ defeat it. So settlement **credits an entitlement** rather than pushing value.
 | `withdrawal_of(address)` | — | anyone, a view |
 | `is_proven(address)` | — | anyone, a view |
 | `liabilities()` | — | anyone, a view |
+| `get_policy()` | — | anyone, a view |
 | `assign_to(recipient)` | **no** | a wallet directing its own credit |
 | `prove_recipient()` / `confirm_recipient()` | **no** | a recipient contract, once |
 | `withdraw()` | **yes** | a proven recipient contract |
@@ -264,15 +265,24 @@ def resolve_withdrawal(*, elapsed_seconds, held, obligations, settle_seconds) ->
 | Outcome | When | Effect |
 |---|---|---|
 | `unsettled` | `elapsed_seconds < settle_seconds` | refused, nothing changes, retry later |
-| `restored` | `held >= obligations` | the value never left; the entitlement goes back |
-| `delivered` | `held < obligations` | the value left; the claim is closed |
+| `restored` | `held >= committed` | the value never left; the entitlement goes back |
+| `delivered` | `held < committed` | the value left; the claim is closed |
 
-`obligations` is everything the contract holds for somebody else — entitlements,
-other withdrawals in flight, locked bonds, posted collateral — **including the
-claim being judged**. That is what makes the test immune to unrelated payments:
-money arriving raises `held` and `obligations` together and changes no answer.
-`liabilities()` reports every part separately, so the surplus is visible rather
-than inferred.
+`committed` is every wei a restore must not reach — entitlements, other
+withdrawals in flight, locked bonds, posted collateral, and bonds this contract
+has slashed and kept — **including the claim being judged**. That is what makes
+the test immune to unrelated payments: money arriving raises `held` and
+`committed` together and changes no answer. `liabilities()` reports every part
+separately, so what is free is visible rather than inferred.
+
+**Slashed bonds are counted even though they are owed to nobody**, and that
+distinction is the whole of it. A slashed bond stays with the contract by
+design, so it looks like surplus — and treating it as surplus is what would
+make this mechanism's one wrong answer worth attacking: a recipient whose
+payout *had* arrived could reclaim the claim as well and take the accumulated
+slashings with it. Counted, the only free money left is what somebody
+deliberately sent the contract for no reason, and taking that back returns
+exactly what it cost to put there.
 
 Three properties worth stating plainly:
 
@@ -281,10 +291,9 @@ Three properties worth stating plainly:
   path can pay twice: restore the claim, then have the transfer arrive as well.
   `withdrawal_settle_seconds` (900 on both deployments) is the window, and
   `withdrawal_of` says when a claim becomes resolvable.
-- **A restore never spends money owed to anyone else.** It is allowed only when
-  the balance covers every obligation with the claim back on the books. The one
-  residual is a contract holding surplus larger than the withdrawal — slashed
-  bonds, value sent in by mistake — which is money the contract owns outright.
+- **A restore never spends money owed to anyone else**, and cannot reach the
+  slashings either. It is allowed only when the balance covers everything the
+  contract is committed to with the claim back on the books.
 - **No claim can get stuck.** Every outcome resolves the withdrawal except
   "unsettled", which is retryable by construction.
 
@@ -313,7 +322,7 @@ with.
 ### Offline — no network, runs in CI
 
 ```bash
-python -m pytest                 # 363 tests: engine, prompts, contract, parity
+python -m pytest                 # 364 tests: engine, prompts, contract, parity
 cd web
 npm run parity                   # 3,421 vectors: the TS port agrees with the engine
 npm run units                    # formatting, error text, calldata encoding
@@ -385,7 +394,7 @@ contributor without it still gets a green run.
 `npm run recovery` drives the reported sentence clause by clause against the
 Bradbury deployment, printing a transaction for every step. The run behind this
 table is
-[`0xb08f12dA`](https://explorer-bradbury.genlayer.com/address/0xb08f12dA983C36888494388C51CbC39C9d6FDe4d),
+[`0xb08f12dA`](https://explorer-bradbury.genlayer.com/address/0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5),
 with an ordinary wallet at `0xF9dF362E` and a recipient contract at
 [`0xf58470D8`](https://explorer-bradbury.genlayer.com/address/0xf58470D859D4C85c22aeBc978CBC50EC9c1AF965):
 
@@ -508,7 +517,7 @@ Deploying without them takes the contract defaults, and the seventh of those is
 Site configuration is `web/.env`:
 
 ```bash
-VITE_CONTRACT_ADDRESS=0xA1aF0A652f8d94d2B98482603d783C858B31Ac44
+VITE_CONTRACT_ADDRESS=0x0E78A40BEf6d0Fe85375648aFE0B3bF787A26238
 VITE_GENLAYER_NETWORK=studionet
 ```
 
@@ -533,11 +542,14 @@ about this contract: a network can route a transfer somewhere the contract
 cannot foresee. It is exercised by `TestResolveWithdrawal` rather than on-chain,
 and that is stated here rather than implied.
 
-**A restore can, in one case, be paid out of the contract's own surplus.** If
-the contract holds more than every obligation plus the withdrawal — from slashed
-bonds, or value sent in by mistake — a delivered claim can still satisfy the
-test and be paid a second time out of that surplus. It is bounded by the surplus
-and can never reach an entitlement, a bond or a collateral.
+**A restore can, in one case, be paid out of money nobody is owed.** If the
+contract holds more than everything it is committed to, plus the withdrawal, a
+delivered claim can still satisfy the test and be paid a second time out of the
+difference. Slashed bonds used to be that difference, which made it worth
+attacking; they are now counted, so what remains is value somebody sent the
+contract for no reason — and taking it back returns exactly what it cost to put
+there, which is an expensive way to break even. It can never reach an
+entitlement, a locked bond or a posted collateral.
 
 **No mainnet.** The SDK ships localnet, studionet and two testnet entries;
 `connect()` answers `mainnet is not available yet`. Nothing built here holds
@@ -611,7 +623,7 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 363 tests and 3,421 parity vectors, plus nine
+Offline the project carries 364 tests and 3,421 parity vectors, plus nine
 direct-mode tests that execute the contract itself, and `genvm-lint` validates
 the rebuilt schema at 29 methods and 14 constructor parameters.
 

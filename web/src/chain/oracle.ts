@@ -550,6 +550,10 @@ export interface Liabilities {
   bonds: bigint
   collateral: bigint
   obligations: bigint
+  /** Bonds slashed and kept — owed to nobody, and out of a restore's reach. */
+  slashed: bigint
+  /** `obligations` + `slashed`: every wei a restore must not spend. */
+  committed: bigint
   held: bigint
 }
 
@@ -571,6 +575,8 @@ export async function liabilities(): Promise<Liabilities> {
     bonds: big(source, 'total_bond', 'liabilities'),
     collateral: big(source, 'total_collateral', 'liabilities'),
     obligations: big(source, 'obligations', 'liabilities'),
+    slashed: big(source, 'slashed', 'liabilities'),
+    committed: big(source, 'committed', 'liabilities'),
     held: big(source, 'held', 'liabilities'),
   }
 }

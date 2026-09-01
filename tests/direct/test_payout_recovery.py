@@ -11,6 +11,8 @@ one case a live network cannot produce — a transfer that does not arrive.
 
 from __future__ import annotations
 
+from conftest import CONTRACT, address
+
 GEN = 10**18
 SCOPE = "Deliver a small script and a README."
 
@@ -20,9 +22,9 @@ def _entitlement(oracle, vm, client, provider, *, stake: int, excess: int) -> in
     engagement = f"e-{stake}-{excess}"
     vm.sender = client
     vm.value = 0
-    oracle.open_engagement(engagement, provider, SCOPE, stake)
+    oracle.open_engagement(engagement, address(provider), SCOPE, stake)
 
-    required = int(oracle.collateral_quote(provider, stake)["required"])
+    required = int(oracle.collateral_quote(address(provider), stake)["required"])
     vm.sender = provider
     vm.value = required + excess
     oracle.accept_engagement(engagement)
@@ -151,7 +153,7 @@ class TestReclaimIsTheRestorationPath:
 
         # The transfer did not arrive, so the contract still holds everything it
         # owes — including the claim now sitting in `in_flight`.
-        obligations = int(oracle.liabilities()["obligations"])
+        obligations = int(oracle.liabilities()["committed"])
         chain.set_held(obligations)
 
         chain.warp("2030-01-01T00:00:00Z")
@@ -161,14 +163,14 @@ class TestReclaimIsTheRestorationPath:
         assert int(oracle.owed_to(str(direct_bob))) == excess, "the entitlement was not restored"
         assert int(oracle.in_flight_to(str(direct_bob))) == 0
         assert int(oracle.liabilities()["held"]) == obligations, "value moved during a restore"
-        assert int(oracle.liabilities()["obligations"]) == obligations, "the books did not balance"
+        assert int(oracle.liabilities()["committed"]) == obligations, "the books did not balance"
 
     def test_a_restored_entitlement_can_be_withdrawn_again(
         self, oracle, direct_vm, chain, direct_alice, direct_bob
     ):
         """Restored has to mean usable, or it is bookkeeping rather than recovery."""
         excess = self._park(oracle, direct_vm, chain, direct_alice, direct_bob)
-        chain.set_held(int(oracle.liabilities()["obligations"]))
+        chain.set_held(int(oracle.liabilities()["committed"]))
         chain.warp("2030-01-01T00:00:00Z")
         assert oracle.reclaim()["outcome"] == "restored"
 
@@ -182,7 +184,7 @@ class TestReclaimIsTheRestorationPath:
         """The ordinary case: the value left, so there is nothing to give back."""
         excess = self._park(oracle, direct_vm, chain, direct_alice, direct_bob)
         # The transfer landed: the contract is short by exactly the payout.
-        chain.set_held(int(oracle.liabilities()["obligations"]) - excess)
+        chain.set_held(int(oracle.liabilities()["committed"]) - excess)
 
         chain.warp("2030-01-01T00:00:00Z")
         result = oracle.reclaim()
@@ -195,7 +197,7 @@ class TestReclaimIsTheRestorationPath:
         self, oracle, direct_vm, chain, direct_alice, direct_bob
     ):
         self._park(oracle, direct_vm, chain, direct_alice, direct_bob)
-        chain.set_held(int(oracle.liabilities()["obligations"]))
+        chain.set_held(int(oracle.liabilities()["committed"]))
         chain.warp("2030-01-01T00:00:00Z")
         oracle.reclaim()
         owed = int(oracle.owed_to(str(direct_bob)))
@@ -206,3 +208,76 @@ class TestReclaimIsTheRestorationPath:
             raised = str(error)
         assert raised is not None and "no_withdrawal_pending" in raised, raised
         assert int(oracle.owed_to(str(direct_bob))) == owed, "a replay credited a second time"
+
+
+class TestSlashedBondsAreNotFreeMoney:
+    """A slashed bond is kept, not owed — and must still be out of reach.
+
+    `reclaim` restores when the contract holds everything it is committed to. A
+    slashed bond is owed to nobody, so an earlier version left it out of that
+    figure, which made the mechanism's one wrong answer worth attacking: a
+    recipient whose payout *had* arrived could reclaim the claim as well and
+    take the accumulated slashings. This drives a real slashing through `attest`
+    and checks the contract counts it.
+    """
+
+    def test_a_slashed_bond_is_counted_and_committed(
+        self, direct_vm, direct_deploy, chain, direct_alice, direct_bob, direct_owner
+    ):
+        import json
+
+        # Its own instance: the shared fixture sets `min_bond` to zero so the
+        # other tests cost nothing, and a bond of zero is never slashed.
+        direct_vm.sender = direct_owner
+        oracle = direct_deploy(
+            str(CONTRACT),
+            min_bond=GEN // 100,
+            bond_lock_seconds=0,
+            withdrawal_settle_seconds=60,
+        )
+
+        engagement = "slashing"
+        stake = GEN
+        direct_vm.sender = direct_alice
+        oracle.open_engagement(engagement, address(direct_bob), SCOPE, stake)
+        required = int(oracle.collateral_quote(address(direct_bob), stake)["required"])
+        direct_vm.sender = direct_bob
+        direct_vm.value = required
+        oracle.accept_engagement(engagement)
+        direct_vm.value = 0
+        direct_vm.sender = direct_alice
+        oracle.close_engagement(engagement)
+
+        # A grade the policy slashes: substantiated below `slash_floor` (20).
+        direct_vm.mock_llm(
+            r".*",
+            json.dumps(
+                {
+                    "verdict": "fulfilled",
+                    "fulfilled": 90,
+                    "substantiated": 5,
+                    "confidence": 90,
+                }
+            ),
+        )
+
+        bond = int(oracle.bond_for_next(address(direct_alice), address(direct_bob)))
+        slashed_before = int(oracle.liabilities()["slashed"])
+        committed_before = int(oracle.liabilities()["committed"])
+
+        direct_vm.sender = direct_alice
+        direct_vm.value = bond
+        attestation = int(oracle.attest(engagement, "the work was delivered", "https://example.test/x"))
+        direct_vm.value = 0
+
+        graded = oracle.get_attestation(attestation)
+        assert graded["bond_state"] == "slashed", graded["bond_state"]
+
+        liabilities = oracle.liabilities()
+        assert int(liabilities["slashed"]) == slashed_before + bond, "the slashing was not counted"
+        assert int(liabilities["committed"]) == committed_before + bond, (
+            "a slashed bond is not committed, so a restore could spend it"
+        )
+        assert int(liabilities["committed"]) == int(liabilities["obligations"]) + int(
+            liabilities["slashed"]
+        ), "committed is not obligations plus what was slashed"

@@ -74,6 +74,20 @@ def _as_bytes(address) -> bytes:
     return bytes.fromhex(text.removeprefix("0x"))
 
 
+def address(value):
+    """Coerce a test address to the SDK's `Address`, as calldata would.
+
+    The account fixtures hand back whatever they were built with, and the
+    contract's storage wants an `Address`. Which of the two a call ends up
+    passing depends on whether the SDK module was loaded before or after the
+    fixture ran, which is fixture ordering rather than anything meaningful — so
+    convert at the call site and stop depending on it.
+    """
+    from genlayer.py.types import Address
+
+    return value if isinstance(value, Address) else Address(_as_bytes(value))
+
+
 class Chain:
     """The parts of the chain direct mode leaves to the test."""
 
