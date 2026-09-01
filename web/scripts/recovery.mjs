@@ -150,7 +150,14 @@ const l = await view('liabilities')
 console.log(`    liabilities  owed ${gen(big(l.total_owed))}  in_flight ${gen(big(l.total_in_flight))}  ` +
             `bonds ${gen(big(l.total_bond))}  collateral ${gen(big(l.total_collateral))}`)
 console.log(`                 obligations ${gen(big(l.obligations))}  held ${gen(big(l.held))}`)
-check(big(l.held)>=big(l.obligations),'the contract still covers every obligation, not just entitlements')
+// `obligations` less what is in flight: a withdrawal leaves the balance when it
+// is emitted while the claim stays counted until `reclaim` resolves it, so
+// `held` is legitimately short by that amount in between. Nothing is in flight
+// at this point, so the two figures are the same here — the subtraction is
+// written out because the invariant is the one that always holds, not the one
+// that happens to hold now.
+check(big(l.held)>=big(l.obligations)-big(l.total_in_flight),
+  'the contract still covers everything it has not sent — bonds and collateral included, not just entitlements')
 
 console.log(`\n  and reclaim cannot be replayed`)
 // Judged on state, not on whether the call threw. A rejected transaction still

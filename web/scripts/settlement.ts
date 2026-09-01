@@ -587,7 +587,12 @@ async function withdrawal(
   // settle budget -- but only once storage says the payout was actually made.
   // Waiting 26 hours for a transfer that was never emitted is how a fast
   // failure turns into an abandoned run.
-  const wanted = claimantBefore + expected
+  // `owedBefore`, not `expected`: what is still on the books is what this
+  // withdrawal moves. A recipient that proved during this run has already been
+  // paid the probe, so waiting for the full credited amount to arrive *now*
+  // waits for a wei that arrived several transactions ago and never comes
+  // again. That was a real hang, not a hypothetical one.
+  const wanted = claimantBefore + owedBefore
   const owedSettled = await settleTo(
     async () => asBig(await view(oracle, 'owed_to', [owner]), 'owed_to'),
     (value) => value === 0n,

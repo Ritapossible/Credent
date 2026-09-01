@@ -1568,24 +1568,29 @@ class ReputationOracle(gl.Contract):
     # `TreeMap[Address, u256]` cannot be read back by an off-chain caller that
     # only has the string form.
     owed: TreeMap[str, u256]
-    # Recipients that have proven, by executing code, that they can receive.
+    # Recipients that have proven, by being paid, that they can be paid.
     #
     # `emit_transfer` credits a contract and does not credit an externally owned
     # account -- to a wallet the value leaves and arrives nowhere, and it is not
-    # refunded. So the only safe rule is never to emit at an address that has
-    # not demonstrated it can receive, and the only demonstration that cannot be
-    # faked is running code: `prove_recipient` emits a **zero-value** call, and
-    # only a contract can answer it by calling `confirm_recipient` back.
+    # refunded. So the rule is never to emit at an address that has not been
+    # established first, and `_require_recipient_contract` is what establishes
+    # it: a view call into the caller for `credent_recipient()`, which a wallet
+    # has no code to answer and which cannot be caught and turned into a branch.
+    # `prove_recipient` then pays a token amount out of the caller's own
+    # entitlement and `confirm_recipient` refuses unless it arrived, so this
+    # flag records a payment that actually happened rather than a claim.
     #
     # This replaces an earlier design that emitted first and tried to work out
     # afterwards whether the value had landed. It could not: delivery is not
     # observable from inside the contract, and every proxy for it was wrong.
-    # Comparing the balance to obligations ignored that the balance also holds
-    # collateral and bonds. Comparing it to a `total_in - total_out` ledger was
-    # exact only while every wei arrived through a counted method -- a single
+    # Comparing the balance to entitlements ignored that the balance also holds
+    # collateral and bonds -- see `_obligations`, which is that mistake fixed
+    # rather than avoided. Comparing it to a `total_in - total_out` ledger was
+    # exact only while every wei arrived through a counted method: a single
     # untracked transfer into this contract made a *delivered* payout look
-    # recoverable, and credited its owner twice. Proving the recipient first
-    # removes the question instead of answering it badly.
+    # recoverable, and credited its owner twice. Establishing the recipient
+    # first removes the question instead of answering it badly; `reclaim` is
+    # what remains for the case where the platform surprises us anyway.
     proven: TreeMap[str, bool]
     # Addresses with a probe outstanding. `confirm_recipient` consumes one, so a
     # confirmation cannot be replayed and cannot arrive unrequested.
@@ -2469,6 +2474,24 @@ class ReputationOracle(gl.Contract):
 
         The key is `gl.message.sender_address`, so a caller resolves only its
         own withdrawal and can neither settle nor restore anyone else's.
+
+        Two consequences of the solvency guard, both correct and neither
+        obvious:
+
+        * **Called too early it is refused, not wrong.** While a transfer is
+          still settling the balance has already left this contract and has not
+          yet arrived at the recipient, so the evidence says "not delivered" and
+          the guard says "cannot back it". Refusal is the right answer to a
+          question asked too soon. Try again once the transfer has settled.
+        * **Where a failed transfer destroys the value, there is nothing to
+          restore, and this says so.** Measured: on studionet an undeliverable
+          transfer debits the sender and the value is gone; on bradbury it stays
+          in this contract. In the first case the balance is short and the
+          restore is refused -- which is the honest outcome, because restoring
+          would credit the claim out of money belonging to other parties. In the
+          second the value is still here and the restore goes through. The guard
+          is what makes the difference between the two automatic instead of a
+          policy this contract would have to guess at.
         """
         key = _owed_key(gl.message.sender_address)
         amount = int(self.in_flight.get(key, 0))
@@ -2548,6 +2571,16 @@ class ReputationOracle(gl.Contract):
         branches on `obligations`, never on `total_owed` alone -- an earlier
         design compared the balance to entitlements and read every locked bond
         and posted collateral as free money.
+
+        **`held` is legitimately below `obligations` while a withdrawal is in
+        flight**, by exactly `total_in_flight`. `withdraw` debits this contract's
+        balance the moment it emits, and the claim stays counted until `reclaim`
+        resolves it, so the two are out of step for the length of that window and
+        nothing is wrong. The invariant that always holds is
+        `held >= obligations - total_in_flight`: the money still here covers
+        everything that has not been sent. `reclaim` uses the full figure on
+        purpose, because the question it asks is different -- whether putting a
+        claim *back* would leave the contract solvent.
         """
         return {
             "total_owed": int(self.total_owed),

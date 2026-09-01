@@ -39,7 +39,7 @@ client; anything else returns it.
 
 | Network | Address | Artifact |
 |---|---|---|
-| GenLayer Studio | [`0xf08076B2bAd42AAF8b293c8ea6f4e18170dB57db`](https://explorer-studio.genlayer.com/address/0xf08076B2bAd42AAF8b293c8ea6f4e18170dB57db) | `reputation_oracle.py` |
+| GenLayer Studio | [`0xa0748f2bBb1ADf2335ec2AEF52A99AF26fC8c303`](https://explorer-studio.genlayer.com/address/0xa0748f2bBb1ADf2335ec2AEF52A99AF26fC8c303) | `reputation_oracle.py` |
 | Testnet Bradbury | [`0x3a5DdDBae57372762E61cc812b64107E950a2E5f`](https://explorer-bradbury.genlayer.com/address/0x3a5DdDBae57372762E61cc812b64107E950a2E5f) | `reputation_oracle.min.py` |
 
 Bradbury carries the minified artifact because it refuses the full-size source
@@ -49,7 +49,7 @@ whitespace and nothing else: comments and docstrings are cut, indentation is
 rewritten as one space per level, and continuation lines inside brackets go
 flush left. Every row covered by a multi-line string is preserved byte for byte,
 because the grading prompts are triple-quoted and validators grade against them.
-135,156 bytes become 47,411. `ast.dump` on both files is compared before either
+136,220 bytes become 47,411. `ast.dump` on both files is compared before either
 is written, so the runner cannot tell them apart.
 
 Both run the **production policy**, which is deliberately not the constructor's
@@ -191,7 +191,7 @@ caller cannot arrange — so `agreement_check` exposes the same rule as a view a
 `npm run agreement` exercises it against every deployment:
 
 ```text
-studionet  0xf08076B2bAd42AAF8b293c8ea6f4e18170dB57db
+studionet  0xa0748f2bBb1ADf2335ec2AEF52A99AF26fC8c303
   substantiated 10 vs 30 (tolerance 20, slash_floor 20)
     bond: slashed vs releasable
   ok   the two grades settle the bond differently
@@ -512,7 +512,27 @@ and a second call credits nothing.
 The restore is refused unless the contract still covers **every** obligation
 with the restored claim on the books: entitlements, other withdrawals in flight,
 locked bonds and posted collateral. That guard is what makes recovery safe
-rather than merely available. A recipient that received the value and then
+rather than merely available.
+
+Two consequences of it are worth stating plainly, because both look like
+failures and neither is:
+
+- **`reclaim` called before the transfer has settled is refused.** In that
+  window the value has left this contract and not yet arrived, so the evidence
+  reads "not delivered" and the balance cannot back a restore. Refusal is the
+  right answer to a question asked too soon; call it again once the transfer has
+  landed. `liabilities()` shows exactly this state: `held` is below
+  `obligations` by precisely `total_in_flight`, and the invariant that always
+  holds is `held >= obligations - total_in_flight` — the money still here covers
+  everything that has not been sent.
+- **Where a failed transfer destroys the value, there is nothing to restore, and
+  the contract says so rather than pretending otherwise.** On studionet an
+  undeliverable transfer debits the sender and the value is gone; on bradbury it
+  stays in the contract. In the first case the balance is short and the restore
+  is refused — which is the honest outcome, because restoring would credit the
+  claim out of other parties' money. In the second the value is still there and
+  the restore goes through. The guard makes that difference automatic instead of
+  a policy the contract would have to guess at. A recipient that received the value and then
 emptied itself presents the same balance evidence as one that never received it,
 so the evidence alone cannot separate them — but the money can. If the transfer
 really failed the value is still in the contract and the restore passes; if it

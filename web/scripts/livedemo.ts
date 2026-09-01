@@ -374,6 +374,14 @@ check((await view<boolean>(ORACLE, 'is_proven', [account.address.toLowerCase()])
   'an ordinary wallet is not a proven recipient')
 await expectRefusal(() => call(ORACLE, 'withdraw', [], 0n, 'withdraw from a wallet (expected to be refused)'),
   'withdraw from an unproven wallet is refused, not attempted')
+// The clause the second review opened with. A wallet cannot become proven, so
+// it never reaches the state the rest of that sentence describes: the contract
+// view-calls `credent_recipient()` on the caller first, and a wallet has no
+// code to answer with.
+await expectRefusal(() => call(ORACLE, 'prove_recipient', [], 0n, 'prove_recipient from a wallet (expected to be refused)'),
+  'a wallet cannot even raise a probe for itself')
+check((await view<boolean>(ORACLE, 'is_proven', [account.address.toLowerCase()])) === false,
+  'and it is still not a proven recipient')
 await expectRefusal(
   () => call(ORACLE, 'assign_to',
     [addressArg('0x0000000000000000000000000000000000000000', 'assign_to.recipient')], 0n,
@@ -390,9 +398,17 @@ console.log(
 console.log(
   `               obligations ${gen(asBig(liabilities.obligations))}  held ${gen(asBig(liabilities.held))}`,
 )
+// `obligations` less what is in flight. A withdrawal debits this contract's
+// balance the moment it is emitted while the claim stays counted until
+// `reclaim` resolves it, so during that window `held` is legitimately short by
+// exactly the amount in flight. What must always hold is that the money still
+// here covers everything that has not been sent: entitlements, locked bonds and
+// posted collateral. `reclaim`'s own guard uses the full figure, deliberately —
+// it is asking whether a restore would leave the contract solvent.
+const notYetSent = asBig(liabilities.obligations) - asBig(liabilities.total_in_flight)
 check(
-  asBig(liabilities.held) >= asBig(liabilities.obligations),
-  'the contract covers every obligation, not just entitlements',
+  asBig(liabilities.held) >= notYetSent,
+  `the contract covers everything it has not sent (${gen(notYetSent)} against ${gen(asBig(liabilities.held))})`,
 )
 
 console.log(`\noracle    ${EXPLORER}/address/${ORACLE}`)

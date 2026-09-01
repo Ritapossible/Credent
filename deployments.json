@@ -1,7 +1,7 @@
 {
   "_note": "The deployed addresses, in one place. Three copies of these drifted apart once and a review read the stale pair as proof a fix was undeployed.",
   "studionet": {
-    "address": "0xf08076B2bAd42AAF8b293c8ea6f4e18170dB57db",
+    "address": "0xa0748f2bBb1ADf2335ec2AEF52A99AF26fC8c303",
     "rpc": "https://studio.genlayer.com/api",
     "artifact": "reputation_oracle.py",
     "params": "bare"
