@@ -47,6 +47,21 @@ class Claimant(gl.Contract):
     def total_received(self) -> int:
         return int(self.received)
 
+    @gl.public.view
+    def credent_recipient(self) -> str:
+        """Identify this contract as a Credent push-payment recipient.
+
+        The oracle calls this, by view, on the caller's own address before it
+        will probe, confirm or pay. A wallet has no code to answer with, and the
+        failure is not catchable, so the oracle's transaction ends there. That
+        is the whole recipient test: implementing this method is what makes an
+        address eligible for `withdraw`.
+
+        The string is compared exactly. Returning anything else is a refusal
+        with a reason rather than a dead transaction.
+        """
+        return "credent-recipient-v1"
+
     # `genvm-lint` rejects this method: E019 wants a `@gl.public.write`
     # decorator on it, and E106 then refuses any public name beginning with
     # `__`. The two rules cannot both be satisfied, so a recipient contract can
@@ -120,23 +135,24 @@ class Claimant(gl.Contract):
 
     @gl.public.write
     def prove(self) -> None:
-        """Ask the oracle to verify this contract can receive.
+        """Ask the oracle to pay this contract a token amount.
 
-        The oracle answers with a zero-value call to `credent_probe` below.
-        Nothing is at stake: a target that cannot answer simply never becomes
-        eligible to withdraw.
+        The oracle emits `PROBE_WEI` here. Only a contract is credited by
+        `emit_transfer`, so the arrival of that value is itself the proof that
+        this address can be paid -- there is nothing to assert and nothing the
+        oracle has to take on trust.
         """
         gl.get_contract_at(self.oracle).emit(on="accepted").prove_recipient()
 
     @gl.public.write
-    def credent_probe(self) -> None:
-        """The oracle's probe. Answering it from here is what a contract can do.
+    def confirm(self) -> None:
+        """Tell the oracle the probe arrived, once it has.
 
-        This is the ordinary case the handshake is for: the answer comes from
-        inside a method, so this recipient has demonstrably executed code rather
-        than asserted anything. It is not proof that *every* proven address is a
-        contract -- the oracle's own `confirm_recipient` says why not -- but it
-        is how a contract recipient clears the bar without making a claim.
+        A separate transaction, deliberately. The probe is an *emitted*
+        transfer: it settles after the call that sent it, so there is no moment
+        during `prove` at which this contract has already been paid. Calling
+        this too early is a classified refusal -- `the_probe_value_did_not_arrive`
+        -- and costs nothing but the call. Wait and try again.
         """
         gl.get_contract_at(self.oracle).emit(on="accepted").confirm_recipient()
 
@@ -154,9 +170,27 @@ class Claimant(gl.Contract):
         `on="finalized"` was measured on Bradbury reaching FINALIZED with an
         empty `triggered_transactions` and no value moved.
 
+        If the transfer cannot be delivered the oracle does not lose the
+        claim: `withdraw` parks it and `reclaim` restores it.
+
         Measured on Bradbury, the emitted transfer lands about 150 seconds after
         this call returns. A harness that stops watching sooner will report a
         working payout as a shortfall; the settlement suite waits on the
         entitlement reaching zero and the full amount arriving, for that reason.
         """
         gl.get_contract_at(self.oracle).emit(on="accepted").withdraw()
+
+    @gl.public.write
+    def settle_withdrawal(self) -> None:
+        """Call `reclaim` on the oracle to resolve this contract's withdrawal.
+
+        Named apart from `reclaim` above, which returns an attestation *bond*.
+        This one resolves the payout: it closes the withdrawal when the value
+        arrived, and puts the entitlement back when it did not.
+
+        There is nothing to pass and nothing to decide here. The oracle reads
+        this contract's own balance against the baseline it recorded when it
+        emitted the transfer, so the answer comes from the chain rather than
+        from anything this contract claims.
+        """
+        gl.get_contract_at(self.oracle).emit(on="accepted").reclaim()

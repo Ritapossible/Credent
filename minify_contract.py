@@ -105,6 +105,71 @@ def _strip_docstrings(tree: ast.AST) -> ast.AST:
     return tree
 
 
+def _reindent(source: str) -> str:
+    """Rewrite indentation as one space per level, and unindent continuations.
+
+    The second half of the size problem, and the cheaper half to fix. After the
+    prose is gone the file is still 16% leading whitespace: four spaces a level,
+    up to six levels deep, on 1,300 lines. Python only requires that indentation
+    be *consistent*, so one space a level says exactly the same thing in a
+    quarter of the bytes, and a physical line continuing a bracketed expression
+    can be flush left because its leading whitespace is not indentation at all.
+
+    Worth the care because this is the pass that could silently change the
+    program. Two rules keep it honest:
+
+    * Every row covered by a multi-line string keeps its bytes untouched. The
+      grading prompts are triple-quoted and their internal whitespace is part of
+      what validators grade against.
+    * Only the leading run of a physical line is rewritten. No token is moved,
+      joined, split or reordered - `ast.dump` on both sides is what `verify()`
+      compares, and it would catch it if one were.
+    """
+    lines = source.splitlines()
+    inside_string: set[int] = set()
+    starts: dict[int, int] = {}
+    continuations: set[int] = set()
+
+    depth = 0
+    at_logical_start = True
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == tokenize.INDENT:
+            depth += 1
+            continue
+        if tok.type == tokenize.DEDENT:
+            depth -= 1
+            continue
+        if tok.type == tokenize.NEWLINE:
+            at_logical_start = True
+            continue
+        if tok.type in (tokenize.NL, tokenize.COMMENT, tokenize.ENDMARKER):
+            continue
+        if tok.type == tokenize.STRING:
+            # The first row holds the opening quote and whatever indentation
+            # precedes it, which is ordinary indentation. Every row after it is
+            # inside the literal.
+            for row in range(tok.start[0] + 1, tok.end[0] + 1):
+                inside_string.add(row)
+        row = tok.start[0]
+        if at_logical_start:
+            starts[row] = depth
+            at_logical_start = False
+        elif row not in starts:
+            continuations.add(row)
+
+    out = []
+    for number, line in enumerate(lines, start=1):
+        if number in inside_string:
+            out.append(line)
+        elif number in starts:
+            out.append(" " * starts[number] + line.lstrip(" "))
+        elif number in continuations:
+            out.append(line.lstrip(" "))
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+
 def minify(source: str) -> str:
     lines = source.splitlines(keepends=True)
     # 1-indexed rows, so pad slot 0.
@@ -152,7 +217,7 @@ def minify(source: str) -> str:
     # runner-config block. Everything else follows.
     pin = lines[pin_row - 1].rstrip("\r\n").strip()
     body = [l for l in out if l.strip() != pin]
-    return pin + "\n\n" + "\n".join(body) + "\n"
+    return _reindent(pin + "\n\n" + "\n".join(body) + "\n")
 
 
 def verify(original: str, minified: str) -> None:

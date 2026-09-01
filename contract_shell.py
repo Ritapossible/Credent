@@ -215,6 +215,41 @@ def _refuse_the_transaction_origin() -> None:
         _fail(REASON_CALLER_IS_ORIGIN)
 
 
+def _require_recipient_contract() -> None:
+    """Refuse a caller that is not a Credent recipient contract.
+
+    This is the exact test, and it is exact on both networks. A view call is
+    made into the caller's own address for `credent_recipient()`. A wallet has
+    no code, so there is nothing there to answer; a contract that does not
+    implement the method has no such method to resolve. Either way the call does
+    not return.
+
+    **The failure is not catchable, and that is the mechanism rather than a
+    limitation.** Measured on studionet and bradbury with three targets and a
+    `try`/`except Exception` wrapped around the call: a contract implementing
+    the method returned its marker and the transaction succeeded; a contract
+    without the method took the transaction down with `execution_result=ERROR`
+    and the wrapping `except` never ran, leaving the caller's state untouched.
+    So the call cannot be turned into a boolean an attacker could route around
+    -- there is no branch to take. The transaction either reaches the next line
+    with the caller proven to be a Credent recipient, or it does not reach it.
+
+    That is why an earlier build did not use this: it was looked at as a way to
+    *detect* a contract, found to be uncatchable, and set aside. Read as a
+    refusal instead of a predicate, uncatchable is the stronger property.
+
+    The returned marker is compared as well, so a contract that implements the
+    name with the wrong version is rejected with a reason rather than admitted.
+
+    The cost of this guard is that a recipient must be a Credent recipient
+    contract, not merely any contract. `assign_to` is the route for everyone
+    else, moves no value, and cannot fail.
+    """
+    marker = gl.get_contract_at(gl.message.sender_address).view().credent_recipient()
+    if str(marker) != RECIPIENT_MARKER:
+        _fail(REASON_WRONG_RECIPIENT_MARKER)
+
+
 def _now_seconds() -> int:
     """Consensus time as whole epoch seconds, UTC.
 
@@ -327,6 +362,11 @@ class ReputationOracle(gl.Contract):
     # Addresses with a probe outstanding. `confirm_recipient` consumes one, so a
     # confirmation cannot be replayed and cannot arrive unrequested.
     probing: TreeMap[str, bool]
+    # What a probed address held when its probe was emitted. `confirm_recipient`
+    # compares against this: the probe carries value, and only a contract is
+    # credited by `emit_transfer`, so a balance that has not risen by
+    # `PROBE_WEI` is an address that cannot be paid.
+    probe_baseline: TreeMap[str, u256]
     total_owed: u256
 
     # A withdrawal that has been emitted and not yet resolved.
@@ -345,6 +385,17 @@ class ReputationOracle(gl.Contract):
     in_flight: TreeMap[str, u256]
     in_flight_baseline: TreeMap[str, u256]
     total_in_flight: u256
+    # Money this contract is holding for somebody else that is *not* an
+    # entitlement yet: bonds it may have to hand back, and work collateral owed
+    # to whichever side the grade decides. Both convert into `owed` when they
+    # settle, so they are counted here until they do and never counted twice.
+    #
+    # These exist so that solvency can be asked honestly. An earlier build
+    # weighed the balance against entitlements alone, which made every locked
+    # bond and every posted collateral look like free surplus -- and a restore
+    # paid out of that surplus is a restore paid out of somebody else's money.
+    total_bond_held: u256
+    total_collateral_held: u256
 
     # Indexes.
     subject_atts: TreeMap[Address, DynArray[u256]]
@@ -416,6 +467,28 @@ class ReputationOracle(gl.Contract):
         # `typing.Annotated[int, ...]`, so they annotate and do not call.
         self.total_owed = 0
         self.total_in_flight = 0
+        self.total_bond_held = 0
+        self.total_collateral_held = 0
+
+    def _obligations(self) -> int:
+        """Every wei this contract is holding on somebody else's behalf.
+
+        Entitlements, withdrawals still in flight, bonds it may have to hand
+        back, and work collateral owed to one side or the other. Anything above
+        this figure is genuine surplus -- overpayment that was rounded away,
+        slashed bonds, value sent in by mistake -- and is the only money a
+        restore is allowed to be paid out of.
+
+        Getting this wrong in the lenient direction is what makes a recovery
+        path dangerous rather than useful, so it is computed in one place and
+        every solvency question goes through it.
+        """
+        return (
+            int(self.total_owed)
+            + int(self.total_in_flight)
+            + int(self.total_bond_held)
+            + int(self.total_collateral_held)
+        )
 
     def _policy(self) -> Policy:
         """Rebuild the in-memory policy from storage."""
@@ -543,6 +616,8 @@ class ReputationOracle(gl.Contract):
         self.eng_collateral_rate_bp[engagement_id] = collateral_rate_bp(score_bp, policy)
         self.eng_collateral[engagement_id] = required
         self.eng_collateral_state[engagement_id] = _COL_HELD if required > 0 else _COL_NONE
+        if required > 0:
+            self.total_collateral_held = int(self.total_collateral_held) + required
         self.eng_state[engagement_id] = _ENG_OPEN
 
         # Overpayment goes straight back, as it does in `attest`. Holding it
@@ -696,6 +771,8 @@ class ReputationOracle(gl.Contract):
         self.att_repeat_index.append(repeat_index)
         self.att_bond.append(required)
         self.att_bond_state.append(bond_state)
+        if bond_state == _BOND_LOCKED:
+            self.total_bond_held = int(self.total_bond_held) + required
 
         self.subject_atts.get_or_insert_default(subject).append(attestation_id)
         self.pair_count[pair] = repeat_index + 1
@@ -758,6 +835,7 @@ class ReputationOracle(gl.Contract):
             _fail("no_bond_posted")
 
         self.att_bond_state[index] = _BOND_RELEASED
+        self.total_bond_held = int(self.total_bond_held) - amount
         self._credit(attester, amount)
 
     # --- collateral ---------------------------------------------------------
@@ -812,6 +890,7 @@ class ReputationOracle(gl.Contract):
             _fail(REASON_NO_COLLATERAL)
 
         self.eng_collateral_state[engagement_id] = _COL_RETURNED
+        self.total_collateral_held = int(self.total_collateral_held) - amount
         self._credit(provider, amount)
 
     @gl.public.write
@@ -848,6 +927,7 @@ class ReputationOracle(gl.Contract):
             _fail(REASON_NO_COLLATERAL)
 
         self.eng_collateral_state[engagement_id] = _COL_CLAIMED
+        self.total_collateral_held = int(self.total_collateral_held) - amount
         self._credit(client, amount)
 
     # --- entitlements and withdrawal ----------------------------------------
@@ -931,70 +1011,106 @@ class ReputationOracle(gl.Contract):
 
     @gl.public.write
     def prove_recipient(self) -> dict:
-        """Ask this contract to check that you can receive, at no risk.
+        """Ask this contract to pay you a token amount, so you can prove you can be paid.
 
-        A zero-value call is emitted back to the caller and an outstanding probe
-        is recorded. Answering it from inside the callback means running code,
-        so a recipient that answers that way is verified rather than asserted.
-        It is not a proof -- `confirm_recipient` says exactly what it can and
-        cannot establish -- but nothing is at stake if it fails.
+        The probe **carries value**, and that is the whole point. `emit_transfer`
+        credits a contract and never credits an externally owned account --
+        measured on both networks, against a working `__receive__`, one that
+        raises, one absent, and a fresh wallet. So an address that can be paid
+        will see its balance rise by `PROBE_WEI`, and an address that cannot
+        will not. `confirm_recipient` reads that balance rather than trusting
+        anyone's account of it.
 
-        The recipient answers by calling `confirm_recipient` from inside
-        `credent_probe`. `web/scripts/claimant.py` is the reference; the
-        answer itself is a single emitted call.
+        An earlier version emitted a *zero-value* call and treated answering it
+        as the proof. That tested the wrong thing: it showed the caller could
+        run code, not that it could be paid, and on a network where
+        `origin_address` is not the transaction initiator a wallet could simply
+        call both halves itself. This version cannot be answered by an address
+        that is not credited, because the evidence is the credit.
 
-        Idempotent by refusal rather than silently: proving twice is almost
-        always a caller that has lost track of its own state, and saying so is
-        more useful than a receipt that looks like a fresh proof.
+        The probe is a real payment and it is not returned, which is why it is
+        small and why this refuses when the contract cannot cover it without
+        touching what it owes other people.
+
+        Before any of that, `_require_recipient_contract` establishes that the
+        caller is a Credent recipient contract at all. That check is exact on
+        both networks and a wallet cannot pass it, so the probe is a second
+        line rather than the only one.
         """
+        _require_recipient_contract()
         key = _owed_key(gl.message.sender_address)
         if bool(self.proven.get(key, False)):
             _fail(REASON_ALREADY_PROVEN)
+        if bool(self.probing.get(key, False)):
+            _fail(REASON_PROBE_OUTSTANDING)
+
+        # The probe is an **advance on the caller's own entitlement**, never a
+        # payment out of the pool. It is debited here and it is not returned, so
+        # what the probe costs comes off what the caller is owed and can never
+        # touch anybody else's money -- which also means it needs no surplus and
+        # cannot be used to drain one. Anyone with nothing owed has nothing to
+        # prove and is refused.
+        entitlement = int(self.owed.get(key, 0))
+        if entitlement < PROBE_WEI:
+            _fail(REASON_PROBE_UNFUNDED)
+        self.owed[key] = entitlement - PROBE_WEI
+        self.total_owed = int(self.total_owed) - PROBE_WEI
+
         self.probing[key] = True
-        # Zero value, deliberately: nothing is at risk if the target cannot
-        # answer. `on="accepted"` because a message emitted `on="finalized"` was
-        # measured on bradbury to be recorded and never dispatched.
-        gl.get_contract_at(gl.message.sender_address).emit(on="accepted").credent_probe()
-        return {"probing": key}
+        self.probe_baseline[key] = int(
+            gl.get_contract_at(gl.message.sender_address).balance
+        )
+        # `on="accepted"`, for the reason given on `withdraw`.
+        gl.get_contract_at(gl.message.sender_address).emit_transfer(
+            value=PROBE_WEI, on="accepted"
+        )
+        return {"probing": key, "amount": PROBE_WEI}
 
     @gl.public.write
     def confirm_recipient(self) -> dict:
-        """Answer an outstanding probe.
+        """Claim the probe arrived. Refused unless the balance says it did.
 
-        Two independent checks, and they are not equally strong. Say so in that
-        order rather than quoting the stronger one and leaving the reader to
-        discover where it does not hold.
+        Three independent guards, and none of them takes the caller's word:
 
-        **`_refuse_the_transaction_origin`** is a real proof where it fires: a
-        caller whose `sender_address` differs from `origin_address` cannot be
-        the transaction's entry point, and only an entry point can be an
-        externally owned account. Measured, that field carries the initiator on
-        studionet and does not on bradbury, so on studionet a wallet cannot get
-        past this line at all, and on bradbury the line cannot fire. See that
-        helper for the transcripts.
+        1. `_require_recipient_contract` calls `credent_recipient()` by view on
+           the caller's own address. A wallet has no code to answer with and the
+           failure is not catchable, so the transaction ends there. This is the
+           exact one, it holds on both networks, and it is what actually closes
+           the bypass the other two only narrow.
+        2. `_refuse_the_transaction_origin` rejects a caller that is its own
+           transaction's entry point. Where `origin_address` carries the
+           initiator this proves the caller is a contract; where it does not,
+           it cannot fire. See that helper for the measurements.
+        3. **The probe value must actually have arrived.** The address's balance
+           must have risen by `PROBE_WEI` since `prove_recipient` recorded it.
+           An externally owned account is never credited by `emit_transfer`, so
+           it cannot satisfy this by being paid -- it would have to be funded
+           from elsewhere, in the exact amount, between the two calls.
 
-        **The probe** is what is left on bradbury, and it is a bar rather than a
-        proof. A wallet there can call `prove_recipient` and then this method
-        directly, in two deliberate transactions, and mark itself proven. An
-        address's code cannot be inspected from inside a contract, and anything
-        the probe carries is public calldata that a wallet can read and repeat,
-        so nothing available here closes it.
+        Guards 2 and 3 are kept because they are independent and cheap, and
+        because 3 tests the exact mechanism the payout uses rather than a proxy
+        for it. Neither is load-bearing on its own: guard 3 alone could be
+        satisfied by a wallet funding itself the probe amount from a second
+        address, and guard 2 alone cannot fire on bradbury. Guard 1 is not
+        satisfiable by a wallet under any funding.
 
-        What the bar buys is still worth having: a recipient that answers the
-        probe from inside `credent_probe` has demonstrably executed code, so the
-        ordinary case is verified rather than asserted, and getting it wrong
-        takes two deliberate calls instead of one wrong flag on the payout
-        itself. A caller that lies here spends only its own entitlement, and
-        `assign_to` -- which moves no value and cannot fail -- is the path that
-        needs no claim of any kind.
+        Call this after the probe has settled, not in the same breath: the
+        transfer is emitted and lands afterwards. Reading the balance too early
+        is a refusal, not a failure -- try again once it has arrived.
 
-        The probe is consumed, so a confirmation cannot be replayed and cannot
-        arrive unrequested.
+        The probe is consumed either way, so a confirmation cannot be replayed.
         """
+        _require_recipient_contract()
         _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
         if not bool(self.probing.get(key, False)):
             _fail(REASON_NO_PROBE_OUTSTANDING)
+
+        baseline = int(self.probe_baseline.get(key, 0))
+        now = int(gl.get_contract_at(gl.message.sender_address).balance)
+        if now < baseline + PROBE_WEI:
+            _fail(REASON_PROBE_NOT_RECEIVED)
+
         self.probing[key] = False
         self.proven[key] = True
         return {"proven": key}
@@ -1003,15 +1119,13 @@ class ReputationOracle(gl.Contract):
     def withdraw(self) -> dict:
         """Take your entitlement out. The only method that moves value.
 
-        Refused unless the caller is not its own transaction's entry point and
-        has completed the probe handshake. The first is a proof that the caller
-        is a contract on a network that reports `origin_address` faithfully, and
-        cannot fire on one that does not; the second is a bar rather than a
-        proof anywhere. `confirm_recipient` and
-        `_refuse_the_transaction_origin` say which is which, with the
-        measurements. Between them the ordinary recipient is verified by having
-        executed code rather than by asserting anything, and a caller that wants
-        to be wrong has to say so twice and cannot say it at all on studionet.
+        Refused unless the caller answers `credent_recipient()` by view, is not
+        its own transaction's entry point, and has completed the probe
+        handshake. The first is exact on both networks and is the one a wallet
+        cannot get past; the other two are re-checked here because they are
+        cheap and independent. `_require_recipient_contract`,
+        `_refuse_the_transaction_origin` and `confirm_recipient` each say how
+        far they go, with the measurements.
 
         There is no flag to pass. The previous signature took
         `recipient_is_a_contract`, a claim made about the caller's own address
@@ -1022,9 +1136,10 @@ class ReputationOracle(gl.Contract):
         entitlement between storage slots, emits nothing, and cannot fail. A
         wallet should use it and never reach this method.
 
-        The entitlement is cleared before the transfer is emitted. Two things
-        make that safe rather than reckless, and both are measured rather than
-        assumed:
+        The entitlement leaves `owed` before the transfer is emitted, and it is
+        parked in `in_flight` rather than discarded. Two measured facts say what
+        the transfer will do, and `reclaim` covers the case where they do not
+        hold:
 
         1. Every contract is credited by `emit_transfer`, whatever its code
            does. Measured on studionet against three recipients in one run --
@@ -1033,23 +1148,29 @@ class ReputationOracle(gl.Contract):
            same mechanism, receives nothing and the sender is debited anyway.
            So *being a contract* is the entire condition for delivery, and
            nothing in the recipient's code can defeat it.
-        2. This method emits only at an address established to be a contract,
-           by the two guards above.
+        2. This method emits only at an address established to be a Credent
+           recipient contract, by the guards above.
 
-        Together those mean a recipient that gets past this line is credited, so
-        there is no case where clearing the entitlement loses it. That is why
-        this design has no recovery path: not because recovery was too hard, but
-        because the failure it would recover from cannot occur here. Pushing
-        value at an *unverified* address is the thing that destroys money, and
-        this method does not do it.
+        Together those mean a recipient that gets past this line is expected to
+        be credited. Expected is not the same as guaranteed, and the difference
+        is what `reclaim` exists for: a network could always route a transfer
+        somewhere this contract cannot foresee, and a recipient contract could
+        be self-destructed or replaced between the probe and the payout. So the
+        value is not thrown away on the strength of a prediction. `in_flight` holds it, `in_flight_to` reads it, and
+        `reclaim` settles it against the recipient's actual balance -- closing
+        the withdrawal if the value arrived, and crediting the entitlement back
+        to the same key if it did not.
 
-        Leaving the entitlement readable across the transfer would instead let a
-        recipient withdraw twice, which is why the clear comes first.
+        Leaving the entitlement in `owed` across the transfer would instead let
+        a recipient withdraw twice, which is why it moves out first. Moving it
+        to `in_flight` rather than to nowhere is what keeps that safe from the
+        other direction.
         """
         # Checked here as well as at `confirm_recipient`, on the call that
         # actually spends the entitlement rather than only on the one that
         # recorded the eligibility. Costs nothing and does not depend on the
         # proof having been recorded correctly.
+        _require_recipient_contract()
         _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
         if not bool(self.proven.get(key, False)):
@@ -1135,10 +1256,27 @@ class ReputationOracle(gl.Contract):
             self.total_in_flight = int(self.total_in_flight) - amount
             return {"to": key, "amount": amount, "outcome": "delivered"}
 
-        # Not delivered. Restore only if the balance still covers every
-        # entitlement once this one is back on the books.
+        # Not delivered by the balance evidence. Restore only if this contract
+        # still holds enough to cover **every** obligation with this one back on
+        # the books -- entitlements, other withdrawals in flight, locked bonds
+        # and posted collateral alike.
+        #
+        # Restoring moves `amount` from `total_in_flight` to `total_owed`, so
+        # `_obligations()` is the same number before and after and this is
+        # exactly the question "is the contract solvent once it is restored".
+        #
+        # This guard is the whole defence against a recipient that *was* paid
+        # and spent it. Such a recipient presents the same balance evidence as
+        # one that was never paid, so the evidence alone cannot separate them --
+        # but the money can. If the transfer really failed the value is still
+        # here and this passes; if it succeeded the balance is short by exactly
+        # `amount` and this refuses, unless the contract holds that much genuine
+        # surplus on top of everything it owes. An earlier version compared the
+        # balance to entitlements only, which counted every locked bond and
+        # every posted collateral as surplus and would have paid a second time
+        # out of them.
         held = int(self.balance)
-        if held < int(self.total_owed) + amount:
+        if held < self._obligations():
             _fail(REASON_CANNOT_BACK_RESTORE)
 
         self.in_flight[key] = 0
@@ -1170,16 +1308,25 @@ class ReputationOracle(gl.Contract):
     def liabilities(self) -> dict:
         """What this contract owes in total, against what it holds.
 
-        A reader's summary, not a decision input -- nothing in this contract
-        branches on it. That distinction is deliberate: an earlier design *did*
-        decide a payout against a balance comparison, and it was wrong, because
-        the same balance also holds work collateral and locked bonds that are
-        not entitlements. `held` is reported next to `total_owed` so the gap is
-        visible rather than mistaken for a shortfall.
+        Every figure a solvency question needs, reported separately rather than
+        netted, because the whole history of bugs on this path is one number
+        being mistaken for another. `total_owed` is entitlements; `total_bond`
+        and `total_collateral` are money held for somebody else that is not an
+        entitlement *yet*; `obligations` is their sum with anything in flight,
+        and `held` is the actual balance. `held - obligations` is genuine
+        surplus.
+
+        `reclaim` is the only method that branches on any of this, and it
+        branches on `obligations`, never on `total_owed` alone -- an earlier
+        design compared the balance to entitlements and read every locked bond
+        and posted collateral as free money.
         """
         return {
             "total_owed": int(self.total_owed),
             "total_in_flight": int(self.total_in_flight),
+            "total_bond": int(self.total_bond_held),
+            "total_collateral": int(self.total_collateral_held),
+            "obligations": self._obligations(),
             "held": int(gl.get_contract_at(gl.message.contract_address).balance),
         }
 

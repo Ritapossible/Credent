@@ -545,21 +545,31 @@ export async function isProven(recipient: string): Promise<boolean> {
 
 export interface Liabilities {
   totalOwed: bigint
+  inFlight: bigint
+  bonds: bigint
+  collateral: bigint
+  obligations: bigint
   held: bigint
 }
 
 /**
  * A reader's summary of what the contract owes against what it holds.
  *
- * `held` is larger than `totalOwed` in normal operation, because the same
- * balance also carries work collateral and locked bonds. Nothing branches on
- * this — an earlier design decided a payout against exactly this comparison and
- * was wrong for exactly that reason.
+ * Reported piece by piece rather than netted, because the whole history of bugs
+ * on this path is one figure being mistaken for another. `totalOwed` is
+ * entitlements alone; `bonds` and `collateral` are money held for somebody else
+ * that is not an entitlement yet; `obligations` is the sum of all of it with
+ * anything in flight. `held − obligations` is genuine surplus, and it is the
+ * only money a restore is allowed to come out of.
  */
 export async function liabilities(): Promise<Liabilities> {
   const source = asDict(await call('liabilities', []), 'liabilities')
   return {
     totalOwed: big(source, 'total_owed', 'liabilities'),
+    inFlight: big(source, 'total_in_flight', 'liabilities'),
+    bonds: big(source, 'total_bond', 'liabilities'),
+    collateral: big(source, 'total_collateral', 'liabilities'),
+    obligations: big(source, 'obligations', 'liabilities'),
     held: big(source, 'held', 'liabilities'),
   }
 }

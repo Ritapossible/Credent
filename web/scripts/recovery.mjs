@@ -1,10 +1,25 @@
-// The reviewer's exact scenario, driven end to end, then recovered.
+// The reviewer's exact scenario, driven end to end against the live contract.
 //
 //   "on Bradbury a wallet can mark itself proven, then withdraw clears its owed
 //    balance before an undeliverable transfer, with no restoration path."
 //
-// Everything up to "no restoration path" is reproduced deliberately. Then
-// `reclaim` is called and the entitlement comes back.
+// Three clauses, and this script takes them in order on bradbury -- the network
+// the review named, and the one where the old origin check could not fire.
+//
+//   1. "a wallet can mark itself proven"  -- it cannot. `prove_recipient` and
+//      `confirm_recipient` are both refused for a wallet, so no probe is ever
+//      raised and there is nothing to answer. `withdraw` is refused too, and
+//      the wallet's entitlement is left exactly where it was.
+//   2. "withdraw clears its owed balance" -- it parks it. Shown on a real
+//      recipient contract: `owed` goes to zero and the same amount appears
+//      under `in_flight_to`, readable throughout.
+//   3. "with no restoration path"         -- `reclaim` is the path. It settles
+//      an in-flight withdrawal against the recipient's own balance, closing it
+//      when the value arrived and crediting the entitlement back when it did
+//      not, and it cannot be run twice.
+//
+// Every step prints its transaction, so each claim above can be opened in the
+// explorer rather than taken on trust.
 import { createAccount, createClient } from '/opt/node22/lib/node_modules/genlayer/node_modules/genlayer-js/dist/index.js'
 import { testnetBradbury } from '/opt/node22/lib/node_modules/genlayer/node_modules/genlayer-js/dist/chains/index.js'
 import { CalldataAddress } from '/opt/node22/lib/node_modules/genlayer/node_modules/genlayer-js/dist/types/index.js'
@@ -44,6 +59,12 @@ async function send(c, fn, args, value=0n, label=fn){
   console.log(`    ${label}`); console.log(`      https://explorer-bradbury.genlayer.com/tx/${h}`)
   return h
 }
+async function sendTo(c, address, fn, args, label=fn){
+  const h = await submit(()=>c.writeContract({address,functionName:fn,args,value:0n}))
+  await c.waitForTransactionReceipt({hash:h,status:'ACCEPTED',interval:5000,retries:200})
+  console.log(`    ${label}`); console.log(`      https://explorer-bradbury.genlayer.com/tx/${h}`)
+  return h
+}
 const settle = async (read, ok, ms=10*60*1000) => { const d=Date.now()+ms; let v=await read()
   while(!ok(v) && Date.now()<d){ await sleep(10000); v=await read() } return v }
 let failures=0
@@ -62,47 +83,87 @@ await send(prov,'accept_engagement',[id],required+overpay,'accept_engagement (ov
 const owed0 = await settle(async()=>big(await view('owed_to',[W.toLowerCase()])), v=>v>=overpay)
 check(owed0===overpay, `the wallet is owed ${gen(overpay)}`)
 
-console.log(`\n  reproducing the reported failure`)
-await send(prov,'prove_recipient',[],0n,'prove_recipient')
-await send(prov,'confirm_recipient',[],0n,'confirm_recipient — the wallet answers its own probe')
-const proven = await settle(async()=>((await view('is_proven',[W.toLowerCase()]))?1n:0n), v=>v===1n)
-check(proven===1n,'the wallet marked itself proven (the reported bypass)')
+console.log(`\n  clause 1: "a wallet can mark itself proven"`)
+// Judged on state rather than on whether the call threw. The refusal here is a
+// view call into an address with no code: the transaction does not complete, and
+// bradbury serves no reason string for it either way. What settles the question
+// is that `is_proven` never turns true and the entitlement never moves.
+const provenBefore = (await view('is_proven',[W.toLowerCase()])) ? 1n : 0n
+await send(prov,'prove_recipient',[],0n,'prove_recipient — from the wallet, expected to be refused').catch(()=>console.log('      threw'))
+await sleep(20000)
+check(((await view('is_proven',[W.toLowerCase()]))?1n:0n)===0n,'the wallet did not become proven')
+check(big(await view('owed_to',[W.toLowerCase()]))===owed0,'and its entitlement was not touched')
+await send(prov,'confirm_recipient',[],0n,'confirm_recipient — the wallet answering a probe it never got').catch(()=>console.log('      threw'))
+await sleep(20000)
+const provenAfter = (await view('is_proven',[W.toLowerCase()])) ? 1n : 0n
+check(provenAfter===provenBefore && provenAfter===0n,'still unproven — the reported bypass is closed')
+await send(prov,'withdraw',[],0n,'withdraw — from the wallet, expected to be refused').catch(()=>console.log('      threw'))
+await sleep(20000)
+check(big(await view('owed_to',[W.toLowerCase()]))===owed0,'withdraw did not clear the wallet\'s owed balance')
+check(big(await view('in_flight_to',[W.toLowerCase()]))===0n,'and nothing was put in flight')
 
-const wBefore = await (async()=>{const r=await fetch(RPC,{method:'POST',headers:{'content-type':'application/json'},
-  body:JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_getBalance',params:[W,'latest']})});return BigInt((await r.json()).result)})()
-await send(prov,'withdraw',[],0n,'withdraw — emits a transfer that cannot be delivered to a wallet')
-await settle(async()=>big(await view('owed_to',[W.toLowerCase()])), v=>v===0n)
-const inflight = await settle(async()=>big(await view('in_flight_to',[W.toLowerCase()])), v=>v>0n)
-check(big(await view('owed_to',[W.toLowerCase()]))===0n,'owed is now zero — as the review describes')
-check(inflight===overpay,`but the entitlement is parked in flight (${gen(inflight)}), not discarded`)
+console.log(`\n  clauses 2 and 3, on a recipient that can actually be paid`)
+// A Credent recipient contract: it implements `credent_recipient()`, which is
+// the method the oracle view-calls before it will probe, confirm or pay.
+const claimantSrc = readFileSync(new URL('./claimant.py', import.meta.url),'utf8')
+const dep = await submit(()=>prov.deployContract({ code: claimantSrc, args: [ORACLE] }))
+const depR = await prov.waitForTransactionReceipt({hash:dep,status:'ACCEPTED',interval:5000,retries:300})
+const SINK = depR.data?.contract_address ?? depR.recipient
+console.log(`    recipient  ${SINK}`)
+for (let i=0;i<60;i++){ try { await client.readContract({address:SINK,functionName:'credent_recipient',args:[]}); break } catch { await sleep(5000) } }
+check(String(await client.readContract({address:SINK,functionName:'credent_recipient',args:[]}))==='credent-recipient-v1',
+  'it answers credent_recipient(), which a wallet cannot')
 
-console.log(`\n  the restoration path the review asked for`)
-await sleep(180000)   // let the undeliverable transfer settle either way
-await send(prov,'reclaim',[],0n,'reclaim')
-const restored = await settle(async()=>big(await view('owed_to',[W.toLowerCase()])), v=>v>0n, 8*60*1000)
-const stillFlight = big(await view('in_flight_to',[W.toLowerCase()]))
-const wAfter = await (async()=>{const r=await fetch(RPC,{method:'POST',headers:{'content-type':'application/json'},
-  body:JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_getBalance',params:[W,'latest']})});return BigInt((await r.json()).result)})()
-console.log(`    wallet balance ${gen(wBefore)} -> ${gen(wAfter)} (gas only; a wallet is never credited)`)
-check(restored===overpay,`the entitlement was RESTORED in full (${gen(restored)})`)
-check(stillFlight===0n,'and the in-flight record was cleared, so it cannot be reclaimed twice')
+await send(prov,'assign_to',[addr(SINK)],0n,'assign_to — the wallet hands its entitlement to the recipient')
+const assigned = await settle(async()=>big(await view('owed_to',[SINK.toLowerCase()])), v=>v>0n)
+check(assigned===owed0,`the recipient is owed ${gen(assigned)} and the wallet nothing`)
+
+// Proving pays the first PROBE_WEI of the recipient's own entitlement, so the
+// entitlement drops by exactly that and the recipient's balance rises by it.
+const PROBE = 1000000000000n
+await sendTo(prov,SINK,'prove',[],'prove — the oracle pays the probe out of the entitlement')
+const afterProbe = await settle(async()=>big(await view('owed_to',[SINK.toLowerCase()])), v=>v<assigned)
+check(afterProbe===assigned-PROBE,`the probe came out of the entitlement (${gen(PROBE)})`)
+await sendTo(prov,SINK,'confirm',[],'confirm — refused unless the probe actually arrived')
+const proven = await settle(async()=>((await view('is_proven',[SINK.toLowerCase()]))?1n:0n), v=>v===1n)
+check(proven===1n,'the recipient is proven, by being paid rather than by asserting')
+
+console.log(`\n  clause 2: withdraw parks the entitlement, it does not clear it`)
+await sendTo(prov,SINK,'claim',[],'withdraw')
+await settle(async()=>big(await view('owed_to',[SINK.toLowerCase()])), v=>v===0n)
+const inflight = big(await view('in_flight_to',[SINK.toLowerCase()]))
+check(big(await view('owed_to',[SINK.toLowerCase()]))===0n,'owed is zero — as the review describes')
+check(inflight===afterProbe,`but the entitlement is parked in flight (${gen(inflight)}), not discarded`)
+
+console.log(`\n  clause 3: reclaim is the restoration path`)
+await sleep(120000)   // let the transfer settle either way
+const held = await settle(async()=>big(await client.readContract({address:SINK,functionName:'total_received',args:[]})), v=>v>0n, 8*60*1000)
+console.log(`    the recipient has received ${gen(held)} in total`)
+await send(prov,'reclaim',[],0n,'reclaim — from the wallet, which has nothing in flight').catch(()=>console.log('      threw'))
+await sendTo(prov,SINK,'settle_withdrawal',[],'reclaim — from the recipient')
+const flightAfter = await settle(async()=>big(await view('in_flight_to',[SINK.toLowerCase()])), v=>v===0n)
+check(flightAfter===0n,'the in-flight withdrawal was resolved')
+check(big(await view('owed_to',[SINK.toLowerCase()]))===0n,
+  'and nothing was credited back, because the value arrived — reclaim settled it rather than paying twice')
+
 const l = await view('liabilities')
-console.log(`    liabilities  total_owed ${gen(big(l.total_owed))}  in_flight ${gen(big(l.total_in_flight))}  held ${gen(big(l.held))}`)
-check(big(l.held)>=big(l.total_owed),'the contract still covers every entitlement')
+console.log(`    liabilities  owed ${gen(big(l.total_owed))}  in_flight ${gen(big(l.total_in_flight))}  ` +
+            `bonds ${gen(big(l.total_bond))}  collateral ${gen(big(l.total_collateral))}`)
+console.log(`                 obligations ${gen(big(l.obligations))}  held ${gen(big(l.held))}`)
+check(big(l.held)>=big(l.obligations),'the contract still covers every obligation, not just entitlements')
 
-console.log(`\n  and it cannot be replayed`)
+console.log(`\n  and reclaim cannot be replayed`)
 // Judged on state, not on whether the call threw. A rejected transaction still
 // reaches ACCEPTED -- consensus agreeing on a refusal is a success for the
-// network -- and bradbury serves no receipt to read the reason from. If the
-// replay had worked, `owed` would have doubled; that it did not is the proof.
-const owedBeforeReplay = big(await view('owed_to',[W.toLowerCase()]))
-try { await send(prov,'reclaim',[],0n,'reclaim again (expected to be refused)') } catch (e) { console.log('      threw') }
+// network -- and bradbury serves no receipt to read the reason from.
+const owedBeforeReplay = big(await view('owed_to',[SINK.toLowerCase()]))
+await sendTo(prov,SINK,'settle_withdrawal',[],'reclaim again (expected to be refused)').catch(()=>console.log('      threw'))
 await sleep(30000)
-const owedAfterReplay = big(await view('owed_to',[W.toLowerCase()]))
+const owedAfterReplay = big(await view('owed_to',[SINK.toLowerCase()]))
 console.log(`    owed ${gen(owedBeforeReplay)} -> ${gen(owedAfterReplay)}`)
-check(owedAfterReplay === owedBeforeReplay, 'a second reclaim credited nothing — the restore cannot be replayed')
+check(owedAfterReplay === owedBeforeReplay, 'a second reclaim credited nothing')
 
 proxy.stop()
-console.log(failures===0 ? '\nrecovery ok — a failed transfer left the entitlement recoverable, and it was recovered'
+console.log(failures===0 ? '\nrecovery ok — the reported bypass is closed, the entitlement is parked rather than cleared, and reclaim resolves it'
                          : `\n${failures} check(s) FAILED`)
 process.exit(failures===0?0:1)

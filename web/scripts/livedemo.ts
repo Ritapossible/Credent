@@ -298,7 +298,22 @@ if (state !== 'releasable') {
   await settleTo(async () => asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()])), (v) => v >= required)
 }
 
-await call(CLAIMANT, 'prove', [], 0n, 'prove_recipient — the oracle probes the recipient, which answers')
+// The probe carries value, so proving is two calls: the oracle pays PROBE_WEI
+// and the recipient confirms once it has arrived. An externally owned account
+// is never credited by `emit_transfer`, so it can never complete this -- and
+// before any of it the oracle view-calls `credent_recipient()` on the caller,
+// which a wallet has no code to answer at all.
+//
+// The probe is paid out of the recipient's **own** entitlement rather than out
+// of the contract's balance, so what is left to withdraw afterwards is short by
+// exactly this much. Nothing is lost: it arrived earlier, at the same address,
+// by the same mechanism.
+const PROBE_WEI = 1_000_000_000_000n
+const probeBefore = await balanceOf(CLAIMANT)
+await call(CLAIMANT, 'prove', [], 0n, 'prove_recipient — the oracle pays the recipient a token amount')
+const probeAfter = await settleTo(() => balanceOf(CLAIMANT), (v) => v > probeBefore)
+check(probeAfter > probeBefore, `the probe arrived (${gen(probeAfter - probeBefore)}) — only a contract is credited`)
+await call(CLAIMANT, 'confirm', [], 0n, 'confirm_recipient — refused unless that value actually landed')
 const proven = await settleTo(
   async () => ((await view<boolean>(ORACLE, 'is_proven', [CLAIMANT.toLowerCase()])) ? 1n : 0n),
   (v) => v === 1n,
@@ -306,12 +321,36 @@ const proven = await settleTo(
 check(proven === 1n, 'the claimant is a proven recipient')
 
 const claimantBefore = await balanceOf(CLAIMANT)
+const owedNow = asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()]))
+check(owedNow === required - PROBE_WEI, `the probe came out of the entitlement (${gen(PROBE_WEI)})`)
 await call(CLAIMANT, 'claim', [], 0n, 'withdraw — the only method that moves value')
 await settleTo(async () => asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()])), (v) => v === 0n)
-const claimantAfter = await settleTo(() => balanceOf(CLAIMANT), (v) => v >= claimantBefore + required)
+const claimantAfter = await settleTo(() => balanceOf(CLAIMANT), (v) => v >= claimantBefore + owedNow)
 console.log(`    claimant  ${gen(claimantBefore)} -> ${gen(claimantAfter)}`)
-check(claimantAfter - claimantBefore === required, `the claimant received the whole entitlement (${gen(required)})`)
+check(claimantAfter - claimantBefore === owedNow, `the claimant received the rest of the entitlement (${gen(owedNow)})`)
+check(
+  claimantAfter - probeBefore === required,
+  `probe and withdrawal together are the whole entitlement (${gen(required)})`,
+)
 check(asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()])) === 0n, 'the entitlement was zeroed')
+
+// And the withdrawal is resolved rather than left outstanding: `reclaim` closes
+// it against the recipient's own balance. The value arrived, so it closes as
+// delivered and credits nothing back.
+const parked = asBig(await view(ORACLE, 'in_flight_to', [CLAIMANT.toLowerCase()]))
+console.log(`    in flight ${gen(parked)}`)
+if (parked > 0n) {
+  await call(CLAIMANT, 'settle_withdrawal', [], 0n, 'reclaim — settle the withdrawal against the balance')
+  const resolved = await settleTo(
+    async () => asBig(await view(ORACLE, 'in_flight_to', [CLAIMANT.toLowerCase()])),
+    (v) => v === 0n,
+  )
+  check(resolved === 0n, 'the in-flight withdrawal was resolved')
+  check(
+    asBig(await view(ORACLE, 'owed_to', [CLAIMANT.toLowerCase()])) === 0n,
+    'and nothing was credited back, because the value had arrived',
+  )
+}
 
 // The wallet's own entitlement, moved and then collected. This is the path the
 // app offers a browser wallet by default, and the reason a wallet is never
@@ -342,7 +381,19 @@ await expectRefusal(
   'assigning to the zero address is refused')
 
 const liabilities = await view<Record<string, unknown>>(ORACLE, 'liabilities')
-console.log(`\n  liabilities  total_owed ${gen(asBig(liabilities.total_owed))}  held ${gen(asBig(liabilities.held))}`)
+console.log(
+  `\n  liabilities  owed ${gen(asBig(liabilities.total_owed))}  ` +
+    `in_flight ${gen(asBig(liabilities.total_in_flight))}  ` +
+    `bonds ${gen(asBig(liabilities.total_bond))}  ` +
+    `collateral ${gen(asBig(liabilities.total_collateral))}`,
+)
+console.log(
+  `               obligations ${gen(asBig(liabilities.obligations))}  held ${gen(asBig(liabilities.held))}`,
+)
+check(
+  asBig(liabilities.held) >= asBig(liabilities.obligations),
+  'the contract covers every obligation, not just entitlements',
+)
 
 console.log(`\noracle    ${EXPLORER}/address/${ORACLE}`)
 console.log(`claimant  ${EXPLORER}/address/${CLAIMANT}`)

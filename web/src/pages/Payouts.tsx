@@ -171,12 +171,18 @@ export default function Payouts() {
                     <dt>Contract owes in total</dt>
                     <dd>{formatBond(balances.liabilities.totalOwed)}</dd>
                   </div>
+                  <div>
+                    <dt>Holding for everyone</dt>
+                    <dd>{formatBond(balances.liabilities.obligations)}</dd>
+                  </div>
                 </dl>
                 {!balances.proven && balances.owed > 0n && (
                   <p className="notice">
                     This address has not proven it can receive value, so withdrawing is refused
-                    rather than attempted. That is deliberate: a transfer to an address that
-                    cannot receive is not returned. Assign the entitlement to a contract instead.
+                    rather than attempted. A browser wallet never can: the contract view-calls{' '}
+                    <code>credent_recipient()</code> on the caller before it will pay, and a wallet
+                    has no code to answer with. Assign the entitlement to a recipient contract
+                    instead — that moves no value and cannot fail.
                   </p>
                 )}
                 <button type="button" className="btn btn--ghost" onClick={() => void refresh()}>

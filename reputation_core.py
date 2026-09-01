@@ -49,6 +49,23 @@ NEUTRAL_BP = 5000
 # a classified rejection every node derives identically.
 U256_MAX = (1 << 256) - 1
 
+# What `prove_recipient` pays a candidate recipient so it can demonstrate it is
+# payable. Small, because it is a real transfer and is not returned; nonzero,
+# because `emit_transfer` rejects a zero value and because the evidence is the
+# credit itself. 0.000001 GEN.
+PROBE_WEI = 1_000_000_000_000
+
+# The view method a push-payment recipient must implement, and the exact string
+# it must return. This is the one *exact* recipient test available: a wallet has
+# no code, so it cannot answer a view call at all, and the failure is not
+# catchable -- it takes the calling transaction down, which is precisely the
+# refusal wanted. `web/scripts/claimant.py` is the reference implementation.
+#
+# Versioned in the string rather than the method name so that a future change of
+# the recipient contract can be rejected by value without breaking the call.
+RECIPIENT_MARKER_METHOD = "credent_recipient"
+RECIPIENT_MARKER = "credent-recipient-v1"
+
 # Widest collateral rate a policy may charge: a hundred times the stake. A rate
 # is a multiplier on money someone has to find before they can take on work, so
 # it is bounded for the same reason `repeat_shift_cap` is - a parameter that can
@@ -155,7 +172,11 @@ REASON_SELF_PAYOUT = "recipient_is_this_contract"
 REASON_RECIPIENT_UNPROVEN = "recipient_has_not_proven_it_can_receive"
 REASON_ALREADY_PROVEN = "recipient_already_proven"
 REASON_NO_PROBE_OUTSTANDING = "no_probe_outstanding"
+REASON_PROBE_OUTSTANDING = "a_probe_is_already_outstanding"
+REASON_PROBE_NOT_RECEIVED = "the_probe_value_did_not_arrive"
+REASON_PROBE_UNFUNDED = "the_entitlement_cannot_fund_the_probe"
 REASON_CALLER_IS_ORIGIN = "caller_is_the_transaction_origin"
+REASON_WRONG_RECIPIENT_MARKER = "the_caller_is_not_a_credent_recipient"
 REASON_WITHDRAWAL_PENDING = "a_withdrawal_is_already_pending"
 REASON_NO_WITHDRAWAL_PENDING = "no_withdrawal_pending"
 REASON_DELIVERED = "the_withdrawal_was_delivered"
@@ -187,7 +208,11 @@ REASONS = frozenset({
     REASON_RECIPIENT_UNPROVEN,
     REASON_ALREADY_PROVEN,
     REASON_NO_PROBE_OUTSTANDING,
+    REASON_PROBE_OUTSTANDING,
+    REASON_PROBE_NOT_RECEIVED,
+    REASON_PROBE_UNFUNDED,
     REASON_CALLER_IS_ORIGIN,
+    REASON_WRONG_RECIPIENT_MARKER,
     REASON_WITHDRAWAL_PENDING,
     REASON_NO_WITHDRAWAL_PENDING,
     REASON_DELIVERED,

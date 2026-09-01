@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 import build_contract
+from reputation_core import RECIPIENT_MARKER, RECIPIENT_MARKER_METHOD
 
 ROOT = Path(__file__).resolve().parent
 ARTIFACT = ROOT / "reputation_oracle.py"
@@ -566,15 +567,29 @@ def test_value_is_never_emitted_at_an_unproven_recipient(artifact_source: str) -
     emitted = code.index("emit_transfer")
     assert zeroed < emitted, "withdraw must clear the entitlement before emitting"
 
-    # The probe must risk nothing. A probe carrying value would reintroduce the
-    # whole problem in miniature.
+    # The probe carries value on purpose. A zero-value call could only show the
+    # caller runs code, which is not the question -- the question is whether the
+    # caller can be *paid*, and the only honest test of that is paying it.
     probe = _code_of(fns["prove_recipient"])
-    assert "emit_transfer" not in probe, "the probe must not transfer value"
-    assert "value=" not in probe, "the probe must carry no value"
-    assert "credent_probe" in probe, "the probe must call the recipient back"
+    assert "emit_transfer" in probe, "the probe must transfer value; that is the evidence"
+    assert "value=PROBE_WEI" in probe, "the probe must carry PROBE_WEI"
     assert "self.probing[key] = True" in probe, (
         "prove_recipient must record the outstanding probe, or confirm_recipient "
         "has nothing to check against"
+    )
+    assert "self.probe_baseline[key]" in probe, (
+        "prove_recipient must record the recipient's balance, or arrival cannot be judged"
+    )
+    assert "REASON_PROBE_UNFUNDED" in probe, (
+        "a probe must never be paid out of another party's entitlement"
+    )
+    assert "self.owed[key] = entitlement - PROBE_WEI" in probe, (
+        "the probe must be debited from the caller's own entitlement; funding it "
+        "from the contract's balance spends money that belongs to somebody else"
+    )
+    assert "self.total_owed = int(self.total_owed) - PROBE_WEI" in probe, (
+        "the probe debit must be reflected in total_owed, or the contract "
+        "over-reports what it owes for ever"
     )
 
     # A confirmation must answer a probe this contract actually issued, and must
@@ -589,6 +604,16 @@ def test_value_is_never_emitted_at_an_unproven_recipient(artifact_source: str) -
         "an unrequested confirmation must be a classified refusal, not a bare "
         "exception that rotates validators"
     )
+    # The guard that closes the gap the origin check leaves where
+    # `origin_address` is not the transaction initiator: the probe value must
+    # actually have arrived, and an externally owned account is never credited.
+    assert "REASON_PROBE_NOT_RECEIVED" in confirm, (
+        "confirm_recipient takes the caller's word that the probe arrived"
+    )
+    assert "baseline + PROBE_WEI" in confirm, (
+        "confirm_recipient must compare the recipient's balance against the baseline"
+    )
+    assert ".balance" in confirm, "arrival must be read from the recipient's balance"
     assert "self.probing[key] = False" in confirm, (
         "confirm_recipient does not consume the probe; the confirmation is replayable"
     )
@@ -756,11 +781,147 @@ def test_a_failed_transfer_leaves_the_entitlement_recoverable(artifact_source: s
         "reclaim has no solvency guard; a restore could spend the balance backing "
         "other parties' entitlements"
     )
-    # The guard has to compare against everything owed, not just this claim.
-    assert "self.total_owed" in reclaim and "held" in reclaim, (
-        "the solvency guard must weigh the whole obligation, not one entitlement"
+    # The guard has to compare against *everything* the contract is holding for
+    # somebody else, not just entitlements. A recipient that was paid and then
+    # spent it presents the same balance evidence as one that was never paid; a
+    # guard that counts locked bonds and posted collateral as surplus would pay
+    # such a caller a second time out of them.
+    assert "self._obligations()" in reclaim, (
+        "the solvency guard must weigh every obligation, not entitlements alone; "
+        "a restore paid out of a locked bond is a restore paid out of somebody "
+        "else's money"
     )
+    assert "held" in reclaim, "the solvency guard must read the contract's balance"
     # Delivered and undelivered must be distinguished by evidence, not assumed.
     assert "baseline + amount" in reclaim, (
         "reclaim must decide delivery from the recipient's balance against its baseline"
     )
+
+
+def test_only_a_credent_recipient_contract_can_be_paid(artifact_source: str) -> None:
+    """The review's first item, closed exactly rather than narrowed.
+
+    "On Bradbury a wallet can mark itself proven." It cannot any more, and the
+    reason is not a heuristic. Before it will probe, confirm or pay, the
+    contract makes a view call into the caller's own address for
+    `credent_recipient()`. A wallet has no code to answer with, and the failure
+    is **not catchable** -- it takes the calling transaction down.
+
+    Measured on both networks with `try`/`except Exception` wrapped around the
+    call, against three targets:
+
+        studionet  a contract implementing it   returned the marker, SUCCESS
+                   a contract without it        ERROR, state untouched
+        bradbury   a contract implementing it   returned the marker, state moved
+                   a contract without it        refused, state untouched
+                   a wallet                     refused, state untouched
+
+    That the `except` never runs is the point. There is no branch for an
+    attacker to route around: the transaction either reaches the next line with
+    the caller established as a Credent recipient, or it does not reach it. An
+    earlier build looked at this as a way to *detect* a contract, found it
+    uncatchable, and set it aside -- read as a refusal instead of a predicate,
+    uncatchable is the stronger property.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+    assert "_require_recipient_contract" in fns, (
+        "the recipient-contract guard is gone; a wallet can reach the payout path again"
+    )
+    helper = _code_of(fns["_require_recipient_contract"])
+    assert "credent_recipient()" in helper, (
+        "the guard must call the marker method on the caller's own address"
+    )
+    assert "gl.message.sender_address" in helper, (
+        "the guard must call into the *caller*, not an address it was handed"
+    )
+    assert "RECIPIENT_MARKER" in helper, (
+        "the returned marker is not compared, so any contract with a method of "
+        "that name passes"
+    )
+    assert "REASON_WRONG_RECIPIENT_MARKER" in helper, (
+        "a wrong marker must be a classified refusal, not a bare exception"
+    )
+    assert "try" not in helper and "except" not in helper, (
+        "the guard must not swallow the failure; uncatchable is the mechanism"
+    )
+
+    for guarded in ("prove_recipient", "confirm_recipient", "withdraw"):
+        assert "_require_recipient_contract()" in _code_of(fns[guarded]), (
+            f"{guarded} does not require the caller to be a Credent recipient"
+        )
+
+
+def test_the_reference_recipient_answers_the_marker(artifact_source: str) -> None:
+    """`claimant.py` must implement exactly the marker the contract demands.
+
+    The two live in different files and neither imports the other, so a rename
+    on one side would leave every recipient in the repository unable to be paid
+    and nothing would fail until a deployment did.
+    """
+    marker = RECIPIENT_MARKER
+    claimant = (Path(__file__).parent / "web" / "scripts" / "claimant.py").read_text()
+    assert f"def {RECIPIENT_MARKER_METHOD}(" in claimant, (
+        f"the reference recipient does not implement {RECIPIENT_MARKER_METHOD}(); "
+        "it could not be paid by the contract it ships with"
+    )
+    assert f'return "{marker}"' in claimant, (
+        f"the reference recipient does not return {marker!r}, so the contract "
+        "would refuse it"
+    )
+    assert "@gl.public.view" in claimant.split(f"def {RECIPIENT_MARKER_METHOD}(")[0].rsplit("\n", 3)[0], (
+        f"{RECIPIENT_MARKER_METHOD} must be a view method; the contract calls it by view"
+    )
+
+
+def test_every_obligation_is_counted(artifact_source: str) -> None:
+    """Solvency is only honest if the contract knows everything it is holding.
+
+    Entitlements are not the whole story: a locked bond and a posted collateral
+    are both money that belongs to somebody else and both have to be handed back
+    or paid out later. Counting only `total_owed` reads them as free surplus,
+    which is what would let `reclaim` pay a second time out of them.
+
+    Each counter is checked at both ends. A counter that is incremented and
+    never decremented locks the contract out of a legitimate restore for ever;
+    one that is decremented and never incremented is worse, because it reads as
+    solvent when it is not.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+    assert "_obligations" in fns, "there is no single place that totals what is owed"
+    obligations = _code_of(fns["_obligations"])
+    for field in ("total_owed", "total_in_flight", "total_bond_held", "total_collateral_held"):
+        assert field in obligations, f"_obligations does not count {field}"
+
+    # Bonds: counted when locked, released when they become an entitlement.
+    attest = _code_of(fns["attest"])
+    assert "self.total_bond_held = int(self.total_bond_held) + required" in attest, (
+        "a posted bond is not counted as an obligation"
+    )
+    assert "_BOND_LOCKED" in attest, (
+        "the bond count must be conditional on the bond still being owed back; a "
+        "slashed bond stays with the contract"
+    )
+    reclaim_bond = _code_of(fns["reclaim_bond"])
+    assert "self.total_bond_held = int(self.total_bond_held) - amount" in reclaim_bond, (
+        "a returned bond is still counted as held, so the contract under-reports "
+        "its surplus for ever"
+    )
+
+    # Collateral: counted when posted, released on either settlement route.
+    accept = _code_of(fns["accept_engagement"])
+    assert "self.total_collateral_held = int(self.total_collateral_held) + required" in accept, (
+        "posted collateral is not counted as an obligation"
+    )
+    for settle in ("release_collateral", "claim_collateral"):
+        assert "self.total_collateral_held = int(self.total_collateral_held) - amount" in _code_of(fns[settle]), (
+            f"{settle} pays the collateral out without clearing the obligation"
+        )
+
+    # And the reader sees the same figures the contract decides on.
+    liabilities = _code_of(fns["liabilities"])
+    for key in ("total_bond", "total_collateral", "obligations"):
+        assert key in liabilities, f"liabilities does not report {key}"

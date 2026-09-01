@@ -112,9 +112,14 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             "assign_to" in fns and not emits_value(fns["assign_to"]),
             "the safe payout path must move an entitlement, never push value",
         ),
+        # Two emitters, and the second is deliberate. `prove_recipient` pays the
+        # probe, because the only honest test of whether an address can be paid
+        # is paying it -- and it pays out of the caller's own entitlement, so it
+        # can never reach anybody else's money. Anything beyond these two would
+        # be a payout path nothing in this audit is checking.
         (
-            "withdraw is the only method that emits value",
-            emitters == ["withdraw"],
+            "only withdraw and the probe emit value",
+            emitters == ["prove_recipient", "withdraw"],
             f"emitters: {emitters}",
         ),
         (
@@ -128,9 +133,11 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             "recipient_is_a_contract was unverifiable and cost the entitlement",
         ),
         (
-            "the probe carries no value",
-            "emit_transfer" not in probe and "value=" not in probe,
-            "a probe that risks value reintroduces the problem in miniature",
+            "the probe carries value, and it is the caller's own",
+            "emit_transfer" in probe and "value=PROBE_WEI" in probe
+            and "REASON_PROBE_UNFUNDED" in probe,
+            "a zero-value probe shows only that the caller runs code, not that "
+            "it can be paid; a probe funded from the balance spends the pool",
         ),
         (
             "a confirmation must answer an outstanding probe",
@@ -175,6 +182,35 @@ def audit(label: str, source: str) -> list[tuple[str, bool, str]]:
             ),
             "two designs weighed the contract's balance against its obligations "
             "and both were wrong",
+        ),
+        # The exact recipient test, and the one the second review's first clause
+        # turns on. A view call into the caller for `credent_recipient()`: a
+        # wallet has no code to answer with and the failure is not catchable, so
+        # the transaction ends there. Measured on both networks.
+        (
+            "only a Credent recipient contract can be paid",
+            "_require_recipient_contract" in fns
+            and "credent_recipient()" in code(fns["_require_recipient_contract"])
+            and "RECIPIENT_MARKER" in code(fns["_require_recipient_contract"])
+            and all(
+                "_require_recipient_contract()" in code(fns[m])
+                for m in ("prove_recipient", "confirm_recipient", "withdraw")
+            ),
+            "a wallet must not be able to mark itself proven on any network",
+        ),
+        (
+            "the probe comes out of the caller's own entitlement",
+            "self.owed[key] = entitlement - PROBE_WEI" in code(fns["prove_recipient"]),
+            "a probe paid out of the pool spends money belonging to other parties",
+        ),
+        (
+            "solvency counts every obligation, not entitlements alone",
+            "_obligations" in fns
+            and "total_bond_held" in code(fns["_obligations"])
+            and "total_collateral_held" in code(fns["_obligations"])
+            and "self._obligations()" in code(fns["reclaim"]),
+            "a restore weighed only against total_owed would be paid out of "
+            "locked bonds and posted collateral",
         ),
         (
             "an undelivered withdrawal can be recovered",
@@ -260,10 +296,15 @@ def main() -> int:
     source = fetch(*DEPLOYMENTS["studionet"])
     fns = {n.name for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)}
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    # Names the README may use that are not methods of *this* contract:
+    # platform calls, tooling, designs it records as abandoned, and
+    # `credent_recipient` / `settle_withdrawal`, which live on the recipient
+    # contract rather than on the oracle.
     known_external = {
         "emit_transfer", "connect", "get", "pytest", "npm", "curl", "python",
         "node", "ast", "dump", "view", "call", "withdraw_to", "credent_probe",
-        "normalizeAddress", "resolve_in_flight", "solvency", "in_flight_to",
+        "normalizeAddress", "resolve_in_flight", "solvency",
+        "credent_recipient", "settle_withdrawal",
     }
     named = sorted(set(re.findall(r"`([a-z_][a-z0-9_]*)\(\)?[^`]*`", readme)))
     unknown = [n for n in named if n not in fns and n not in known_external]

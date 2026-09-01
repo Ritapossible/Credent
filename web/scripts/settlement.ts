@@ -215,16 +215,37 @@ if (!Number.isFinite(SETTLE_TIMEOUT_MS) || SETTLE_TIMEOUT_MS <= 0) {
  * Have a recipient contract prove it can receive, and wait until it has.
  *
  * `withdraw` refuses an unproven address, so this is a required step rather
- * than a nicety. The oracle emits a zero-value call to the recipient, which
- * answers by calling back -- nothing is at stake if it cannot, which is the
- * point of proving before paying instead of paying and hoping.
+ * than a nicety. The oracle pays the recipient PROBE_WEI and the recipient
+ * confirms once it has arrived. Only a contract is credited by
+ * `emit_transfer`, so the arrival is itself the proof -- the mechanism the
+ * payout will use is the mechanism being tested.
  */
+// What `prove_recipient` pays the candidate, and debits from its entitlement.
+// The probe is the first slice of the recipient's own money rather than a
+// payment out of the pool, so a proven recipient is owed exactly this much less
+// by the time it withdraws -- and has already received it.
+const PROBE_WEI = 1_000_000_000_000n
+
 async function proveRecipient(client: Role, oracle: string, recipient: string): Promise<boolean> {
   if ((await view(oracle, 'is_proven', [recipient])) === true) return true
+
+  // Two transactions, and they cannot be one. The probe is an *emitted*
+  // transfer of PROBE_WEI, so it settles after the call that sends it: there
+  // is no moment during `prove` at which the recipient has already been paid.
+  // `confirm` is refused until the value has arrived, which is a refusal and
+  // not a failure -- so wait for the balance to move, then confirm.
+  const before = await balanceOf(recipient)
   await send(client, recipient, 'prove', [])
+  const after = await settleTo(() => balanceOf(recipient), (value) => value > before, ATTEST_TIMEOUT_MS)
+  if (after <= before) {
+    console.log(`         the probe never arrived at ${recipient}; it cannot be paid`)
+    return false
+  }
+  await send(client, recipient, 'confirm', [])
   const proven = await settleTo(
     async () => ((await view(oracle, 'is_proven', [recipient])) === true ? 1n : 0n),
     (value) => value === 1n,
+    ATTEST_TIMEOUT_MS,
   ).catch(() => 0n)
   return proven === 1n
 }
@@ -583,11 +604,24 @@ async function withdrawal(
   console.log(`    claimant  ${gen(claimantBefore)} -> ${gen(claimantAfter)}  (${delta(claimantAfter - claimantBefore)})`)
   console.log(`    owed_to   ${gen(owedBefore)} -> ${gen(owedAfter)}`)
 
+  // What moves *now* is what is on the books now, which is the credited amount
+  // less the probe if this recipient proved during this run. The probe is not
+  // a fee and it is not lost: it is the first `PROBE_WEI` of the same
+  // entitlement, paid early, by the same mechanism, to the same address. So the
+  // shortfall against `expected` is asserted to be exactly nothing or exactly
+  // the probe, and never anything else.
+  const shortfall = expected - owedBefore
+  check(
+    shortfall === 0n || shortfall === PROBE_WEI,
+    shortfall === 0n
+      ? `the entitlement on the books is the whole ${gen(expected)}`
+      : `the entitlement on the books is ${gen(expected)} less the ${gen(PROBE_WEI)} probe`,
+  )
   const arrived = check(
-    claimantAfter - claimantBefore >= expected,
+    claimantAfter - claimantBefore >= owedBefore,
     `the claimant received the whole entitlement (${delta(claimantAfter - claimantBefore)})`,
   )
-  check(contractAfter === contractBefore - expected, `the contract paid out exactly ${gen(expected)}`)
+  check(contractAfter === contractBefore - owedBefore, `the contract paid out exactly ${gen(owedBefore)}`)
   check(owedAfter === 0n, 'the entitlement was zeroed')
   if (!arrived) {
     console.error(
@@ -1342,17 +1376,18 @@ async function main(): Promise<void> {
 
   // --- the safety property, exercised rather than described ----------------
   //
-  // `withdraw` emits value and cannot observe whether it arrived, so this
-  // contract does not try to find out afterwards -- it refuses to emit at an
-  // address that has not proven, by running code, that it can receive.
+  // `withdraw` emits value and cannot observe whether it arrived, so the
+  // contract establishes *before* it emits that the caller is a Credent
+  // recipient contract: it calls `credent_recipient()` by view on the caller's
+  // own address. A wallet has no code to answer with and the failure is not
+  // catchable, so the transaction ends there. The refusal carries no reason
+  // string anywhere, because it is not a classified rejection -- it is the
+  // transaction not completing, which is why the checks below read the state
+  // afterwards rather than only the error.
   //
-  // Two earlier designs tried to recover after the fact and both were wrong.
-  // One compared the balance to obligations, ignoring that the balance also
-  // holds collateral and bonds. The other used a `total_in - total_out` ledger
-  // that a single untracked transfer into the contract silently broke,
-  // crediting a delivered payout a second time. Proving first removes the
-  // question rather than answering it badly, so what is checked here is that
-  // the refusal actually holds on-chain.
+  // What is exercised here is that a wallet cannot reach any part of the payout
+  // path: not `withdraw`, not `confirm_recipient`, and -- unlike every earlier
+  // build -- not `prove_recipient` either.
   console.log(`\n=== the payout guard ===`)
 
   const walletProven = await view(oracle, 'is_proven', [client.address])
@@ -1389,30 +1424,28 @@ async function main(): Promise<void> {
   const stillUnproven = await view(oracle, 'is_proven', [client.address])
   check(stillUnproven === false, 'the refused confirmation left the wallet unproven')
 
-  // The harder case, and the one that decides how much `is_proven` is worth: a
-  // wallet that *does* raise a probe for itself and then answers it directly.
-  // Consuming the probe does not stop this; only the origin check does, and
-  // that check is exact on studionet and inert on bradbury. Both outcomes are
-  // recorded rather than asserted uniformly, because claiming a guarantee on
-  // the network that does not provide it is the failure this whole rework
-  // exists to correct.
-  await send(client, oracle, 'prove_recipient', [])
+  // The case the second review named: "a wallet can mark itself proven, then
+  // withdraw clears its owed balance before an undeliverable transfer". The
+  // first half is what made the rest possible, and it is what this asserts is
+  // now impossible -- on both networks, not only on the one where
+  // `origin_address` happens to be the initiator.
+  //
+  // The wallet is not merely refused at `confirm_recipient`; it is refused at
+  // `prove_recipient`, so no probe is ever raised for it and there is nothing
+  // to answer. Asserted on the state rather than on an error string, because
+  // this refusal is a transaction that does not complete and neither network
+  // reports a reason for it.
+  const probeRaised = await expectRejection(() => send(client, oracle, 'prove_recipient', []), [
+    'the_caller_is_not_a_credent_recipient',
+  ])
+  check(probeRaised, 'a wallet cannot even raise a probe for itself')
   const selfAnswered = await expectRejection(
     () => send(client, oracle, 'confirm_recipient', []),
-    'caller_is_the_transaction_origin',
+    ['the_caller_is_not_a_credent_recipient', 'no_probe_outstanding', 'caller_is_the_transaction_origin'],
   )
+  check(selfAnswered, 'and it cannot answer one')
   const selfProven = await view(oracle, 'is_proven', [client.address])
-  if (selfAnswered) {
-    check(selfProven === false, 'a wallet cannot answer its own probe on this network')
-  } else {
-    console.log(
-      `    a wallet answered its own probe and is_proven is now ${selfProven}.\n` +
-        `    This network does not report origin_address as the transaction\n` +
-        `    initiator, so the origin check cannot fire and the handshake is a\n` +
-        `    bar rather than a proof here. Documented, not a regression -- and\n` +
-        `    a wallet that does this spends only its own entitlement.`,
-    )
-  }
+  check(selfProven === false, 'a wallet cannot mark itself proven on this network')
 
   console.log(`\ncontract holds ${gen(await balanceOf(oracle))} at the end`)
   console.log(`oracle ${oracle}`)
