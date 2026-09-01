@@ -380,6 +380,38 @@ Needs Python 3.12+ and a cached GenVM release tarball. The default
 `python -m pytest` skips the directory when the harness is not importable, so a
 contributor without it still gets a green run.
 
+### The review's scenario, on a deployed contract
+
+`npm run recovery` drives the reported sentence clause by clause against the
+Bradbury deployment, printing a transaction for every step. The run behind this
+table is
+[`0xb08f12dA`](https://explorer-bradbury.genlayer.com/address/0xb08f12dA983C36888494388C51CbC39C9d6FDe4d),
+with an ordinary wallet at `0xF9dF362E` and a recipient contract at
+[`0xf58470D8`](https://explorer-bradbury.genlayer.com/address/0xf58470D859D4C85c22aeBc978CBC50EC9c1AF965):
+
+| Step | Transaction |
+|---|---|
+| `accept_engagement` — the wallet's entitlement is created | [`0xc067fa41`](https://explorer-bradbury.genlayer.com/tx/0xc067fa41e1ca1c542dd5eb19cd9264bbacbe253bb8b77e19b473870a02373bd9) |
+| **`prove_recipient` from the wallet — refused** | [`0x021399ad`](https://explorer-bradbury.genlayer.com/tx/0x021399ad19e73ff1171044655b3d82e993210fffbc753370c9557e363c6091d5) |
+| **`confirm_recipient` from the wallet — refused** | [`0x828f128b`](https://explorer-bradbury.genlayer.com/tx/0x828f128b854293ee4a0fc6dab4af4efca1d3c32d4b02a5601e8565d86b72f7a9) |
+| **`withdraw` from the wallet — refused, entitlement untouched** | [`0xf46712b1`](https://explorer-bradbury.genlayer.com/tx/0xf46712b1c45cf6dd2de7cafc337c16209365d5c390372fc0159968cfe246881a) |
+| `assign_to` — the wallet routes it to a recipient contract | [`0xf480cbb8`](https://explorer-bradbury.genlayer.com/tx/0xf480cbb8547a461e2ef72ea43666987b336fec8ae6c8aac05779073e382edf26) |
+| `prove_recipient` — the handshake, moving no value | [`0xd4227699`](https://explorer-bradbury.genlayer.com/tx/0xd4227699f811ade63004218b40881680d7f691335ceac51dcb84854813bbdeec) |
+| `confirm_recipient` | [`0xc4b22a45`](https://explorer-bradbury.genlayer.com/tx/0xc4b22a452272a1f11982c3313f6a013711e2db01b8f5dcb05bae06682b25a9c2) |
+| `withdraw` — parked in flight, not cleared | [`0x5b222717`](https://explorer-bradbury.genlayer.com/tx/0x5b2227175f9a847fe368de1e484ac50cdddb0a42c98f2a617426c5d159811e17) |
+| `reclaim` from an address with nothing in flight — refused | [`0x1c2b20c6`](https://explorer-bradbury.genlayer.com/tx/0x1c2b20c69c3e7bfa899751e90f58da5dbca9350c2511b66931c9f2d1d647d811) |
+| `reclaim` — the withdrawal resolved after the settle window | [`0x2fe4eeb1`](https://explorer-bradbury.genlayer.com/tx/0x2fe4eeb1e7cb518d08de5624c9a46ef363892d47b482f0383280628a053f4730) |
+| `reclaim` again — credited nothing | [`0x05fbe2bc`](https://explorer-bradbury.genlayer.com/tx/0x05fbe2bc2db81aedc16e7fba9611f0acbb9204e503a07e7c66dcafdf68b9dcd8) |
+
+The three bold rows are the first clause of the review. Neither network reports
+a reason string for a transaction that does not complete, so each is judged on
+what the contract state says afterwards: `is_proven` never turns true, and the
+wallet's 0.02 GEN is still in `owed_to` when all three are done.
+
+What this run cannot show is a transfer failing, because none does — every
+contract is credited. That branch is the sixth row of the direct-mode table
+above.
+
 ### On-chain — network, but no key and no gas
 
 ```bash
