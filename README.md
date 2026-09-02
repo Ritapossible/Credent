@@ -119,7 +119,7 @@ cd credent
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest                  # 365 tests, no network
+python -m pytest                  # 366 tests, no network
 
 cd web
 npm install
@@ -149,13 +149,40 @@ part where money can be lost.
 
 `emit_transfer` credits a contract and does **not** credit an externally owned
 account. Every ordinary party here — provider, client, attester — is a wallet,
-so an earlier revision that pushed value at them at settlement moved nothing at
-all.
+so an earlier revision that pushed value at them at settlement paid nobody.
 
 | Recipient | Credited | Sender debited |
 |---|---|---|
 | Any contract — `__receive__` working, raising, or absent | **yes** | yes |
 | Externally owned account | **no** | studionet yes, bradbury no |
+
+**Read that last row carefully: on studionet the value is destroyed.** The
+sender is debited and the wallet is credited nothing, so the difference is not
+refused, not refunded, and not held anywhere — it is gone. Measured with a
+two-method probe at
+[`0x5664DF1C`](https://explorer-studio.genlayer.com/address/0x5664DF1C350B062Df020230F1d7CB7976B653Da6),
+funded with 0.1 GEN and asked to pay 0.05 GEN to the wallet that called it
+([`0x19764795`](https://explorer-studio.genlayer.com/tx/0x19764795ced565f2e82f97b0035d88d106a39790ede9dc5b261e73c549f893b6)):
+
+```text
+before    contract 0.100000 GEN   wallet 44.977500 GEN
+after     contract 0.050000 GEN   wallet 44.977500 GEN
+contract debited  0.050000 GEN
+wallet   credited  0.000000 GEN
+```
+
+Bradbury refuses the same transfer instead, so nothing is lost there. This is
+a platform difference, not something a contract can catch — there is no failure
+to handle, because from the contract's side the transfer succeeded.
+
+It is also the reason the payout design is shaped the way it is, and worth
+being blunt about why. `reclaim` decides whether a withdrawal was delivered by
+comparing what this contract *holds* against what it has *committed*. A
+destroyed transfer and a delivered one look identical to that test — `held`
+drops either way — so the accounting would ratify the loss and close the claim
+as paid. **No check placed after the fact can recover from this. Only never
+emitting at a wallet can**, which is what the recipient guard is for, and why
+it is an exact test rather than a heuristic.
 
 Being a contract is the entire condition; nothing in the recipient's code can
 defeat it. So settlement **credits an entitlement** rather than pushing value.
@@ -322,7 +349,7 @@ with.
 ### Offline — no network, runs in CI
 
 ```bash
-python -m pytest                 # 365 tests: engine, prompts, contract, parity
+python -m pytest                 # 366 tests: engine, prompts, contract, parity
 cd web
 npm run parity                   # 3,421 vectors: the TS port agrees with the engine
 npm run units                    # formatting, error text, calldata encoding
@@ -600,6 +627,14 @@ cannot be pushed value by this oracle, only one built to receive from it.
 Everyone else uses `assign_to`, which moves the entitlement into a recipient
 contract's name without moving value and without being able to fail.
 
+This is a real restriction and it is listed here as one, but it is not a
+concession made for convenience — it is the mitigation for the measured
+studionet behaviour above, where a transfer to a wallet debits the sender and
+credits nobody. Loosening it does not make the contract more permissive; it
+makes it capable of destroying value that `reclaim` would then read as
+delivered. `test_the_only_transfer_pays_a_verified_recipient` pins it across
+the whole artifact: exactly one emission, at the caller, behind the guard.
+
 **The restore branch is not reachable in normal operation.** Every contract is
 credited by `emit_transfer` whatever its code does, and after the recipient
 guard the only addresses `withdraw` emits at are contracts. The branch is kept
@@ -715,7 +750,7 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 365 tests and 3,421 parity vectors, plus ten
+Offline the project carries 366 tests and 3,421 parity vectors, plus ten
 direct-mode tests that execute the contract itself, and `genvm-lint` validates
 the rebuilt schema at 29 methods and 14 constructor parameters.
 

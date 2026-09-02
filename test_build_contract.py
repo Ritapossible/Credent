@@ -977,3 +977,75 @@ def test_the_cheap_refusal_runs_before_the_expensive_one(artifact_source: str) -
             "going to refuse anyway can burn a studio leader's whole 600-second "
             "budget first"
         )
+
+
+def test_the_only_transfer_pays_a_verified_recipient(artifact_source: str) -> None:
+    """Value may leave this contract at exactly one place, and only to a contract.
+
+    Measured on studionet, freshly, against a two-method probe: a contract that
+    emits a transfer to an externally owned account is **debited, and the wallet
+    is credited nothing**. 0.05 GEN left the probe and arrived nowhere. Bradbury
+    refuses the same transfer instead, so nothing is lost there; studionet
+    destroys it.
+
+    | recipient                                   | credited | sender debited |
+    |---------------------------------------------|----------|----------------|
+    | any contract (`__receive__` working or not)  | yes      | yes            |
+    | externally owned account                     | no       | studio yes     |
+
+    Credent never reaches that row, and this is the test that keeps it that way.
+    The reason it matters is not only that the money would be gone: `reclaim`
+    judges delivery by comparing what the contract *holds* against what it has
+    *committed*, so a destroyed transfer looks exactly like a delivered one --
+    `held` drops either way. The accounting would ratify the loss and close the
+    claim. No later check can recover from this; only never emitting can.
+
+    So the guard is load-bearing for correctness rather than policy, and the
+    per-method tests above are not enough to hold it. They pin `withdraw` and
+    `assign_to` as they are written today. What they cannot catch is a *second*
+    transfer added somewhere else later, or this one rewritten to take an
+    address argument instead of paying the caller. This test is whole-contract:
+    it counts every emission in the artifact and pins the shape of the one that
+    is allowed.
+    """
+    tree = ast.parse(artifact_source)
+
+    emits = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("emit_transfer", "emit")
+    ]
+    assert len(emits) == 1, (
+        f"the contract emits value at {len(emits)} places. Every one of them is "
+        "a chance to pay an address that cannot be credited, and on studionet "
+        "that destroys the value rather than failing. There must be exactly one, "
+        "behind the recipient guard"
+    )
+
+    # The receiver must be the caller, not an address the call chose. A
+    # parameter could name a wallet; `gl.message.sender_address` is the one
+    # address whose code has already been checked by the guard below.
+    receiver = ast.unparse(emits[0].func.value)
+    assert receiver == "gl.get_contract_at(gl.message.sender_address)", (
+        f"value is emitted at `{receiver}`. It must be emitted at the caller, "
+        "because the caller is the address `_require_recipient_contract` "
+        "verified; any other address is unverified at the moment it is paid"
+    )
+
+    # And the guard must run before it, in the same function.
+    holder = next(
+        fn
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef) and emits[0] in set(ast.walk(fn))
+    )
+    body = _code_of(holder)
+    assert "_require_recipient_contract()" in body, (
+        f"`{holder.name}` emits value without calling _require_recipient_contract. "
+        "An externally owned account would be debited-but-not-credited on "
+        "studionet, and reclaim would read the loss as a delivery"
+    )
+    assert body.index("_require_recipient_contract()") < body.index("emit_transfer"), (
+        f"`{holder.name}` verifies the recipient after paying it"
+    )
