@@ -1351,3 +1351,77 @@ class TestResolveWithdrawal:
                     )
                     in core.WITHDRAWAL_OUTCOMES
                 )
+
+    # ------------------------------------------------------------------
+    # Concurrency: what the rule guarantees when more than one withdrawal
+    # is outstanding at once, and what it deliberately gives up.
+    # ------------------------------------------------------------------
+
+    def test_it_never_gives_back_value_that_really_left(self):
+        """The safety property. No arrangement of concurrent withdrawals can
+        make `reclaim` restore a claim whose transfer actually landed.
+
+        This is the one that matters. A recovery path exists to give value
+        back, which makes it the obvious thing to attack: if a recipient can
+        be paid *and* have the claim restored, the contract can be drained a
+        wei at a time by withdrawing, letting it land, and reclaiming.
+
+        The rule is `held >= committed`, and at the moment it is asked the
+        claim being judged is still counted in `committed`. So if its value
+        left, `held` is short by at least that amount and the test cannot
+        pass -- no matter what other withdrawals are in flight, because every
+        one of those is also still counted. Other traffic can only push the
+        answer further toward `delivered`, never back.
+        """
+        held_originally = committed = 1000
+        for landed_elsewhere in range(0, 400, 7):
+            for this_one in range(1, 400, 11):
+                # Both transfers landed: the contract is short both amounts.
+                held = held_originally - landed_elsewhere - this_one
+                assert (
+                    core.resolve_withdrawal(
+                        elapsed_seconds=self.SETTLE,
+                        held=held,
+                        committed=committed,
+                        settle_seconds=self.SETTLE,
+                    )
+                    == core.WITHDRAWAL_DELIVERED
+                ), (
+                    f"a delivered withdrawal of {this_one} was restored while "
+                    f"{landed_elsewhere} was outstanding elsewhere -- this pays twice"
+                )
+
+    def test_a_second_withdrawal_can_cost_the_first_its_restore(self):
+        """The price of that safety, stated rather than hidden.
+
+        One withdrawal in flight is judged exactly: the value either left or
+        it did not. A *second* one that has already landed but has not been
+        reclaimed depresses `held` while still being counted in `committed`,
+        and a genuinely failed transfer then reads as delivered. The claim is
+        closed instead of restored.
+
+        That is a real loss, and it is the direction this rule errs in on
+        purpose. The obvious repair -- judging against `committed` minus the
+        other outstanding withdrawals -- fixes this case and opens the one
+        above: it restores claims whose value left, which is a drain rather
+        than a loss. Given a choice between failing to return value and
+        returning it twice, a contract holding other people's money takes the
+        first.
+
+        Reaching this at all needs an emitted transfer to fail, and no
+        transfer to a contract has ever been observed to. It is pinned here so
+        the trade is a decision on record and not a surprise.
+        """
+        held = committed = 1000
+        alone = core.resolve_withdrawal(
+            elapsed_seconds=self.SETTLE, held=held, committed=committed,
+            settle_seconds=self.SETTLE,
+        )
+        assert alone == core.WITHDRAWAL_RESTORED, "a lone failed transfer must restore"
+
+        # Same failed transfer, but 100 landed elsewhere and was not reclaimed.
+        crowded = core.resolve_withdrawal(
+            elapsed_seconds=self.SETTLE, held=held - 100, committed=committed,
+            settle_seconds=self.SETTLE,
+        )
+        assert crowded == core.WITHDRAWAL_DELIVERED

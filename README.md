@@ -119,7 +119,7 @@ cd credent
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest                  # 366 tests, no network
+python -m pytest                  # 368 tests, no network
 
 cd web
 npm install
@@ -349,7 +349,7 @@ with.
 ### Offline — no network, runs in CI
 
 ```bash
-python -m pytest                 # 366 tests: engine, prompts, contract, parity
+python -m pytest                 # 368 tests: engine, prompts, contract, parity
 cd web
 npm run parity                   # 3,421 vectors: the TS port agrees with the engine
 npm run units                    # formatting, error text, calldata encoding
@@ -643,6 +643,24 @@ about this contract: a network can route a transfer somewhere the contract
 cannot foresee. It is exercised by `TestResolveWithdrawal` rather than on-chain,
 and that is stated here rather than implied.
 
+**A second withdrawal in flight can cost a failed one its restore.** `reclaim`
+asks whether the contract still covers everything it is committed to, with the
+claim being judged still counted. One withdrawal outstanding is decided exactly.
+A second that has already landed but has not been reclaimed lowers the balance
+while still being counted, so a genuinely failed transfer beside it reads as
+delivered and is closed rather than restored.
+
+That is a real loss and it is the direction the rule errs in deliberately. The
+obvious repair — judging against what is committed *minus* the other
+outstanding withdrawals — fixes this case and opens a worse one: it restores
+claims whose value did leave, which is a drain rather than a loss. Measured
+over the same grid of concurrent amounts, the repair produces 598 double-pay
+cases and the rule as written produces none. Given a choice between failing to
+return value and returning it twice, a contract holding other people's money
+takes the first. Both properties are pinned:
+`test_it_never_gives_back_value_that_really_left` and
+`test_a_second_withdrawal_can_cost_the_first_its_restore`.
+
 **A restore can, in one case, be paid out of money nobody is owed.** If the
 contract holds more than everything it is committed to, plus the withdrawal, a
 delivered claim can still satisfy the test and be paid a second time out of the
@@ -750,7 +768,7 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 366 tests and 3,421 parity vectors, plus ten
+Offline the project carries 368 tests and 3,421 parity vectors, plus ten
 direct-mode tests that execute the contract itself, and `genvm-lint` validates
 the rebuilt schema at 29 methods and 14 constructor parameters.
 
