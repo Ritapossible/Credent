@@ -26,6 +26,7 @@ rather than on the prose, and prices the next job from what the record says.
 - [Limitations](#limitations)
 - [Platform notes for GenLayer developers](#platform-notes-for-genlayer-developers)
 - [Status](#status)
+- [License](#license)
 
 ---
 
@@ -786,3 +787,9 @@ owed balance before an undeliverable transfer, no restoration path — is now
 false in all three of its clauses, and each clause is checked in three places:
 by a test that runs the contract, by a test that runs the arithmetic, and by a
 transaction on a deployed contract you can open in an explorer.
+
+---
+
+## License
+
+[MIT](LICENSE).
