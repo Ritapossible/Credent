@@ -244,6 +244,17 @@ def _require_recipient_contract() -> None:
     The cost of this guard is that a recipient must be a Credent recipient
     contract, not merely any contract. `assign_to` is the route for everyone
     else, moves no value, and cannot fail.
+
+    **Call this last, after every cheap refusal.** Measured on studionet, a view
+    call into an address with no code does not fail fast: the leader runs to its
+    600-second limit and the transaction finalises as `Leader Timeout` with
+    `Contract Error: timeout`. Bradbury refuses the identical call in seven to
+    fourteen seconds, so it is studio's behaviour rather than the protocol's --
+    but the contract decides whether it is reached. The refusal is correct
+    either way and nothing moves; what it costs is ten minutes of somebody's
+    leader for a caller that a storage read would have turned away. Every caller
+    of this helper checks storage first for that reason, and the ordering is not
+    cosmetic.
     """
     marker = gl.get_contract_at(gl.message.sender_address).view().credent_recipient()
     if str(marker) != RECIPIENT_MARKER:
@@ -1070,10 +1081,17 @@ class ReputationOracle(gl.Contract):
         Calling this again while a handshake is open is allowed and simply
         re-opens it. Nothing is spent, so there is nothing to protect against.
         """
-        _require_recipient_contract()
+        # Nothing here is cheaper than the view call that establishes a
+        # recipient -- that is what this method is for -- so the origin refusal
+        # goes first instead. Where `origin_address` is the transaction
+        # initiator it catches a wallet calling directly, in milliseconds,
+        # before the expensive path; where it is not, that network refuses the
+        # view call in seconds anyway.
+        _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
         if bool(self.proven.get(key, False)):
             _fail(REASON_ALREADY_PROVEN)
+        _require_recipient_contract()
         self.probing[key] = True
         return {"probing": key}
 
@@ -1095,11 +1113,14 @@ class ReputationOracle(gl.Contract):
         An open handshake is required and is consumed, so a confirmation can
         neither arrive unrequested nor be replayed.
         """
-        _require_recipient_contract()
-        _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
+        # An open handshake is set only by `prove_recipient`, which requires the
+        # marker, so a wallet can never have one. Checking it first refuses a
+        # wallet on a storage read rather than on the view call.
         if not bool(self.probing.get(key, False)):
             _fail(REASON_NO_PROBE_OUTSTANDING)
+        _refuse_the_transaction_origin()
+        _require_recipient_contract()
 
         self.probing[key] = False
         self.proven[key] = True
@@ -1164,11 +1185,18 @@ class ReputationOracle(gl.Contract):
         # actually spends the entitlement rather than only on the one that
         # recorded the eligibility. Costs nothing and does not depend on the
         # proof having been recorded correctly.
-        _require_recipient_contract()
-        _refuse_the_transaction_origin()
         key = _owed_key(gl.message.sender_address)
+        # Cheapest first, and the order matters. `proven` is a storage read, and
+        # it can only be true for an address that already answered
+        # `credent_recipient()` at `confirm_recipient` -- so nothing reaches the
+        # view call below that has not already been established as a recipient
+        # contract, and a wallet is refused here in milliseconds instead of
+        # running a studio leader to its 600-second limit. See
+        # `_require_recipient_contract`.
         if not bool(self.proven.get(key, False)):
             _fail(REASON_RECIPIENT_UNPROVEN)
+        _refuse_the_transaction_origin()
+        _require_recipient_contract()
 
         current = self.owed.get(key)
         amount = 0 if current is None else int(current)

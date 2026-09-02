@@ -43,7 +43,20 @@ class TestAWalletCannotBePaid:
         except Exception as error:  # noqa: BLE001 - the message is the assertion
             raised = str(error)
         assert raised is not None, "a wallet opened the payout handshake"
-        assert "credent_recipient" in raised or "not_a_credent_recipient" in raised, raised
+        # Which guard turns it away depends on the network, and both are
+        # correct. Here sender and origin are the same address, so the cheap
+        # origin refusal fires before the view call — which is the point of
+        # that ordering: a wallet is refused on a comparison rather than on a
+        # view call into an address with no code, which studio runs to its
+        # 600-second leader limit.
+        assert any(
+            reason in raised
+            for reason in (
+                "caller_is_the_transaction_origin",
+                "not_a_credent_recipient",
+                "credent_recipient",
+            )
+        ), raised
         assert oracle.is_proven(str(direct_alice)) is False
 
     def test_a_wallet_cannot_close_a_handshake_it_never_opened(

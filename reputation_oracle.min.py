@@ -1020,29 +1020,30 @@ compare_user_errors=compare_errors,
   return {"from": key, "to": _owed_key(to), "amount": amount}
  @gl.public.write
  def prove_recipient(self) -> dict:
-  _require_recipient_contract()
+  _refuse_the_transaction_origin()
   key = _owed_key(gl.message.sender_address)
   if bool(self.proven.get(key, False)):
    _fail(REASON_ALREADY_PROVEN)
+  _require_recipient_contract()
   self.probing[key] = True
   return {"probing": key}
  @gl.public.write
  def confirm_recipient(self) -> dict:
-  _require_recipient_contract()
-  _refuse_the_transaction_origin()
   key = _owed_key(gl.message.sender_address)
   if not bool(self.probing.get(key, False)):
    _fail(REASON_NO_PROBE_OUTSTANDING)
+  _refuse_the_transaction_origin()
+  _require_recipient_contract()
   self.probing[key] = False
   self.proven[key] = True
   return {"proven": key}
  @gl.public.write
  def withdraw(self) -> dict:
-  _require_recipient_contract()
-  _refuse_the_transaction_origin()
   key = _owed_key(gl.message.sender_address)
   if not bool(self.proven.get(key, False)):
    _fail(REASON_RECIPIENT_UNPROVEN)
+  _refuse_the_transaction_origin()
+  _require_recipient_contract()
   current = self.owed.get(key)
   amount = 0 if current is None else int(current)
   if amount <= 0:

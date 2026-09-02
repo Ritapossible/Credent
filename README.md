@@ -83,8 +83,8 @@ vectors pinning the TypeScript port used by the site to the same answers.
 
 | Network | Address | Artifact |
 |---|---|---|
-| GenLayer Studio | [`0x0E78A40BEf6d0Fe85375648aFE0B3bF787A26238`](https://explorer-studio.genlayer.com/address/0x0E78A40BEf6d0Fe85375648aFE0B3bF787A26238) | `reputation_oracle.py` |
-| Testnet Bradbury | [`0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5`](https://explorer-bradbury.genlayer.com/address/0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5) | `reputation_oracle.min.py` |
+| GenLayer Studio | [`0x465ebEa608482d1ef8D2E6f09C6F7049f988b4Ec`](https://explorer-studio.genlayer.com/address/0x465ebEa608482d1ef8D2E6f09C6F7049f988b4Ec) | `reputation_oracle.py` |
+| Testnet Bradbury | [`0xaE321ADbd5d8769bFFd5d25d39251BB53E418524`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524) | `reputation_oracle.min.py` |
 
 Both run the **production policy**, which is deliberately not the constructor's
 defaults: the defaults leave `min_bond` at zero, which makes attestations free
@@ -119,7 +119,7 @@ cd credent
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest                  # 364 tests, no network
+python -m pytest                  # 365 tests, no network
 
 cd web
 npm install
@@ -322,7 +322,7 @@ with.
 ### Offline — no network, runs in CI
 
 ```bash
-python -m pytest                 # 364 tests: engine, prompts, contract, parity
+python -m pytest                 # 365 tests: engine, prompts, contract, parity
 cd web
 npm run parity                   # 3,421 vectors: the TS port agrees with the engine
 npm run units                    # formatting, error text, calldata encoding
@@ -394,7 +394,7 @@ contributor without it still gets a green run.
 `npm run livedemo` settles a real engagement against whatever `deployments.json`
 names, under the production policy — nothing is stubbed and no throwaway
 instance is used. On Testnet Bradbury,
-[`0x2b11d8Cb`](https://explorer-bradbury.genlayer.com/address/0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5),
+[`0x2b11d8Cb`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524),
 paying a recipient contract at
 [`0xf3E915b5`](https://explorer-bradbury.genlayer.com/address/0xf3E915b59b40c81F187DBB4a2878b6747A065689):
 
@@ -426,7 +426,7 @@ ok   the contract covers everything it has not sent
 ```
 
 The same script, same result, on studionet
-[`0x0E78A40B`](https://explorer-studio.genlayer.com/address/0x0E78A40BEf6d0Fe85375648aFE0B3bF787A26238),
+[`0x0E78A40B`](https://explorer-studio.genlayer.com/address/0x465ebEa608482d1ef8D2E6f09C6F7049f988b4Ec),
 paying [`0x71BdA77c`](https://explorer-studio.genlayer.com/address/0x71BdA77c08cadd230B06D11231A314de21683C4b):
 [`attest`](https://explorer-studio.genlayer.com/tx/0x77d4dbe8770bfb1419958d72a65045ad8c1c15a54954e1ac16254aaefac80350),
 [`withdraw`](https://explorer-studio.genlayer.com/tx/0x02894dd876726860f760452e04ad141369927abbb10ea687f7104969decd4df6)
@@ -442,7 +442,7 @@ of the wallet's assigned credit, and a wallet's
 `npm run recovery` drives the reported sentence clause by clause against the
 Bradbury deployment, printing a transaction for every step. The run behind this
 table is
-[`0x2b11d8Cb`](https://explorer-bradbury.genlayer.com/address/0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5),
+[`0x2b11d8Cb`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524),
 with an ordinary wallet at `0xF9dF362E` and a recipient contract at
 [`0x3a5Af150`](https://explorer-bradbury.genlayer.com/address/0x3a5Af150723aa42193Cde8655D27CAA042A6E0BC):
 
@@ -565,7 +565,7 @@ Deploying without them takes the contract defaults, and the seventh of those is
 Site configuration is `web/.env`:
 
 ```bash
-VITE_CONTRACT_ADDRESS=0x0E78A40BEf6d0Fe85375648aFE0B3bF787A26238
+VITE_CONTRACT_ADDRESS=0x465ebEa608482d1ef8D2E6f09C6F7049f988b4Ec
 VITE_GENLAYER_NETWORK=studionet
 ```
 
@@ -651,6 +651,32 @@ decorator on it, and E106 then refuses any public name beginning with `__`. The
 two rules cannot both be satisfied, so a recipient contract can be lint-clean or
 receive value quietly, not both.
 
+**A view call into an address with no code hangs studio's leader.** It does not
+fail fast: the leader runs to its 600-second execution limit and the
+transaction finalises as `Leader Timeout` with `Contract Error: timeout` and
+`Leader execution exceeded 600.000s` on stderr. Bradbury refuses the identical
+call in seven to fourteen seconds. The refusal is correct on both — nothing
+moves — but on studio it costs ten minutes of leader time per attempt, which is
+a cheap way to waste a validator's day.
+
+This matters to any contract that uses a view call as a guard, which is what
+`_require_recipient_contract` does here. The fix is ordering: run every cheap,
+classified refusal first, so nothing reaches the view call that a storage read
+would have turned away. Measured on the deployed contract before and after:
+
+```text
+                        before          after
+withdraw (wallet)       600s timeout    7.0s  classified rejection
+prove_recipient         600s timeout    8.9s  classified rejection
+confirm_recipient       600s timeout    4.7s  classified rejection
+```
+
+Reordering weakens nothing, and that is what makes it available: `proven` is
+only true for an address that already answered the marker at
+`confirm_recipient`, and `probing` is only set by `prove_recipient`, which
+requires it. Nothing reaches the view call that had not already been
+established. A test pins the order, because it reads like style until it isn't.
+
 **Nodes rate-limit and the client does not retry.** Bradbury answers `-32005`
 with a `retryAfterMs`; honour it with backoff or a long run will die halfway.
 
@@ -671,7 +697,7 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 364 tests and 3,421 parity vectors, plus nine
+Offline the project carries 365 tests and 3,421 parity vectors, plus nine
 direct-mode tests that execute the contract itself, and `genvm-lint` validates
 the rebuilt schema at 29 methods and 14 constructor parameters.
 

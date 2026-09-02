@@ -937,3 +937,43 @@ def test_every_obligation_is_counted(artifact_source: str) -> None:
     liabilities = _code_of(fns["liabilities"])
     for key in ("total_bond", "total_collateral", "obligations", "slashed", "committed"):
         assert key in liabilities, f"liabilities does not report {key}"
+
+
+def test_the_cheap_refusal_runs_before_the_expensive_one(artifact_source: str) -> None:
+    """Guard order is load-bearing, and looks like style until it isn't.
+
+    `_require_recipient_contract` view-calls the caller. Measured on studionet,
+    a view call into an address with no code does not fail fast: the leader runs
+    to its 600-second limit and the transaction finalises as `Leader Timeout` /
+    `Contract Error: timeout`. The same three calls on bradbury were refused in
+    seven to fourteen seconds, and `assign_to` to the zero address — the one
+    refusal that does *not* view-call the caller — was refused cleanly on both.
+
+    So the refusal is correct everywhere and nothing ever moves; what the order
+    decides is whether a caller who was going to be refused anyway costs ten
+    minutes of somebody's leader first. Every storage check that a genuine
+    recipient must already satisfy therefore runs before the view call.
+
+    Reordering weakens nothing, which is why it is safe: `proven` can only be
+    true for an address that passed the marker at `confirm_recipient`, and
+    `probing` can only be set by `prove_recipient`, which requires the marker.
+    Nothing reaches the view call that had not already been established.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+    for method, cheap in (
+        ("withdraw", "self.proven"),
+        ("confirm_recipient", "self.probing"),
+        ("prove_recipient", "_refuse_the_transaction_origin()"),
+    ):
+        code = _code_of(fns[method])
+        assert "_require_recipient_contract()" in code, (
+            f"{method} no longer establishes the recipient at all"
+        )
+        assert cheap in code, f"{method} lost its cheap guard ({cheap})"
+        assert code.index(cheap) < code.index("_require_recipient_contract()"), (
+            f"{method} runs the view call before {cheap}, so a caller it was "
+            "going to refuse anyway can burn a studio leader's whole 600-second "
+            "budget first"
+        )
