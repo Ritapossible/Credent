@@ -18,6 +18,7 @@ rather than on the prose, and prices the next job from what the record says.
 - [How it works](#how-it-works)
 - [Deployments](#deployments)
 - [Quick start](#quick-start)
+- [Walkthrough](WALKTHROUGH.md)
 - [Payouts](#payouts)
 - [Verification](#verification)
 - [Project layout](#project-layout)
@@ -97,7 +98,7 @@ whitespace and nothing else: comments and docstrings are cut, indentation is
 rewritten as one space per level, and continuation lines inside brackets go
 flush left. Every row covered by a multi-line string is preserved byte for byte,
 because the grading prompts are triple-quoted and validators grade against them.
-140,044 bytes become 48,180, and `ast.dump` on both files is compared before
+141,940 bytes become 48,215, and `ast.dump` on both files is compared before
 either is written.
 
 Verify any deployment before trusting it:
@@ -119,7 +120,7 @@ cd credent
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest                  # 368 tests, no network
+python -m pytest                  # 370 tests, no network
 
 cd web
 npm install
@@ -137,6 +138,12 @@ genvm-lint check reputation_oracle.py
 
 `reputation_oracle.py` is generated. Editing it directly is a mistake — it is
 overwritten, and the test suite fails when it drifts from its sources.
+
+**To drive the whole lifecycle through the site**, see
+[`WALKTHROUGH.md`](WALKTHROUGH.md): copy-paste scope, claim and evidence for one
+full pass through `/attest`, and what each step should cost. It needs two funded
+accounts, because only the named provider can accept an engagement and a client
+cannot name themselves.
 
 ---
 
@@ -246,7 +253,7 @@ Credent recipient, or it does not reach it at all.
 The cost is that a push recipient must be a Credent recipient contract, not
 merely any contract. `assign_to` is the route for everybody else.
 `web/scripts/claimant.py` is the reference implementation; the marker method is
-six lines of it.
+three lines of it — a decorator, a signature, and a returned string.
 
 **2. The transaction's own entry point is refused.** Only an entry point can
 have an externally owned account as `sender_address`; every deeper frame is one
@@ -286,7 +293,7 @@ over four numbers, and the reason it lives in the engine rather than in the
 contract is that the engine's tests can *run* it:
 
 ```python
-def resolve_withdrawal(*, elapsed_seconds, held, obligations, settle_seconds) -> str
+def resolve_withdrawal(*, elapsed_seconds, held, committed, settle_seconds) -> str
 ```
 
 | Outcome | When | Effect |
@@ -349,7 +356,7 @@ with.
 ### Offline — no network, runs in CI
 
 ```bash
-python -m pytest                 # 368 tests: engine, prompts, contract, parity
+python -m pytest                 # 370 tests: engine, prompts, contract, parity
 cd web
 npm run parity                   # 3,421 vectors: the TS port agrees with the engine
 npm run units                    # formatting, error text, calldata encoding
@@ -564,6 +571,8 @@ contract_shell.py         everything that talks to the chain and nothing that
 build_contract.py         splices the three into reputation_oracle.py
 minify_contract.py        → reputation_oracle.min.py for pubdata-limited networks
 deployments.json          the deployed addresses, in one place
+WALKTHROUGH.md            a hands-on pass through the lifecycle, with values
+parity_vectors.json       the vectors the TypeScript port is checked against
 tools/audit_review.py     checks the live bytes against every review item
 web/                      the React site, the TypeScript port of the engine, and
                           the end-to-end scripts
@@ -768,7 +777,7 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 368 tests and 3,421 parity vectors, plus ten
+Offline the project carries 370 tests and 3,421 parity vectors, plus ten
 direct-mode tests that execute the contract itself, and `genvm-lint` validates
 the rebuilt schema at 29 methods and 14 constructor parameters.
 

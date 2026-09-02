@@ -1425,3 +1425,30 @@ class TestResolveWithdrawal:
             settle_seconds=self.SETTLE,
         )
         assert crowded == core.WITHDRAWAL_DELIVERED
+
+
+def test_the_readme_states_the_real_recovery_signature():
+    """The README's signature for `resolve_withdrawal` must be the real one.
+
+    It said `obligations` where the parameter is `committed`, one paragraph
+    above a table that used `committed` correctly -- so the document
+    contradicted itself about the argument a reviewer is most likely to check,
+    in the section written to answer the review. The name matters: the rule
+    weighs bonds and slashings too, and `obligations` is the narrower figure
+    that an earlier, wrong version of this decision used.
+    """
+    import inspect
+    import pathlib
+    import re as _re
+
+    readme = (pathlib.Path(__file__).parent / "README.md").read_text(encoding="utf-8")
+    match = _re.search(r"def resolve_withdrawal\(([^)]*)\)", readme)
+    assert match, "the README no longer shows the recovery signature"
+
+    stated = [p.strip() for p in match.group(1).split(",") if p.strip() and p.strip() != "*"]
+    real = [
+        name
+        for name, p in inspect.signature(core.resolve_withdrawal).parameters.items()
+        if p.kind is not inspect.Parameter.VAR_KEYWORD
+    ]
+    assert stated == real, f"the README says {stated}; the function takes {real}"

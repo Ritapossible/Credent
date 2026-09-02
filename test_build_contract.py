@@ -1049,3 +1049,32 @@ def test_the_only_transfer_pays_a_verified_recipient(artifact_source: str) -> No
     assert body.index("_require_recipient_contract()") < body.index("emit_transfer"), (
         f"`{holder.name}` verifies the recipient after paying it"
     )
+
+
+def test_the_readme_states_the_real_artifact_sizes() -> None:
+    """The README's byte figures must be the artifacts' actual sizes.
+
+    Same failure as the test count, and the same reason it matters: a number a
+    reader can check without running anything is worth nothing if it is wrong,
+    and this project has already been rejected once over stale figures that
+    disagreed with what was deployed. Both had drifted -- the README claimed
+    140,044 and 48,180 against real sizes of 141,940 and 48,215 -- because the
+    minifier's indentation pass changed one and a contract edit changed the
+    other, and prose does not recompile.
+    """
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    match = re.search(r"([\d,]+) bytes become ([\d,]+)", readme)
+    assert match, "the README no longer states the artifact sizes"
+
+    stated_full = int(match.group(1).replace(",", ""))
+    stated_min = int(match.group(2).replace(",", ""))
+    actual_full = (ROOT / "reputation_oracle.py").stat().st_size
+    actual_min = (ROOT / "reputation_oracle.min.py").stat().st_size
+
+    assert stated_full == actual_full, (
+        f"the README says the contract is {stated_full:,} bytes; it is {actual_full:,}"
+    )
+    assert stated_min == actual_min, (
+        f"the README says the minified artifact is {stated_min:,} bytes; "
+        f"it is {actual_min:,}"
+    )
