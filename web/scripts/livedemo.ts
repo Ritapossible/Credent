@@ -392,10 +392,12 @@ console.log(
   `\n  liabilities  owed ${gen(asBig(liabilities.total_owed))}  ` +
     `in_flight ${gen(asBig(liabilities.total_in_flight))}  ` +
     `bonds ${gen(asBig(liabilities.total_bond))}  ` +
-    `collateral ${gen(asBig(liabilities.total_collateral))}`,
+    `collateral ${gen(asBig(liabilities.total_collateral))}  ` +
+    `slashed ${gen(asBig(liabilities.slashed))}`,
 )
 console.log(
-  `               obligations ${gen(asBig(liabilities.obligations))}  held ${gen(asBig(liabilities.held))}`,
+  `               obligations ${gen(asBig(liabilities.obligations))}  ` +
+    `committed ${gen(asBig(liabilities.committed))}  held ${gen(asBig(liabilities.held))}`,
 )
 // `obligations` less what is in flight. A withdrawal debits this contract's
 // balance the moment it is emitted while the claim stays counted until
@@ -404,7 +406,7 @@ console.log(
 // here covers everything that has not been sent: entitlements, locked bonds and
 // posted collateral. `reclaim`'s own guard uses the full figure, deliberately —
 // it is asking whether a restore would leave the contract solvent.
-const notYetSent = asBig(liabilities.obligations) - asBig(liabilities.total_in_flight)
+const notYetSent = asBig(liabilities.committed) - asBig(liabilities.total_in_flight)
 check(
   asBig(liabilities.held) >= notYetSent,
   `the contract covers everything it has not sent (${gen(notYetSent)} against ${gen(asBig(liabilities.held))})`,

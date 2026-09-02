@@ -394,23 +394,23 @@ contributor without it still gets a green run.
 `npm run recovery` drives the reported sentence clause by clause against the
 Bradbury deployment, printing a transaction for every step. The run behind this
 table is
-[`0xb08f12dA`](https://explorer-bradbury.genlayer.com/address/0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5),
+[`0x2b11d8Cb`](https://explorer-bradbury.genlayer.com/address/0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5),
 with an ordinary wallet at `0xF9dF362E` and a recipient contract at
-[`0xf58470D8`](https://explorer-bradbury.genlayer.com/address/0xf58470D859D4C85c22aeBc978CBC50EC9c1AF965):
+[`0x3a5Af150`](https://explorer-bradbury.genlayer.com/address/0x3a5Af150723aa42193Cde8655D27CAA042A6E0BC):
 
 | Step | Transaction |
 |---|---|
-| `accept_engagement` — the wallet's entitlement is created | [`0xc067fa41`](https://explorer-bradbury.genlayer.com/tx/0xc067fa41e1ca1c542dd5eb19cd9264bbacbe253bb8b77e19b473870a02373bd9) |
-| **`prove_recipient` from the wallet — refused** | [`0x021399ad`](https://explorer-bradbury.genlayer.com/tx/0x021399ad19e73ff1171044655b3d82e993210fffbc753370c9557e363c6091d5) |
-| **`confirm_recipient` from the wallet — refused** | [`0x828f128b`](https://explorer-bradbury.genlayer.com/tx/0x828f128b854293ee4a0fc6dab4af4efca1d3c32d4b02a5601e8565d86b72f7a9) |
-| **`withdraw` from the wallet — refused, entitlement untouched** | [`0xf46712b1`](https://explorer-bradbury.genlayer.com/tx/0xf46712b1c45cf6dd2de7cafc337c16209365d5c390372fc0159968cfe246881a) |
-| `assign_to` — the wallet routes it to a recipient contract | [`0xf480cbb8`](https://explorer-bradbury.genlayer.com/tx/0xf480cbb8547a461e2ef72ea43666987b336fec8ae6c8aac05779073e382edf26) |
-| `prove_recipient` — the handshake, moving no value | [`0xd4227699`](https://explorer-bradbury.genlayer.com/tx/0xd4227699f811ade63004218b40881680d7f691335ceac51dcb84854813bbdeec) |
-| `confirm_recipient` | [`0xc4b22a45`](https://explorer-bradbury.genlayer.com/tx/0xc4b22a452272a1f11982c3313f6a013711e2db01b8f5dcb05bae06682b25a9c2) |
-| `withdraw` — parked in flight, not cleared | [`0x5b222717`](https://explorer-bradbury.genlayer.com/tx/0x5b2227175f9a847fe368de1e484ac50cdddb0a42c98f2a617426c5d159811e17) |
-| `reclaim` from an address with nothing in flight — refused | [`0x1c2b20c6`](https://explorer-bradbury.genlayer.com/tx/0x1c2b20c69c3e7bfa899751e90f58da5dbca9350c2511b66931c9f2d1d647d811) |
-| `reclaim` — the withdrawal resolved after the settle window | [`0x2fe4eeb1`](https://explorer-bradbury.genlayer.com/tx/0x2fe4eeb1e7cb518d08de5624c9a46ef363892d47b482f0383280628a053f4730) |
-| `reclaim` again — credited nothing | [`0x05fbe2bc`](https://explorer-bradbury.genlayer.com/tx/0x05fbe2bc2db81aedc16e7fba9611f0acbb9204e503a07e7c66dcafdf68b9dcd8) |
+| `accept_engagement` — the wallet's entitlement is created | [`0xcaa33368`](https://explorer-bradbury.genlayer.com/tx/0xcaa3336823e0c5a9e203a44bc26238df2b46cbf88018e1faa0e51985da072e8d) |
+| **`prove_recipient` from the wallet — refused** | [`0xefd6d0e5`](https://explorer-bradbury.genlayer.com/tx/0xefd6d0e56289d9bcbf089dfed4b59682046384144eb41b11b7538b61a047a313) |
+| **`confirm_recipient` from the wallet — refused** | [`0xd5c9bfb4`](https://explorer-bradbury.genlayer.com/tx/0xd5c9bfb43da8cbfc5703561c5c7814f64398394b0ac66575962000bf4155c2c3) |
+| **`withdraw` from the wallet — refused, entitlement untouched** | [`0xd6849e69`](https://explorer-bradbury.genlayer.com/tx/0xd6849e69b9006ee273d4eb66f150bb2130c588205eccfe37b7324406a5edc6b6) |
+| `assign_to` — the wallet routes it to a recipient contract | [`0x5fbba9ef`](https://explorer-bradbury.genlayer.com/tx/0x5fbba9efd77b803ff40216de15a678a161bb61cced27056f973c8a109af23e03) |
+| `prove_recipient` — the handshake, moving no value | [`0x7a4e3ff3`](https://explorer-bradbury.genlayer.com/tx/0x7a4e3ff342ac82a3f0dae5ef72acaf3d1386e8bda7e838bb29695671e7726de5) |
+| `confirm_recipient` | [`0x9be32b36`](https://explorer-bradbury.genlayer.com/tx/0x9be32b36b77c6b561ff1060beecd48c6cf45c8a6f7e07e1535f3db6f87358513) |
+| `withdraw` — parked in flight, not cleared | [`0x0868e001`](https://explorer-bradbury.genlayer.com/tx/0x0868e001a45fbba4b4caaaf928f5e99b4c0a6782cf7a59841e19ef37bbdececa) |
+| `reclaim` from an address with nothing in flight — refused | [`0x8ad3f264`](https://explorer-bradbury.genlayer.com/tx/0x8ad3f26449c59b38247299548f8ef9c867cbbe983220d75b46a6d66511abd30c) |
+| `reclaim` — the withdrawal resolved after the settle window | [`0xf06eb32e`](https://explorer-bradbury.genlayer.com/tx/0xf06eb32ef240785ce0b870f1e1d90894cd6ddca6043ac87cc505480098c1d3c9) |
+| `reclaim` again — credited nothing | [`0x3695922e`](https://explorer-bradbury.genlayer.com/tx/0x3695922e4bbdb5e60ea683ce101d290a07f28402b772ecfb0be0e5fc679c9205) |
 
 The three bold rows are the first clause of the review. Neither network reports
 a reason string for a transaction that does not complete, so each is judged on
