@@ -356,7 +356,7 @@ explaining the rule.
 ### Direct mode — the contract executed, no node and no keys
 
 ```bash
-./run_direct_tests.sh          # nine tests, well under a second
+./run_direct_tests.sh          # ten tests, well under a second
 ```
 
 GenLayer's own `genlayer-test` harness runs `reputation_oracle.py` in memory.
@@ -394,76 +394,86 @@ contributor without it still gets a green run.
 `npm run livedemo` settles a real engagement against whatever `deployments.json`
 names, under the production policy — nothing is stubbed and no throwaway
 instance is used. On Testnet Bradbury,
-[`0x2b11d8Cb`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524),
+[`0xaE321ADb`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524),
 paying a recipient contract at
-[`0xf3E915b5`](https://explorer-bradbury.genlayer.com/address/0xf3E915b59b40c81F187DBB4a2878b6747A065689):
+[`0xaFC36cef`](https://explorer-bradbury.genlayer.com/address/0xaFC36cef31Bb99779928e28e0D0716842f71FA35):
 
 | Step | Transaction |
 |---|---|
-| `open_engagement` | [`0x83207ed1`](https://explorer-bradbury.genlayer.com/tx/0x83207ed15337f14adeb7215796211d11a497771cfb061893d06ea5ea5d919fa8) |
-| `accept_engagement` — 0.875 GEN of collateral posted | [`0x792dfbaa`](https://explorer-bradbury.genlayer.com/tx/0x792dfbaa16a2177faad282ec510bea559f0631457ad2fb857daf4e1348464cbe) |
-| `close_engagement` | [`0xe8b317e6`](https://explorer-bradbury.genlayer.com/tx/0xe8b317e624abb2eced1d30fdfc434d81107fde9d64b052fa04e54e6f282da9bb) |
-| `attest` — a 1 GEN bond, graded by an LLM in consensus | [`0x33d40ea8`](https://explorer-bradbury.genlayer.com/tx/0x33d40ea8a2395d0a3cd628088f9df02d622f4140aa5a62bbb1be7ca1fe410b2f) |
-| `release_collateral` — the entitlement rises, no value moves | [`0x3c896424`](https://explorer-bradbury.genlayer.com/tx/0x3c8964248450170eb75a6531eb8dddf65bf4a12c9c40578268c9dedee5509394) |
-| `prove_recipient` — the handshake, moving no value | [`0x752b9205`](https://explorer-bradbury.genlayer.com/tx/0x752b9205ea95e8f8986e302b97b1d11dccc87c5114f0b45d05424c7b85ecf4c5) |
-| `confirm_recipient` | [`0x487f94c0`](https://explorer-bradbury.genlayer.com/tx/0x487f94c03df9b7726d936e78f385c967f9358356bc1098a5633542593288623c) |
-| **`withdraw` — 0.875 GEN leaves the contract** | [`0x3760fe0e`](https://explorer-bradbury.genlayer.com/tx/0x3760fe0efa211bb808183a037fd5332ac7a0e60ece6d2ca5be2b9cc666c5c507) |
-| **`reclaim` — resolved after the 900s settle window** | [`0xa4f9dddb`](https://explorer-bradbury.genlayer.com/tx/0xa4f9dddbec082a545df2a5bcfa1ba69e91d82183d21ba7926d987d89d7f292ba) |
-| `assign_to` — the wallet routes its own 0.05 GEN | [`0x86c162c0`](https://explorer-bradbury.genlayer.com/tx/0x86c162c06eef21c4cc45eb410cea81da5604c82e5c006a25fddca6095b2af848) |
-| `withdraw` — 0.05 GEN delivered | [`0x2cd25895`](https://explorer-bradbury.genlayer.com/tx/0x2cd258952ada55bb71bc57141d3e6c31163b5345ba6fc33117bbc23392466846) |
-| wallet `withdraw`, refused | [`0x3edb4752`](https://explorer-bradbury.genlayer.com/tx/0x3edb4752d87636e6fc7f68bad65e2ad7556264593914301519eb0fd308c5d5ba) |
-| wallet `prove_recipient`, refused | [`0xaf30345f`](https://explorer-bradbury.genlayer.com/tx/0xaf30345f392228aa88801fe65db7c73b2f32e174030d48da8f54d524861f576f) |
-| `assign_to` the zero address, refused | [`0xbdd38211`](https://explorer-bradbury.genlayer.com/tx/0xbdd38211da30cf691bc1f38c763d2aba89211830371caeee3136ac35e9e6ffd0) |
+| `open_engagement` | [`0x241d98f2`](https://explorer-bradbury.genlayer.com/tx/0x241d98f289dd457e8213c73cf12d31e6807a37e90d321b6850d70eecccf3c2bb) |
+| `accept_engagement` — 0.875 GEN of collateral posted | [`0x93a889b9`](https://explorer-bradbury.genlayer.com/tx/0x93a889b98ed2592ca679bc878a9534779d7ad97baa0f423d94c48bd6c023c6bf) |
+| `close_engagement` | [`0x485472dd`](https://explorer-bradbury.genlayer.com/tx/0x485472dd35262ea3888cb1563ff04abefcc682179c3989106b91614a714166dd) |
+| `attest` — a 1 GEN bond, graded by an LLM in consensus | [`0xf5f06593`](https://explorer-bradbury.genlayer.com/tx/0xf5f06593fd0d3409829ab719c15c47f590c95beed93759dcc10f0a401d89fb05) |
+| `release_collateral` — the entitlement rises, no value moves | [`0x8faf1306`](https://explorer-bradbury.genlayer.com/tx/0x8faf1306a85f154d6159b3fd46f43c55df3b1012bc0924ce4043b9e634e6b8fc) |
+| `prove_recipient` — the handshake, moving no value | [`0xaa5f3621`](https://explorer-bradbury.genlayer.com/tx/0xaa5f362183b33c0741f4d83bad645aa01ee869161efdd7a801e34e6dafde3874) |
+| `confirm_recipient` | [`0xd14e64a9`](https://explorer-bradbury.genlayer.com/tx/0xd14e64a9574a06ba5c6943cff243671fa921633dd52afebe2e1fb84686186ef6) |
+| **`withdraw` — 0.875 GEN leaves the contract** | [`0x1782ccee`](https://explorer-bradbury.genlayer.com/tx/0x1782ccee2563d04c4b9704e690ad06ab82196804578cdaa25d729199ad7c5f35) |
+| **`reclaim` — resolved after the 900s settle window** | [`0x7c4ea510`](https://explorer-bradbury.genlayer.com/tx/0x7c4ea51019a519077a80759dcd6bedddf31e1ca13624bf724110827d857fdc95) |
+| `assign_to` — the wallet routes its own 0.05 GEN | [`0x7553e0ec`](https://explorer-bradbury.genlayer.com/tx/0x7553e0ec2c551006e0d7de6a423e32326776cb3e3a27e09d4a0d7971f6aa9b92) |
+| `withdraw` — 0.05 GEN delivered | [`0x04704769`](https://explorer-bradbury.genlayer.com/tx/0x04704769f5e262dacd8d43c176e5fb7c7a6d1315ba14e49fd41c4ffc80df5e3d) |
+| wallet `withdraw`, refused | [`0x1bf11177`](https://explorer-bradbury.genlayer.com/tx/0x1bf11177357f0a3495542155c79be971996c3318e9d041a566250d0133bc429d) |
+| wallet `prove_recipient`, refused | [`0xad0e5bc2`](https://explorer-bradbury.genlayer.com/tx/0xad0e5bc29392b3d8b7d518f71ed63dff93b484e04c7bf54718c9e56a94afafc9) |
+| `assign_to` the zero address, refused | [`0x64ea2430`](https://explorer-bradbury.genlayer.com/tx/0x64ea24307fa1c167e9a2a718168db809801703c5a9899f997b012b1d208b1430) |
 
 The claimant's balance went `0 GEN -> 0.875 GEN` on that `withdraw`, and the
-`reclaim` a thousand seconds later closed the claim without crediting anything
+`reclaim` fourteen minutes later closed the claim without crediting anything
 back. The run ends with the books balanced:
 
 ```text
-owed 0  in_flight 0.05  bonds 1  collateral 0.04375  slashed 0
-obligations 1.09375   committed 1.09375   held 1.04375
+owed 0  in_flight 0.05  bonds 1  collateral 0.875  slashed 0
+obligations 1.925   committed 1.925   held 1.875
 ok   the contract covers everything it has not sent
 ```
 
 The same script, same result, on studionet
-[`0x0E78A40B`](https://explorer-studio.genlayer.com/address/0x465ebEa608482d1ef8D2E6f09C6F7049f988b4Ec),
-paying [`0x71BdA77c`](https://explorer-studio.genlayer.com/address/0x71BdA77c08cadd230B06D11231A314de21683C4b):
-[`attest`](https://explorer-studio.genlayer.com/tx/0x77d4dbe8770bfb1419958d72a65045ad8c1c15a54954e1ac16254aaefac80350),
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0x02894dd876726860f760452e04ad141369927abbb10ea687f7104969decd4df6)
+[`0x465ebEa6`](https://explorer-studio.genlayer.com/address/0x465ebEa608482d1ef8D2E6f09C6F7049f988b4Ec),
+paying [`0x98A0681c`](https://explorer-studio.genlayer.com/address/0x98A0681c9c1Ca64caAD88497de765800b2964fd6):
+[`attest`](https://explorer-studio.genlayer.com/tx/0xbe65a55cd67592f2d6bdbab4749ea840f39f93c41436379f34f612f06655d884),
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0x064d3bcca4178e695228b2fc6df7e387d5ff1fbf8a1a85166791f4a664e7e06a)
 (`0 GEN -> 0.875 GEN`),
-[`reclaim`](https://explorer-studio.genlayer.com/tx/0xf4969748dbb30e43837183e6a8368e69a3723791a9ae7e496aea29657884a60d)
+[`reclaim`](https://explorer-studio.genlayer.com/tx/0x2494e824713260a7bc5aba092ecdf3352b59bdbf73a7412d840596ee29b6dc3c)
 after the settle window,
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0x3606478a8532c6c2696dfe1ff1c3831871762b0735837d717f2e3d25197c2044)
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0xd275284b4901e313dd320d739df2f36f0ecd6ada87f3c58e45a29c68c8da1c61)
 of the wallet's assigned credit, and a wallet's
-[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0xacc7ba6c883cf93c78ab15f26d3b3f6c3f6cb1efb15a4f05695c48406a377eaf).
+[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0xb2c3e453d1663508c34c7fd9db994fda9a1077f1125e6cf57b1b18b2ee6779e5).
+
+Studionet reports the classified reason behind each refusal, so that last
+transaction reads `recipient_has_not_proven_it_can_receive` in the explorer,
+the wallet's `prove_recipient` reads `caller_is_the_transaction_origin`, and
+`assign_to` the zero address reads `recipient_is_the_zero_address`. Bradbury
+returns no reason string, which is why the Bradbury rows above are judged on
+contract state instead.
 
 ### The review's scenario, on a deployed contract
 
 `npm run recovery` drives the reported sentence clause by clause against the
 Bradbury deployment, printing a transaction for every step. The run behind this
 table is
-[`0x2b11d8Cb`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524),
+[`0xaE321ADb`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524),
 with an ordinary wallet at `0xF9dF362E` and a recipient contract at
-[`0x3a5Af150`](https://explorer-bradbury.genlayer.com/address/0x3a5Af150723aa42193Cde8655D27CAA042A6E0BC):
+[`0x849Ac071`](https://explorer-bradbury.genlayer.com/address/0x849Ac071B0960926C76524d9c256F1e672a973AC):
 
 | Step | Transaction |
 |---|---|
-| `accept_engagement` — the wallet's entitlement is created | [`0xcaa33368`](https://explorer-bradbury.genlayer.com/tx/0xcaa3336823e0c5a9e203a44bc26238df2b46cbf88018e1faa0e51985da072e8d) |
-| **`prove_recipient` from the wallet — refused** | [`0xefd6d0e5`](https://explorer-bradbury.genlayer.com/tx/0xefd6d0e56289d9bcbf089dfed4b59682046384144eb41b11b7538b61a047a313) |
-| **`confirm_recipient` from the wallet — refused** | [`0xd5c9bfb4`](https://explorer-bradbury.genlayer.com/tx/0xd5c9bfb43da8cbfc5703561c5c7814f64398394b0ac66575962000bf4155c2c3) |
-| **`withdraw` from the wallet — refused, entitlement untouched** | [`0xd6849e69`](https://explorer-bradbury.genlayer.com/tx/0xd6849e69b9006ee273d4eb66f150bb2130c588205eccfe37b7324406a5edc6b6) |
-| `assign_to` — the wallet routes it to a recipient contract | [`0x5fbba9ef`](https://explorer-bradbury.genlayer.com/tx/0x5fbba9efd77b803ff40216de15a678a161bb61cced27056f973c8a109af23e03) |
-| `prove_recipient` — the handshake, moving no value | [`0x7a4e3ff3`](https://explorer-bradbury.genlayer.com/tx/0x7a4e3ff342ac82a3f0dae5ef72acaf3d1386e8bda7e838bb29695671e7726de5) |
-| `confirm_recipient` | [`0x9be32b36`](https://explorer-bradbury.genlayer.com/tx/0x9be32b36b77c6b561ff1060beecd48c6cf45c8a6f7e07e1535f3db6f87358513) |
-| `withdraw` — parked in flight, not cleared | [`0x0868e001`](https://explorer-bradbury.genlayer.com/tx/0x0868e001a45fbba4b4caaaf928f5e99b4c0a6782cf7a59841e19ef37bbdececa) |
-| `reclaim` from an address with nothing in flight — refused | [`0x8ad3f264`](https://explorer-bradbury.genlayer.com/tx/0x8ad3f26449c59b38247299548f8ef9c867cbbe983220d75b46a6d66511abd30c) |
-| `reclaim` — the withdrawal resolved after the settle window | [`0xf06eb32e`](https://explorer-bradbury.genlayer.com/tx/0xf06eb32ef240785ce0b870f1e1d90894cd6ddca6043ac87cc505480098c1d3c9) |
-| `reclaim` again — credited nothing | [`0x3695922e`](https://explorer-bradbury.genlayer.com/tx/0x3695922e4bbdb5e60ea683ce101d290a07f28402b772ecfb0be0e5fc679c9205) |
+| `open_engagement` | [`0xd17a078d`](https://explorer-bradbury.genlayer.com/tx/0xd17a078d729348724ef2cbc36cb38f68293cc00ef911b3c976afff11859d69f2) |
+| `accept_engagement` — the wallet's entitlement is created | [`0x17b9f85f`](https://explorer-bradbury.genlayer.com/tx/0x17b9f85f81ade2dc06ad7cdf63bdf7944219dd6079d51d298bff77d00956019d) |
+| **`prove_recipient` from the wallet — refused** | [`0xcadda61b`](https://explorer-bradbury.genlayer.com/tx/0xcadda61b657ae2a487553b2940a13726ce0043fccd73b17d149ea8df6d258649) |
+| **`confirm_recipient` from the wallet — refused** | [`0x8b2990f1`](https://explorer-bradbury.genlayer.com/tx/0x8b2990f17d8241b50893e0a882057de0f1b5d2bb51eaed3b885424977d9a1be2) |
+| **`withdraw` from the wallet — refused, entitlement untouched** | [`0x44e5689e`](https://explorer-bradbury.genlayer.com/tx/0x44e5689ea803a070f80a93059c1223e0b74e758535ffad62e4a20544a19b8da9) |
+| `assign_to` — the wallet routes it to a recipient contract | [`0x5462d14c`](https://explorer-bradbury.genlayer.com/tx/0x5462d14cc542097ad09f1cceac52fa596a2f4e35e93da28c81df62112922fab1) |
+| `prove_recipient` — the handshake, moving no value | [`0x45ed2bbe`](https://explorer-bradbury.genlayer.com/tx/0x45ed2bbea3062f475ce4045ad30f1f8aa95625038c030cc25d3ce4b03e4c9818) |
+| `confirm_recipient` | [`0x968cd33b`](https://explorer-bradbury.genlayer.com/tx/0x968cd33b14e69103bd4096692ce32e6a54943a4d6048a787453caa4558c123ef) |
+| `withdraw` — parked in flight, not cleared | [`0x6cbe6b97`](https://explorer-bradbury.genlayer.com/tx/0x6cbe6b9757d76e5d7f3edc62d3e4e7d10162a1adddf9a2a759804b7c22f69995) |
+| `reclaim` from an address with nothing in flight — refused | [`0x1731b0c9`](https://explorer-bradbury.genlayer.com/tx/0x1731b0c95846b9ffa837c0b4fea8703601c4169fb4acd8a308f36fd272c125d5) |
+| `reclaim` — the withdrawal resolved after the settle window | [`0x7a188ff3`](https://explorer-bradbury.genlayer.com/tx/0x7a188ff3de24ae0b37a79e4baf6126374282db3bc4b5f7c45211773146fe93d7) |
+| `reclaim` again — credited nothing | [`0x18ad3fe3`](https://explorer-bradbury.genlayer.com/tx/0x18ad3fe363e25fc9769e102a28aae321142f5afaadb89b5bdef0d8c4597be196) |
 
-The three bold rows are the first clause of the review. Neither network reports
-a reason string for a transaction that does not complete, so each is judged on
+The three bold rows are the first clause of the review. Bradbury reports no
+reason string for a transaction that does not complete, so each is judged on
 what the contract state says afterwards: `is_proven` never turns true, and the
-wallet's 0.02 GEN is still in `owed_to` when all three are done.
+wallet's 0.02 GEN is still in `owed_to` when all three are done. The run closes
+with the contract still covering everything it has not sent — 1.918750 GEN held
+against 1.968750 GEN committed, of which 0.05 GEN is in flight.
 
 What this run cannot show is a transfer failing, because none does — every
 contract is credited. That branch is the sixth row of the direct-mode table
@@ -474,12 +484,19 @@ above.
 ```bash
 npm run verify-deployment        # deployed bytes are this repository's, hashed
 npm run agreement                # agreement preserves the bond and collateral outcomes
+npm run checkreadme              # every transaction this README cites is real
 python ../tools/audit_review.py  # every review item, against the live bytes
 ```
 
 `audit_review` reads both *deployed* contracts over `gen_getContractCode`,
 parses them, and checks each item against the bytes that are live rather than
 the ones that are committed — the two have come apart in this project before.
+
+`checkreadme` resolves every transaction hash in the tables below and asserts
+it ran against an address this README links, on the network it claims. The
+tables and `deployments.json` drifted apart once, after a redeploy updated the
+addresses but not the hashes beneath them, and the stale rows read as evidence
+that a fix had never been deployed. This is the check that catches that.
 
 ### End-to-end — needs keys and gas
 
@@ -499,11 +516,12 @@ parked in `in_flight`, calls `reclaim`, and asserts the withdrawal closed
 without crediting anything back.
 
 Refusals are judged on contract state as well as on the error text, because they
-have to be. Neither network reports a reason string for a transaction that does
-not complete, and a node that stops answering while a refused transaction
-settles produces a receipt timeout that reads exactly like a real failure. Each
-refused call names a figure it would have moved, and an unchanged figure settles
-the question without the node having to come back.
+have to be. Studionet reports the classified reason a refusal carries, but
+Bradbury reports no reason string at all, and a node that stops answering while
+a refused transaction settles produces a receipt timeout that reads exactly like
+a real failure. So each refused call also names a figure it would have moved,
+and an unchanged figure settles the question without the node having to come
+back.
 
 ---
 
@@ -697,7 +715,7 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 365 tests and 3,421 parity vectors, plus nine
+Offline the project carries 365 tests and 3,421 parity vectors, plus ten
 direct-mode tests that execute the contract itself, and `genvm-lint` validates
 the rebuilt schema at 29 methods and 14 constructor parameters.
 
