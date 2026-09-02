@@ -389,6 +389,54 @@ Needs Python 3.12+ and a cached GenVM release tarball. The default
 `python -m pytest` skips the directory when the harness is not importable, so a
 contributor without it still gets a green run.
 
+### A settlement on the deployed contract
+
+`npm run livedemo` settles a real engagement against whatever `deployments.json`
+names, under the production policy — nothing is stubbed and no throwaway
+instance is used. On Testnet Bradbury,
+[`0x2b11d8Cb`](https://explorer-bradbury.genlayer.com/address/0x2b11d8CbcFE853451e72abfC6cF24bb296915DD5),
+paying a recipient contract at
+[`0xf3E915b5`](https://explorer-bradbury.genlayer.com/address/0xf3E915b59b40c81F187DBB4a2878b6747A065689):
+
+| Step | Transaction |
+|---|---|
+| `open_engagement` | [`0x83207ed1`](https://explorer-bradbury.genlayer.com/tx/0x83207ed15337f14adeb7215796211d11a497771cfb061893d06ea5ea5d919fa8) |
+| `accept_engagement` — 0.875 GEN of collateral posted | [`0x792dfbaa`](https://explorer-bradbury.genlayer.com/tx/0x792dfbaa16a2177faad282ec510bea559f0631457ad2fb857daf4e1348464cbe) |
+| `close_engagement` | [`0xe8b317e6`](https://explorer-bradbury.genlayer.com/tx/0xe8b317e624abb2eced1d30fdfc434d81107fde9d64b052fa04e54e6f282da9bb) |
+| `attest` — a 1 GEN bond, graded by an LLM in consensus | [`0x33d40ea8`](https://explorer-bradbury.genlayer.com/tx/0x33d40ea8a2395d0a3cd628088f9df02d622f4140aa5a62bbb1be7ca1fe410b2f) |
+| `release_collateral` — the entitlement rises, no value moves | [`0x3c896424`](https://explorer-bradbury.genlayer.com/tx/0x3c8964248450170eb75a6531eb8dddf65bf4a12c9c40578268c9dedee5509394) |
+| `prove_recipient` — the handshake, moving no value | [`0x752b9205`](https://explorer-bradbury.genlayer.com/tx/0x752b9205ea95e8f8986e302b97b1d11dccc87c5114f0b45d05424c7b85ecf4c5) |
+| `confirm_recipient` | [`0x487f94c0`](https://explorer-bradbury.genlayer.com/tx/0x487f94c03df9b7726d936e78f385c967f9358356bc1098a5633542593288623c) |
+| **`withdraw` — 0.875 GEN leaves the contract** | [`0x3760fe0e`](https://explorer-bradbury.genlayer.com/tx/0x3760fe0efa211bb808183a037fd5332ac7a0e60ece6d2ca5be2b9cc666c5c507) |
+| **`reclaim` — resolved after the 900s settle window** | [`0xa4f9dddb`](https://explorer-bradbury.genlayer.com/tx/0xa4f9dddbec082a545df2a5bcfa1ba69e91d82183d21ba7926d987d89d7f292ba) |
+| `assign_to` — the wallet routes its own 0.05 GEN | [`0x86c162c0`](https://explorer-bradbury.genlayer.com/tx/0x86c162c06eef21c4cc45eb410cea81da5604c82e5c006a25fddca6095b2af848) |
+| `withdraw` — 0.05 GEN delivered | [`0x2cd25895`](https://explorer-bradbury.genlayer.com/tx/0x2cd258952ada55bb71bc57141d3e6c31163b5345ba6fc33117bbc23392466846) |
+| wallet `withdraw`, refused | [`0x3edb4752`](https://explorer-bradbury.genlayer.com/tx/0x3edb4752d87636e6fc7f68bad65e2ad7556264593914301519eb0fd308c5d5ba) |
+| wallet `prove_recipient`, refused | [`0xaf30345f`](https://explorer-bradbury.genlayer.com/tx/0xaf30345f392228aa88801fe65db7c73b2f32e174030d48da8f54d524861f576f) |
+| `assign_to` the zero address, refused | [`0xbdd38211`](https://explorer-bradbury.genlayer.com/tx/0xbdd38211da30cf691bc1f38c763d2aba89211830371caeee3136ac35e9e6ffd0) |
+
+The claimant's balance went `0 GEN -> 0.875 GEN` on that `withdraw`, and the
+`reclaim` a thousand seconds later closed the claim without crediting anything
+back. The run ends with the books balanced:
+
+```text
+owed 0  in_flight 0.05  bonds 1  collateral 0.04375  slashed 0
+obligations 1.09375   committed 1.09375   held 1.04375
+ok   the contract covers everything it has not sent
+```
+
+The same script, same result, on studionet
+[`0x0E78A40B`](https://explorer-studio.genlayer.com/address/0x0E78A40BEf6d0Fe85375648aFE0B3bF787A26238),
+paying [`0x71BdA77c`](https://explorer-studio.genlayer.com/address/0x71BdA77c08cadd230B06D11231A314de21683C4b):
+[`attest`](https://explorer-studio.genlayer.com/tx/0x77d4dbe8770bfb1419958d72a65045ad8c1c15a54954e1ac16254aaefac80350),
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0x02894dd876726860f760452e04ad141369927abbb10ea687f7104969decd4df6)
+(`0 GEN -> 0.875 GEN`),
+[`reclaim`](https://explorer-studio.genlayer.com/tx/0xf4969748dbb30e43837183e6a8368e69a3723791a9ae7e496aea29657884a60d)
+after the settle window,
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0x3606478a8532c6c2696dfe1ff1c3831871762b0735837d717f2e3d25197c2044)
+of the wallet's assigned credit, and a wallet's
+[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0xacc7ba6c883cf93c78ab15f26d3b3f6c3f6cb1efb15a4f05695c48406a377eaf).
+
 ### The review's scenario, on a deployed contract
 
 `npm run recovery` drives the reported sentence clause by clause against the
