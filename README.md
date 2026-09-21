@@ -20,6 +20,7 @@ rather than on the prose, and prices the next job from what the record says.
 - [Quick start](#quick-start)
 - [Walkthrough](WALKTHROUGH.md)
 - [Payouts](#payouts)
+- [Binding an attestation to the work](#binding-an-attestation-to-the-work)
 - [Verification](#verification)
 - [Project layout](#project-layout)
 - [Configuration](#configuration)
@@ -83,10 +84,22 @@ vectors pinning the TypeScript port used by the site to the same answers.
 
 ## Deployments
 
-| Network | Address | Artifact |
-|---|---|---|
-| GenLayer Studio | [`0x465ebEa608482d1ef8D2E6f09C6F7049f988b4Ec`](https://explorer-studio.genlayer.com/address/0x465ebEa608482d1ef8D2E6f09C6F7049f988b4Ec) | `reputation_oracle.py` |
-| Testnet Bradbury | [`0xaE321ADbd5d8769bFFd5d25d39251BB53E418524`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524) | `reputation_oracle.min.py` |
+| Network | Address | Artifact | Version |
+|---|---|---|---|
+| GenLayer Studio | [`0x71D5698503F98aE05b513D28641aaF114B4daF71`](https://explorer-studio.genlayer.com/address/0x71D5698503F98aE05b513D28641aaF114B4daF71) | `reputation_oracle.py` | current |
+| Testnet Bradbury | [`0xaE321ADbd5d8769bFFd5d25d39251BB53E418524`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524) | `reputation_oracle.min.py` | **previous — see below** |
+
+**Bradbury is one version behind, and not by choice.** It currently refuses to
+finalize *any* contract deployment. That was measured rather than assumed: the
+current artifact reverts, the previous 48,215-byte artifact that is already
+running there reverts identically when redeployed today, and a 751-byte
+two-method probe was accepted and then never finalized, timing out at status 5.
+A per-transaction gas ceiling also moved — a deploy is refused as `gas limit
+too high` at 20,000,000 and accepted at 15,000,000, where `scripts/gasProxy.ts`
+had long used 30,000,000. So the Bradbury address above runs the contract as it
+stood before the delivery binding, and `npm run verify-deployment` reports it
+as `DIFFERS` on purpose rather than being quietly hidden. Studio carries the
+current contract and every walkthrough in this README was run against it.
 
 Both run the **production policy**, which is deliberately not the constructor's
 defaults: the defaults leave `min_bond` at zero, which makes attestations free
@@ -99,7 +112,7 @@ whitespace and nothing else: comments and docstrings are cut, indentation is
 rewritten as one space per level, and continuation lines inside brackets go
 flush left. Every row covered by a multi-line string is preserved byte for byte,
 because the grading prompts are triple-quoted and validators grade against them.
-141,940 bytes become 48,215, and `ast.dump` on both files is compared before
+158,888 bytes become 54,081 and `ast.dump` on both files is compared before
 either is written.
 
 Verify any deployment before trusting it:
@@ -108,6 +121,7 @@ Verify any deployment before trusting it:
 cd web
 npm run verify-deployment     # deployed bytes are this repository's, hashed
 npm run agreement             # the consensus rule, checked on-chain
+npm run binding               # a false accusation, against a committed artifact
 python ../tools/audit_review.py   # every review item, against the live bytes
 ```
 
@@ -121,7 +135,7 @@ cd credent
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest                  # 370 tests, no network
+python -m pytest                  # 393 tests, no network
 
 cd web
 npm install
@@ -352,12 +366,114 @@ with.
 
 ---
 
+## Binding an attestation to the work
+
+An attestation is written by one counterparty about the other, and a bad enough
+grade forfeits the provider's collateral to the client. So the question that
+decides whether any of this is safe is: **what is the grade made against?**
+
+It used to be prose. `attest` took a `claim` and an `evidence` string, both
+written by the party who stands to gain, and the model graded those. Nothing
+was fetched. `substantiated` measured how well-evidenced the *writing* looked,
+which a fluent liar clears — so a detailed, confident, entirely false account
+of non-delivery bought the whole collateral for the price of one bond.
+
+Two things now stand in front of that, and they are the two the review named.
+
+### The signed event
+
+`submit_delivery(engagement_id, uri, digest)` is the provider's own
+transaction. GenLayer recovered their key to put `gl.message.sender_address` in
+front of that function, so the commitment is **signed by construction** — no
+signature-verification code has to exist in this contract, because the chain
+already did it. It records where the finished work is and what its bytes hash
+to, only the provider may write it, and it freezes when the engagement closes,
+so the artifact cannot be swapped once the work is in dispute.
+
+### The validator-retrievable artifact
+
+Inside `attest`'s consensus block, **each validator fetches the committed URI
+itself**, hashes the body, and compares it to the digest the provider signed.
+The fetch is written out in both the leader and the validator closure on
+purpose: one side taking the other's word for what it retrieved is not
+consensus. A body that does not hash to the commitment is discarded rather than
+graded — otherwise the decision would belong to whoever can write to that host.
+
+What the model is then shown is labelled by provenance rather than by name:
+
+| Block | Written by | Trust |
+|---|---|---|
+| `COMMITTED SCOPE` | agreed by both, before the work | the standard |
+| `CLAIM` | the attester | untrusted |
+| `EVIDENCE` | the attester | untrusted |
+| `DELIVERABLE` | **fetched by the graders**, from the address the *provider* committed | the work itself |
+
+### What a forfeit may stand on
+
+`collateral_settlement` in `reputation_core.py` — pure arithmetic, executed by
+the engine tests:
+
+| Delivery | Meaning | A forfeiting grade |
+|---|---|---|
+| `verified` | retrieved, and it hashes to the provider's commitment | forfeits — judged on the work |
+| `absent` | the provider never committed one | forfeits — on an on-chain fact, not a claim |
+| `unverified` | committed, but unretrievable or hash-mismatched | **releases** — nobody established anything |
+
+`unverified` releasing is deliberate and it costs something: a provider who
+commits a deliberately unreachable artifact makes their collateral
+unforfeitable. What it does not buy them is a clean record — the grade still
+lands, still carries weight, and still moves the score that prices their next
+engagement. A contract cannot tell a dead host from a dishonest one, so the
+economic loop absorbs what a gate could not.
+
+### The same accusation, twice
+
+`npm run binding` runs it on the deployed contract. Both engagements use the
+same claim, the same evidence, the same scope and the same grader; the only
+difference is whether the provider committed a delivery.
+
+| | delivery | `fulfilled` | `substantiated` | collateral |
+|---|---|---|---|---|
+| provider committed the artifact | `verified` | 7500bp | 88 | **releasable** |
+| provider committed nothing | `absent` | 0bp | 75 | **forfeit** |
+
+Substantiation is high in *both* rows, so the pre-existing "an unevidenced
+accusation takes nothing" gate is not what saved the first provider. The model
+rated the work at 7500bp because it could read it.
+
+| Step | Transaction |
+|---|---|
+| `open_engagement` | [`0x1c89b978`](https://explorer-studio.genlayer.com/tx/0x1c89b9788edcb4adb9efb89def8dfe9ab1e2b13c86a140d3bd19b7cca1fc8f19) |
+| `accept_engagement` — 0.875 GEN of collateral | [`0x538970f3`](https://explorer-studio.genlayer.com/tx/0x538970f37c74d1c4630dc5119fbc49ae72e6e21aba986e82c33c93081e6e4436) |
+| **`submit_delivery` — the provider's signed commitment** | [`0x18f42629`](https://explorer-studio.genlayer.com/tx/0x18f426297871c58d0d3554444ff818c3d7cb0c48f2253640acbbe793e94e5181) |
+| `close_engagement` | [`0x480532fe`](https://explorer-studio.genlayer.com/tx/0x480532fe8b3bb71cd337a6622a7135ed184b5032943a1b6f27465a1eaf9ceb09) |
+| **`attest` — the false accusation, graded against the fetched artifact** | [`0x88bc6ccf`](https://explorer-studio.genlayer.com/tx/0x88bc6ccfa0af92a0f4dc499aad4b5d5ac2d1724eca44df6d02e3a173910de740) |
+| `claim_collateral` — refused, the accuser credited nothing | [`0xbe8423ae`](https://explorer-studio.genlayer.com/tx/0xbe8423aeca1195be57d36f96738c7f0e20f7060f3894b99d21ab59ae1276671a) |
+| `open_engagement` — the control, with no delivery | [`0x7125a630`](https://explorer-studio.genlayer.com/tx/0x7125a6309a8b216074e45dbc0967c127b6efba61df2766be5ce4aa22c024420a) |
+| `accept_engagement` | [`0x2099edb9`](https://explorer-studio.genlayer.com/tx/0x2099edb9c5e7fb4968234f7f6fc9c009b37a9c3fd1292c3f3f646a858db74171) |
+| `close_engagement` | [`0x06105444`](https://explorer-studio.genlayer.com/tx/0x061054440ba49a9adb822684bdf6511eb684441b8b5d07c627ae88662f62979a) |
+| **`attest` — the same accusation forfeits, with nothing committed** | [`0x45332c7d`](https://explorer-studio.genlayer.com/tx/0x45332c7d6d0045dd948dc297d6f084241b035de62c5b53acec8b4a5cec2c56e8) |
+
+The artifact both runs point at is
+[`examples/orders_clean.py`](examples/orders_clean.py), served over HTTPS from
+this repository so the validators fetch exactly the bytes whose digest the
+provider committed.
+
+**What this does not claim.** A verified artifact does not make a forfeit
+impossible — with the work in hand the decision is still the model's, made on
+the work. What the binding buys is that the model is looking at the deliverable
+rather than at prose the accuser wrote about it, that only the provider can say
+what the deliverable is, and that an artifact nobody could establish cannot
+forfeit at all.
+
+---
+
 ## Verification
 
 ### Offline — no network, runs in CI
 
 ```bash
-python -m pytest                 # 370 tests: engine, prompts, contract, parity
+python -m pytest                 # 393 tests: engine, prompts, contract, parity
 cd web
 npm run parity                   # 3,421 vectors: the TS port agrees with the engine
 npm run units                    # formatting, error text, calldata encoding
@@ -391,7 +507,7 @@ explaining the rule.
 ### Direct mode — the contract executed, no node and no keys
 
 ```bash
-./run_direct_tests.sh          # ten tests, well under a second
+./run_direct_tests.sh          # seventeen tests, well under a second
 ```
 
 GenLayer's own `genlayer-test` harness runs `reputation_oracle.py` in memory.
@@ -540,7 +656,9 @@ export CREDENT_KEYDIR=/path/outside/the/repo     # client.key, provider.key
 cd web
 VITE_GENLAYER_NETWORK=studionet npm run settlement   # a throwaway oracle, every path
 VITE_GENLAYER_NETWORK=studionet npm run livedemo     # the submitted deployment
+VITE_GENLAYER_NETWORK=studionet npm run binding      # the attestation binding, both halves
 npm run recovery                                     # bradbury: the payout guard, end to end
+VITE_GENLAYER_NETWORK=studionet npm run deploy       # redeploy, and record where it went
 ```
 
 `npm run settlement` deploys its own oracle with `bond_lock_seconds` and
@@ -573,6 +691,8 @@ build_contract.py         splices the three into reputation_oracle.py
 minify_contract.py        → reputation_oracle.min.py for pubdata-limited networks
 deployments.json          the deployed addresses, in one place
 WALKTHROUGH.md            a hands-on pass through the lifecycle, with values
+examples/orders_clean.py  the deliverable the binding walkthrough grades, served
+                          over HTTPS so validators fetch the committed bytes
 parity_vectors.json       the vectors the TypeScript port is checked against
 tools/audit_review.py     checks the live bytes against every review item
 web/                      the React site, the TypeScript port of the engine, and
@@ -680,6 +800,21 @@ contract for no reason — and taking it back returns exactly what it cost to pu
 there, which is an expensive way to break even. It can never reach an
 entitlement, a locked bond or a posted collateral.
 
+**A forfeit still turns on a model's reading, once the work is in hand.** The
+binding decides *what* is graded, not *who* grades it: with a verified artifact
+the model judges the deliverable against the committed scope, and that judgement
+is what moves the collateral. What is structural is the rest of it — only the
+provider can say where the work is, the graders fetch it themselves, a body that
+does not match its commitment is discarded, and a deliverable nobody could
+establish cannot forfeit at all.
+
+**A provider must keep the artifact retrievable until the engagement settles.**
+The digest is frozen at close, so a host that is down during the attestation
+reads as `unverified`. That releases the collateral rather than forfeiting it,
+so an outage cannot cost a provider their money — but it does mean the
+protection of being judged on the work is only available while the work can be
+fetched.
+
 **No mainnet.** The SDK ships localnet, studionet and two testnet entries;
 `connect()` answers `mainnet is not available yet`. Nothing built here holds
 real value, which is also why `min_bond` is one token rather than a figure with
@@ -778,7 +913,7 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 370 tests and 3,421 parity vectors, plus ten
+Offline the project carries 393 tests and 3,421 parity vectors, plus seventeen
 direct-mode tests that execute the contract itself, and `genvm-lint` validates
 the rebuilt schema at 29 methods and 14 constructor parameters.
 
@@ -787,6 +922,14 @@ owed balance before an undeliverable transfer, no restoration path — is now
 false in all three of its clauses, and each clause is checked in three places:
 by a test that runs the contract, by a test that runs the arithmetic, and by a
 transaction on a deployed contract you can open in an explorer.
+
+An attestation can no longer redirect collateral on the strength of the
+accuser's own account. A provider commits the finished work with a signed
+transaction of their own, the validators fetch it inside consensus and check it
+against the digest that transaction carried, and the grade is made against
+those bytes. Run against the deployed contract, the same false accusation left
+a delivered provider's collateral alone and took it from one who had committed
+nothing — the only difference between the two being the commitment.
 
 ---
 
