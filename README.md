@@ -544,7 +544,12 @@ contributor without it still gets a green run.
 
 `npm run livedemo` settles a real engagement against whatever `deployments.json`
 names, under the production policy — nothing is stubbed and no throwaway
-instance is used. On Testnet Bradbury,
+instance is used.
+
+The Bradbury table below was produced on that network's deployment, which is
+the contract as it stood before the delivery binding — Bradbury will not accept
+a new deployment at present, for the reasons under [Deployments](#deployments).
+The studionet run beneath it is on the current contract. On Testnet Bradbury,
 [`0xaE321ADb`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524),
 paying a recipient contract at
 [`0xaFC36cef`](https://explorer-bradbury.genlayer.com/address/0xaFC36cef31Bb99779928e28e0D0716842f71FA35):
@@ -576,17 +581,17 @@ obligations 1.925   committed 1.925   held 1.875
 ok   the contract covers everything it has not sent
 ```
 
-The same script, same result, on studionet
-[`0x465ebEa6`](https://explorer-studio.genlayer.com/address/0x465ebEa608482d1ef8D2E6f09C6F7049f988b4Ec),
-paying [`0x98A0681c`](https://explorer-studio.genlayer.com/address/0x98A0681c9c1Ca64caAD88497de765800b2964fd6):
-[`attest`](https://explorer-studio.genlayer.com/tx/0xbe65a55cd67592f2d6bdbab4749ea840f39f93c41436379f34f612f06655d884),
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0x064d3bcca4178e695228b2fc6df7e387d5ff1fbf8a1a85166791f4a664e7e06a)
+The same script, same result, on the current studionet deployment
+[`0x71D56985`](https://explorer-studio.genlayer.com/address/0x71D5698503F98aE05b513D28641aaF114B4daF71),
+paying [`0x603f8456`](https://explorer-studio.genlayer.com/address/0x603f84562BA01715Fb71e88C307B43910F9b17f6):
+[`attest`](https://explorer-studio.genlayer.com/tx/0x9b1c99f4f6d3fd02eb83d84822cb1fa77402695c77871d20f4f1ee743968dba8),
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0xa8495e690607f0b4f27067036f15c3a1c1e1a334ecbed3cb968df7414dc837a8)
 (`0 GEN -> 0.875 GEN`),
-[`reclaim`](https://explorer-studio.genlayer.com/tx/0x2494e824713260a7bc5aba092ecdf3352b59bdbf73a7412d840596ee29b6dc3c)
+[`reclaim`](https://explorer-studio.genlayer.com/tx/0xa38f03af247563f5516c7d85c1812ec454a85128cb4b70d8ecb4e34fce25610f)
 after the settle window,
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0xd275284b4901e313dd320d739df2f36f0ecd6ada87f3c58e45a29c68c8da1c61)
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0xfe9ec857241cee21016e6329113c1b249739b066db01798ab13fe939453f4aa9)
 of the wallet's assigned credit, and a wallet's
-[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0xb2c3e453d1663508c34c7fd9db994fda9a1077f1125e6cf57b1b18b2ee6779e5).
+[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0x5de5b6c1ca41d8124b48ac75ff97d6b4dad266dcc1d02f7df8fdd9372ecef4f3).
 
 Studionet reports the classified reason behind each refusal, so that last
 transaction reads `recipient_has_not_proven_it_can_receive` in the explorer,
