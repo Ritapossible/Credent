@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 
+import hashlib
 import pytest
 
 import reputation_core as core
@@ -889,8 +890,26 @@ class TestEncodeGrade:
         assert " " not in encoded
 
     def test_round_trips_through_decode(self):
+        """Every field survives, and the basis is attached on the way back.
+
+        `canonicalize_grade` reads a model response, which knows nothing about
+        deliverables, so it does not set `delivery`; the contract attaches it
+        before the grade crosses to the validators. `decode_grade` is the other
+        side of that wire and always reports one, so a validator never has to
+        guess what the leader graded against.
+        """
         original = core.canonicalize_grade(grade(), POLICY)
-        assert core.decode_grade(core.encode_grade(original), POLICY) == original
+        assert "delivery" not in original
+        decoded = core.decode_grade(core.encode_grade(original), POLICY)
+        assert decoded == {**original, "delivery": core.DELIVERY_UNVERIFIED}
+
+    def test_the_basis_crosses_the_wire_intact(self):
+        """A grade made against a verified artifact must still say so after the
+        round trip, or the validator sees a different basis from the leader's
+        and disagrees with a node it actually agrees with."""
+        for state in core.DELIVERY_STATES:
+            original = {**core.canonicalize_grade(grade(), POLICY), "delivery": state}
+            assert core.decode_grade(core.encode_grade(original), POLICY)["delivery"] == state
 
     def test_decode_is_idempotent(self):
         """The property that matters on the calldata path. `fulfilled` crosses the
@@ -906,7 +925,17 @@ class TestEncodeGrade:
 
     @pytest.mark.parametrize("junk", [None, "not json", "[]", "3", [], 7, {"verdict": "nope"}])
     def test_malformed_encodings_decode_to_ungraded(self, junk):
-        assert core.decode_grade(junk, POLICY) == core.UNGRADED
+        """Weightless, and on the basis that cannot take anyone's money.
+
+        Malformed calldata resolving to `unverified` rather than `verified` or
+        `absent` is the safe direction twice over: the grade carries no weight
+        in the score, and `collateral_settlement` refuses to forfeit on that
+        state, so a leader cannot manufacture a basis for a forfeit by sending
+        a grade nobody can read.
+        """
+        assert core.decode_grade(junk, POLICY) == {
+            **core.UNGRADED, "delivery": core.DELIVERY_UNVERIFIED,
+        }
 
 
 class TestGradesAgree:
@@ -1452,3 +1481,100 @@ def test_the_readme_states_the_real_recovery_signature():
         if p.kind is not inspect.Parameter.VAR_KEYWORD
     ]
     assert stated == real, f"the README says {stated}; the function takes {real}"
+
+
+class TestVerifyDelivery:
+    """What a fetched response proves about the committed artifact."""
+
+    DIGEST = hashlib.sha256(b"the finished work").hexdigest()
+
+    def test_a_matching_body_is_the_committed_artifact(self):
+        state, text = core.verify_delivery(200, b"the finished work", self.DIGEST)
+        assert state == core.DELIVERY_VERIFIED
+        assert text == "the finished work"
+
+    def test_a_swapped_body_is_not(self):
+        """The reason the digest is committed in advance rather than derived.
+
+        Without this comparison the graders would read whatever happens to sit
+        at the URL when the dispute starts, which hands the decision to whoever
+        can write to that host -- including the provider, after the work was
+        questioned.
+        """
+        state, text = core.verify_delivery(200, b"something else entirely", self.DIGEST)
+        assert state == core.DELIVERY_UNVERIFIED
+        assert text == ""
+
+    @pytest.mark.parametrize("status", [301, 403, 404, 500, 503])
+    def test_anything_but_a_200_establishes_nothing(self, status):
+        assert core.verify_delivery(status, b"the finished work", self.DIGEST)[0] == (
+            core.DELIVERY_UNVERIFIED
+        )
+
+    def test_an_empty_response_establishes_nothing(self):
+        assert core.verify_delivery(200, None, self.DIGEST)[0] == core.DELIVERY_UNVERIFIED
+
+    def test_a_binary_artifact_does_not_raise(self):
+        """Graded as text or not at all: a deliverable that is not UTF-8 must
+        still resolve to a definite state, because an exception here is an
+        unclassified fault rather than a disagreement validators can compare."""
+        body = bytes([0xFF, 0xFE, 0x00, 0x41])
+        state, text = core.verify_delivery(200, body, hashlib.sha256(body).hexdigest())
+        assert state == core.DELIVERY_VERIFIED
+        assert isinstance(text, str)
+
+
+class TestCollateralSettlement:
+    """The rule a review asked for: what a forfeit is allowed to stand on.
+
+    The objection was that a counterparty's own account could redirect the
+    other side's collateral. These are the cases that answer it.
+    """
+
+    def _forfeiting(self):
+        return core.canonicalize_grade(
+            grade(verdict=core.VERDICT_UNFULFILLED, fulfilled=5, substantiated=90, confidence=90),
+            POLICY,
+        )
+
+    def test_a_grade_against_a_verified_artifact_may_forfeit(self):
+        """The graders fetched the provider's own committed artifact and judged
+        it. That is a basis the accuser did not author, so a forfeit stands."""
+        assert core.collateral_settlement(
+            self._forfeiting(), POLICY, core.DELIVERY_VERIFIED
+        ) == core.COLLATERAL_FORFEIT
+
+    def test_a_provider_who_committed_nothing_may_forfeit(self):
+        """Not a claim but an on-chain fact: no transaction signed by the
+        provider says where the work is."""
+        assert core.collateral_settlement(
+            self._forfeiting(), POLICY, core.DELIVERY_ABSENT
+        ) == core.COLLATERAL_FORFEIT
+
+    def test_an_unverifiable_delivery_takes_nothing(self):
+        """Nobody established anything, and with no artifact in hand the only
+        thing left to grade is the accuser's prose -- which is exactly what
+        must not decide this."""
+        assert core.collateral_settlement(
+            self._forfeiting(), POLICY, core.DELIVERY_UNVERIFIED
+        ) == core.COLLATERAL_RELEASABLE
+
+    def test_a_good_grade_releases_on_every_basis(self):
+        g = core.canonicalize_grade(grade(fulfilled=90, substantiated=80), POLICY)
+        for state in core.DELIVERY_STATES:
+            assert core.collateral_settlement(g, POLICY, state) == core.COLLATERAL_RELEASABLE
+
+    @pytest.mark.parametrize("bogus", ["", "delivered", "VERIFIED", None, 0, True])
+    def test_an_unrecognised_basis_takes_nothing(self, bogus):
+        """A state this module does not define cannot authorise a forfeit. The
+        decode path normalises unknown values to `unverified` already; this is
+        the second answer to the same question, because the cost of getting it
+        wrong is somebody else's money."""
+        assert core.collateral_settlement(
+            self._forfeiting(), POLICY, bogus
+        ) == core.COLLATERAL_RELEASABLE
+
+    def test_every_settlement_is_one_of_the_declared_two(self):
+        g = self._forfeiting()
+        for state in core.DELIVERY_STATES:
+            assert core.collateral_settlement(g, POLICY, state) in core.COLLATERAL_OUTCOMES

@@ -149,10 +149,20 @@ class TestNoIdentityLeak:
     is the boundary: there is no parameter through which one could arrive.
     """
 
-    def test_signature_accepts_exactly_the_four_content_parameters(self):
+    def test_signature_accepts_exactly_the_content_parameters(self):
+        """The boundary widened by two, and neither of them is an identity.
+
+        `delivery` and `artifact` carry the provider's committed deliverable
+        into the grading. That is a provenance fact and the retrieved bytes --
+        not a name, not an address, and not anything about who either party
+        is. The set is pinned exactly so the next parameter added has to come
+        past this test rather than past a wildcard.
+        """
         import inspect
         sig = inspect.signature(prompts.build_attestation_prompt)
-        assert set(sig.parameters) == {"salt", "scope", "claim", "evidence"}
+        assert set(sig.parameters) == {
+            "salt", "scope", "claim", "evidence", "delivery", "artifact",
+        }
         assert all(
             p.kind is inspect.Parameter.KEYWORD_ONLY
             for p in sig.parameters.values()

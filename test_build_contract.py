@@ -43,6 +43,13 @@ EXPECTED_PUBLIC_METHODS = frozenset(
         "open_engagement",
         "accept_engagement",
         "close_engagement",
+        # The provider's delivery commitment, and the view that reads it back.
+        # `submit_delivery` is the signed event a forfeit has to stand on: the
+        # chain recovered the provider's key to admit it, so an attestation can
+        # no longer redirect collateral on the strength of prose the accuser
+        # wrote about work nobody fetched.
+        "submit_delivery",
+        "delivery_of",
         "attest",
         "reclaim_bond",
         "release_collateral",
@@ -1077,4 +1084,87 @@ def test_the_readme_states_the_real_artifact_sizes() -> None:
     assert stated_min == actual_min, (
         f"the README says the minified artifact is {stated_min:,} bytes; "
         f"it is {actual_min:,}"
+    )
+
+
+def test_a_forfeit_cannot_rest_on_the_accuser_prose(artifact_source: str) -> None:
+    """The review's objection, pinned against the built contract.
+
+    *"Bind attestations to signed events or validator-retrievable artifacts
+    before a counterparty's claim can redirect collateral."* The path it names
+    is real and it was open: `attest` takes `claim` and `evidence` as free text
+    written by one counterparty about the other, an LLM grades that prose, and a
+    grade below `collateral_forfeit_bp` lets the client take the provider's
+    collateral. Nothing was ever fetched. `substantiated` measured how evidenced
+    the writing looked, not whether the evidence existed, so a fluent account of
+    non-delivery bought the whole collateral for the price of one bond.
+
+    Three things close it, and all three have to be present together.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+    # 1. The signed event. Only the provider may commit a delivery, and the
+    #    chain recovered their key to let them, so the commitment is signed by
+    #    construction rather than by a signature this contract has to verify.
+    assert "submit_delivery" in fns, "there is no delivery commitment to bind an attestation to"
+    commit = _code_of(fns["submit_delivery"])
+    assert "self.eng_provider[engagement_id]" in commit and "REASON_NOT_PROVIDER" in commit, (
+        "anyone but the provider can commit a delivery, so the artifact is not "
+        "bound to the party whose collateral is at stake"
+    )
+    assert "REASON_DELIVERY_CLOSED" in commit, (
+        "the commitment is not frozen at close, so a provider can swap the "
+        "artifact after the work is questioned"
+    )
+    assert "_is_sha256_hex(digest)" in commit, (
+        "a malformed digest can never match, which would park every engagement "
+        "in the one state that cannot forfeit"
+    )
+
+    # 2. The retrieval, inside consensus. Each validator fetches for itself.
+    attest = _code_of(fns["attest"])
+    assert "gl.nondet.web.request" in attest, (
+        "nothing is fetched, so the grade still rests on text the attester wrote"
+    )
+    assert attest.count("gl.nondet.web.request") == 2, (
+        "the fetch must appear in both the leader and the validator closure; "
+        "one of them taking the other's word for it is not consensus"
+    )
+    assert "verify_delivery" in attest, "the fetched body is never checked against the commitment"
+
+    # 3. The settlement rule. `collateral_outcome` alone is the old behaviour.
+    assert "collateral_settlement(" in attest, (
+        "the collateral is settled from the grade alone; it must also weigh "
+        "what the graders established about the deliverable"
+    )
+    forfeit_line = next(
+        line for line in attest.splitlines() if "COLLATERAL_FORFEIT" in line
+    )
+    assert "collateral_settlement(" in forfeit_line, (
+        f"the forfeit branch turns on `{forfeit_line.strip()}`, which is the "
+        "grade by itself -- the basis has to be in the condition"
+    )
+
+
+def test_the_deliverable_reaches_the_prompt_separately_from_the_claim(
+    artifact_source: str,
+) -> None:
+    """The retrieved artifact must be labelled by provenance, not merged in.
+
+    If the deliverable were concatenated into the evidence block it would carry
+    the same trust as the text the attester chose, and the grading could not
+    prefer it. The whole point is that one of these was fetched from an address
+    the *other* party committed to, and the prompt has to say so.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    attest = _code_of(fns["attest"])
+    assert "delivery=delivery" in attest and "artifact=artifact" in attest, (
+        "the prompt is built without the deliverable, so the model grades the "
+        "attester's account of the work instead of the work"
+    )
+    assert "DELIVERY_ABSENT" in attest, (
+        "a missing commitment must be named to the grader, not passed as an "
+        "empty artifact indistinguishable from a retrieval failure"
     )

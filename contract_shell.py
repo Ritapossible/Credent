@@ -62,6 +62,8 @@ std library and `genvm-lint check`, never against the website.
 
 from __future__ import annotations
 
+import hashlib
+
 from genlayer import *
 
 #<<<ENGINE>>>
@@ -261,6 +263,23 @@ def _require_recipient_contract() -> None:
         _fail(REASON_WRONG_RECIPIENT_MARKER)
 
 
+def _is_sha256_hex(value: str) -> bool:
+    """A 64-character lowercase-able hex string, and nothing else.
+
+    Checked rather than trusted because the digest is the whole commitment: a
+    malformed one can never match a retrieved artifact, so it would put every
+    engagement permanently into `unverified`, where the collateral cannot be
+    forfeited. Refusing it at the door is the difference between a provider
+    committing to their work and a provider opting out of judgement.
+    """
+    if len(value) != 64:
+        return False
+    for character in value:
+        if character not in "0123456789abcdefABCDEF":
+            return False
+    return True
+
+
 def _now_seconds() -> int:
     """Consensus time as whole epoch seconds, UTC.
 
@@ -331,6 +350,15 @@ class ReputationOracle(gl.Contract):
     eng_collateral_rate_bp: TreeMap[str, u256]
     eng_score_bp: TreeMap[str, u256]
     eng_collateral_state: TreeMap[str, str]
+    # The provider's delivery commitment. Written only by `submit_delivery`,
+    # which only the provider can call, so the transaction that writes these is
+    # itself the signed event binding the provider to this artifact: the chain
+    # recovered their key to admit it. `eng_delivery_at` is 0 when they never
+    # committed one, which is the difference between "the work is somewhere
+    # checkable" and "there is no record that it exists".
+    eng_delivery_uri: TreeMap[str, str]
+    eng_delivery_digest: TreeMap[str, str]
+    eng_delivery_at: TreeMap[str, u256]
 
     # Attestations. Append-only; the shared index is the attestation id.
     att_engagement: DynArray[str]
@@ -338,6 +366,10 @@ class ReputationOracle(gl.Contract):
     att_subject: DynArray[Address]
     att_claim: DynArray[str]
     att_evidence: DynArray[str]
+    # What the graders established about the provider's artifact when this
+    # grade was made. Stored because it is the basis a forfeit stood on, and a
+    # basis nobody can read afterwards is indistinguishable from none.
+    att_delivery: DynArray[str]
     att_created_at: DynArray[u256]
     att_verdict: DynArray[str]
     att_fulfilled: DynArray[u256]
@@ -669,6 +701,59 @@ class ReputationOracle(gl.Contract):
         return required
 
     @gl.public.write
+    def submit_delivery(self, engagement_id: str, uri: str, digest: str) -> None:
+        """Commit where the finished work is, and what it hashes to.
+
+        The provider's own transaction, and that is the point of it. GenLayer
+        recovered the caller's key to put `gl.message.sender_address` in front
+        of this function, so a delivery recorded here is a **signed event**: the
+        provider has bound themselves, on chain and at a timestamp, to an
+        artifact at `uri` whose bytes hash to `digest`. Nothing off-chain has to
+        be verified for that to hold, and no signature-recovery code has to
+        exist in this contract, because the chain already did it.
+
+        What it buys is the thing a review asked for. Without it, a grade is
+        made against prose the attester wrote about their counterparty, and a
+        client who writes a convincing enough account of non-delivery can take
+        a provider's collateral for the price of one bond. With it, `attest`
+        fetches these bytes inside consensus and grades *them*. A false account
+        cannot make a delivered artifact read as undelivered when the model is
+        looking at the artifact.
+
+        `digest` is committed rather than derived so the artifact cannot be
+        swapped afterwards -- not by the provider once trouble starts, and not
+        by anyone who can write to that host. The validators recompute it and
+        compare. Only the provider may write here, only while the engagement is
+        open, and never after it closes: the commitment has to be frozen before
+        the work is up for judgement or it is not a commitment.
+        """
+        state = self.eng_state.get(engagement_id, _ENG_ABSENT)
+        if state == _ENG_ABSENT:
+            _fail(REASON_NO_ENGAGEMENT)
+        if state == _ENG_PROPOSED:
+            _fail(REASON_NOT_ACCEPTED)
+        # Frozen at close. After this the artifact is what is judged, and a
+        # commitment that can still move is not one.
+        if state == _ENG_CLOSED:
+            _fail(REASON_DELIVERY_CLOSED)
+
+        if gl.message.sender_address != self.eng_provider[engagement_id]:
+            _fail(REASON_NOT_PROVIDER)
+
+        if len(uri) == 0 or len(uri) > MAX_DELIVERY_URI_CHARS:
+            _fail(REASON_DELIVERY_URI_INVALID)
+        # Only what the validators can actually fetch. A scheme they cannot
+        # resolve is a commitment to nothing, and it would read as a delivery.
+        if not uri.startswith("https://"):
+            _fail(REASON_DELIVERY_URI_INVALID)
+        if not _is_sha256_hex(digest):
+            _fail(REASON_DELIVERY_DIGEST_INVALID)
+
+        self.eng_delivery_uri[engagement_id] = uri
+        self.eng_delivery_digest[engagement_id] = digest.lower()
+        self.eng_delivery_at[engagement_id] = _now_seconds()
+
+    @gl.public.write
     def close_engagement(self, engagement_id: str) -> None:
         """Mark the work finished, which is what opens attestation."""
         state = self.eng_state.get(engagement_id, _ENG_ABSENT)
@@ -742,17 +827,54 @@ class ReputationOracle(gl.Contract):
             subject=subject.as_hex,
             claim=claim,
         )
-        prompt = build_attestation_prompt(
-            salt=salt,
-            scope=scope,
-            claim=claim,
-            evidence=evidence,
-        )
+
+        # What the provider committed, if anything. Read outside the
+        # non-deterministic block because it is storage: every validator reads
+        # the same two strings, and only the fetching is non-deterministic.
+        delivery_uri = self.eng_delivery_uri.get(engagement_id, "")
+        delivery_digest = self.eng_delivery_digest.get(engagement_id, "")
+        committed = int(self.eng_delivery_at.get(engagement_id, 0)) > 0
+
+        def prompt_for(delivery: str, artifact: str) -> str:
+            # Pure, so it can be shared by both closures below. Only the two
+            # gl.nondet calls have to sit directly inside the equivalence
+            # block, and those are what stay written out twice.
+            return build_attestation_prompt(
+                salt=salt,
+                scope=scope,
+                claim=claim,
+                evidence=evidence,
+                delivery=delivery,
+                artifact=artifact,
+            )
 
         def leader() -> dict:
-            return canonicalize_grade(
-                gl.nondet.exec_prompt(prompt, response_format="json"), policy
+            # Fetch the committed artifact here, inside the block, so the
+            # retrieval is part of consensus rather than something the leader
+            # asserts and the others take on trust. `verify_delivery` is the
+            # pure half and lives in the engine, where a test can drive it.
+            if not committed:
+                delivery = DELIVERY_ABSENT
+                artifact = ""
+            else:
+                try:
+                    response = gl.nondet.web.request(delivery_uri, method="GET")
+                    delivery, artifact = verify_delivery(
+                        response.status, response.body, delivery_digest
+                    )
+                except Exception:
+                    delivery = DELIVERY_UNVERIFIED
+                    artifact = ""
+            grade = canonicalize_grade(
+                gl.nondet.exec_prompt(
+                    prompt_for(delivery, artifact), response_format="json"
+                ),
+                policy,
             )
+            # Carried on the grade so the validator compares the basis as well
+            # as the numbers, and the contract can store what it rested on.
+            grade["delivery"] = delivery
+            return grade
 
         def validator(result: gl.vm.Result) -> bool:
             # Anything other than a clean return is a disagreement here. Error
@@ -764,9 +886,42 @@ class ReputationOracle(gl.Contract):
             # already canonical, and re-canonicalizing would widen `fulfilled` to
             # basis points a second time and saturate every real grade to 10000.
             theirs = decode_grade(result.calldata, policy)
-            mine = canonicalize_grade(
-                gl.nondet.exec_prompt(prompt, response_format="json"), policy
-            )
+
+            def regrade() -> dict:
+            # Fetch the committed artifact here, inside the block, so the
+                # retrieval is part of consensus rather than something the leader
+                # asserts and the others take on trust. `verify_delivery` is the
+                # pure half and lives in the engine, where a test can drive it.
+                if not committed:
+                    delivery = DELIVERY_ABSENT
+                    artifact = ""
+                else:
+                    try:
+                        response = gl.nondet.web.request(delivery_uri, method="GET")
+                        delivery, artifact = verify_delivery(
+                            response.status, response.body, delivery_digest
+                        )
+                    except Exception:
+                        delivery = DELIVERY_UNVERIFIED
+                        artifact = ""
+                grade = canonicalize_grade(
+                    gl.nondet.exec_prompt(
+                        prompt_for(delivery, artifact), response_format="json"
+                    ),
+                    policy,
+                )
+                # Carried on the grade so the validator compares the basis as well
+                # as the numbers, and the contract can store what it rested on.
+                grade["delivery"] = delivery
+                return grade
+
+            mine = regrade()
+            # The deliverable has to agree before the grade does. Two validators
+            # who fetched different artifacts did not grade the same thing, and
+            # a forfeit that rests on the deliverable cannot rest on one they
+            # disagree about.
+            if mine.get("delivery") != theirs.get("delivery"):
+                return False
             return grades_agree(mine, theirs, policy)
 
         def compare_errors(mine: gl.vm.UserError, theirs: gl.vm.UserError) -> bool:
@@ -802,6 +957,7 @@ class ReputationOracle(gl.Contract):
         self.att_subject.append(subject)
         self.att_claim.append(claim)
         self.att_evidence.append(evidence)
+        self.att_delivery.append(grade["delivery"])
         self.att_created_at.append(now)
         self.att_verdict.append(grade["verdict"])
         self.att_fulfilled.append(grade["fulfilled"])
@@ -829,7 +985,7 @@ class ReputationOracle(gl.Contract):
         # failed nondet round cannot strand or duplicate a payment.
         held = self.eng_collateral_state.get(engagement_id, _COL_NONE)
         if subject == provider and held == _COL_HELD:
-            if collateral_outcome(grade, policy) == COLLATERAL_FORFEIT:
+            if collateral_settlement(grade, policy, grade["delivery"]) == COLLATERAL_FORFEIT:
                 self.eng_collateral_state[engagement_id] = _COL_FORFEIT
             else:
                 self.eng_collateral_state[engagement_id] = _COL_RELEASABLE
@@ -1510,6 +1666,7 @@ class ReputationOracle(gl.Contract):
             "subject": self.att_subject[index].as_hex,
             "claim": self.att_claim[index],
             "evidence": self.att_evidence[index],
+            "delivery": self.att_delivery[index],
             "created_at": int(self.att_created_at[index]),
             "age_seconds": age,
             "verdict": self.att_verdict[index],
@@ -1732,6 +1889,25 @@ class ReputationOracle(gl.Contract):
             "collateral_ceiling_bp": policy.collateral_ceiling_bp,
             "collateral_floor_bp": policy.collateral_floor_bp,
             "collateral_forfeit_bp": policy.collateral_forfeit_bp,
+        }
+
+    @gl.public.view
+    def delivery_of(self, engagement_id: str) -> dict:
+        """What the provider committed for this engagement, if anything.
+
+        Readable by anyone, because the commitment is the thing a forfeit
+        stands on and a client deciding whether to attest should be able to see
+        what the graders will fetch. `committed` is false when the provider
+        never submitted one, which is itself the fact that makes a forfeit
+        available -- so it has to be visible rather than inferred from silence.
+        """
+        at = int(self.eng_delivery_at.get(engagement_id, 0))
+        return {
+            "engagement_id": engagement_id,
+            "committed": at > 0,
+            "uri": self.eng_delivery_uri.get(engagement_id, ""),
+            "digest": self.eng_delivery_digest.get(engagement_id, ""),
+            "committed_at": at,
         }
 
     @gl.public.view

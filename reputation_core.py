@@ -187,6 +187,11 @@ REASON_DELIVERED = "the_withdrawal_was_delivered"
 REASON_BAD_RECIPIENT = "recipient_is_not_an_address"
 REASON_ZERO_RECIPIENT = "recipient_is_the_zero_address"
 
+# The provider's delivery commitment, which is what a forfeit has to stand on.
+REASON_DELIVERY_CLOSED = "engagement_closed_delivery_is_frozen"
+REASON_DELIVERY_URI_INVALID = "delivery_uri_must_be_https_and_within_length"
+REASON_DELIVERY_DIGEST_INVALID = "delivery_digest_must_be_sha256_hex"
+
 REASONS = frozenset({
     REASON_NO_ENGAGEMENT,
     REASON_NOT_CLOSED,
@@ -219,6 +224,9 @@ REASONS = frozenset({
     REASON_WITHDRAWAL_UNSETTLED,
     REASON_DELIVERED,
     REASON_BAD_RECIPIENT,
+    REASON_DELIVERY_CLOSED,
+    REASON_DELIVERY_URI_INVALID,
+    REASON_DELIVERY_DIGEST_INVALID,
     REASON_ZERO_RECIPIENT,
 })
 
@@ -639,6 +647,23 @@ COLLATERAL_RELEASABLE = "releasable"
 COLLATERAL_FORFEIT = "forfeit"
 COLLATERAL_OUTCOMES = (COLLATERAL_RELEASABLE, COLLATERAL_FORFEIT)
 
+# What the validators were able to establish about the provider's deliverable at
+# the moment the grade was made.
+#
+# `absent`      the provider never committed a delivery. An on-chain fact: no
+#               transaction signed by them says where the work is.
+# `unverified`  they committed one, but the validators could not retrieve it, or
+#               what came back did not hash to the digest they committed.
+# `verified`    retrieved, and it hashes to the digest the provider signed. The
+#               grade was made against those bytes rather than against anything
+#               the attester wrote.
+MAX_DELIVERY_URI_CHARS = 2048
+
+DELIVERY_ABSENT = "absent"
+DELIVERY_UNVERIFIED = "unverified"
+DELIVERY_VERIFIED = "verified"
+DELIVERY_STATES = (DELIVERY_ABSENT, DELIVERY_UNVERIFIED, DELIVERY_VERIFIED)
+
 
 def collateral_rate_bp(score_bp: int, policy: Policy) -> int:
     """Collateral rate for an agent at `score_bp`, in basis points of the stake.
@@ -759,6 +784,78 @@ def collateral_outcome(grade: object, policy: Policy) -> str:
     return COLLATERAL_FORFEIT if fulfilled < policy.collateral_forfeit_bp else COLLATERAL_RELEASABLE
 
 
+def verify_delivery(status: int, body: bytes | None, digest: str) -> tuple[str, str]:
+    """Decide what a fetched response proves about the committed artifact.
+
+    Pure, and deliberately here rather than in the contract: the fetching is
+    non-deterministic but the *judgement* about what came back is not, and this
+    is the half that decides whether a provider keeps their collateral. Here it
+    can be executed by a test.
+
+    A body that does not hash to the commitment is not the committed artifact,
+    whatever else it may be, and it is discarded rather than graded. That is the
+    point of committing the digest in advance: without the comparison, grading
+    whatever happens to sit at a URL would hand the attack back to anyone who
+    can write to that host -- including the provider, after the work was
+    questioned.
+    """
+    if status != 200 or body is None:
+        return DELIVERY_UNVERIFIED, ""
+    if hashlib.sha256(body).hexdigest() != digest:
+        return DELIVERY_UNVERIFIED, ""
+    return DELIVERY_VERIFIED, body.decode("utf-8", errors="replace")
+
+
+def collateral_settlement(grade: object, policy: Policy, delivery: str) -> str:
+    """What the collateral actually does, once the deliverable is accounted for.
+
+    `collateral_outcome` answers a question about the *grade*. This answers the
+    question about the *engagement*, and the difference is the whole of what a
+    reviewer objected to: an attestation is written by one counterparty about
+    the other, and grading it alone means a client's own prose decides whether a
+    provider keeps their collateral. Write a fluent enough account of
+    non-delivery and the model scores it well-evidenced, because what it is
+    scoring is how evidenced the writing looks -- the evidence itself was never
+    fetched. One bond buys an attempt at the whole collateral.
+
+    So a forfeit now has to rest on something the accuser did not author:
+
+    * `verified` -- the validators fetched the artifact the provider committed
+      and it hashed to the digest the provider signed. The grade was made
+      against those bytes. A false account cannot make a delivered artifact
+      read as undelivered, because the model is looking at the artifact.
+    * `absent` -- the provider never committed a delivery at all. That is an
+      on-chain fact rather than a claim: no transaction signed by them says
+      where the work is. A forfeit here rests on that absence.
+    * `unverified` -- they committed one and it could not be checked. Nobody
+      established anything, so this returns the collateral. It is the same
+      instinct as the rest of this module: an unproven case does not justify
+      taking someone's money, and with no artifact in hand the only thing left
+      to grade is the accuser's prose, which is exactly what must not decide it.
+
+    That last branch can be abused, and it is worth naming rather than hiding:
+    a provider who commits a delivery they know is unreachable makes their
+    collateral unforfeitable. What it does not buy them is a clean record. The
+    grade still lands, still carries the same weight, and still moves the score
+    that prices their next engagement -- so the shield costs them the reputation
+    the collateral was discounted from. The economic loop absorbs it; a gate
+    here could not, because a contract cannot tell a dead host from a dishonest
+    one.
+
+    Total in the same direction as everything around it: anything that is not a
+    forfeiting grade standing on an established basis releases.
+    """
+    policy.validate()
+
+    if delivery not in DELIVERY_STATES:
+        return COLLATERAL_RELEASABLE
+    if collateral_outcome(grade, policy) != COLLATERAL_FORFEIT:
+        return COLLATERAL_RELEASABLE
+    if delivery == DELIVERY_UNVERIFIED:
+        return COLLATERAL_RELEASABLE
+    return COLLATERAL_FORFEIT
+
+
 # --- verdict layer --------------------------------------------------------
 
 
@@ -847,22 +944,35 @@ def decode_grade(raw: str | dict, policy: Policy) -> dict:
     """
     policy.validate()
 
+    # Read first, and attached to *every* return below including the weightless
+    # ones. A leader whose own grade came back ungraded still established
+    # something about the deliverable, and dropping that here would leave the
+    # validator comparing a state it has against one the leader appears not to
+    # -- a guaranteed disagreement on a round where the two sides actually
+    # agree. Anything unrecognised becomes `unverified`, the state that cannot
+    # forfeit, so malformed calldata can never invent a basis for taking money.
+    delivery = DELIVERY_UNVERIFIED
     if isinstance(raw, dict):
         parsed = raw
     else:
         try:
             parsed = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
-            return dict(UNGRADED)
+            parsed = None
     if not isinstance(parsed, dict):
-        return dict(UNGRADED)
+        return {**UNGRADED, "delivery": delivery}
+    if parsed.get("delivery") in DELIVERY_STATES:
+        delivery = parsed["delivery"]
+
+    def ungraded() -> dict:
+        return {**UNGRADED, "delivery": delivery}
 
     verdict = parsed.get("verdict")
     if not isinstance(verdict, str):
-        return dict(UNGRADED)
+        return ungraded()
     verdict = verdict.strip().casefold()
     if verdict not in VERDICTS or verdict == VERDICT_UNGRADED:
-        return dict(UNGRADED)
+        return ungraded()
 
     # Clamped, not rejected, matching `canonicalize_grade`: an out-of-range field
     # is a bounded value every node derives identically, and rejecting outright
@@ -871,10 +981,10 @@ def decode_grade(raw: str | dict, policy: Policy) -> dict:
     for field, ceiling in (("fulfilled", BP), ("substantiated", 100), ("confidence", 100)):
         value = parsed.get(field)
         if isinstance(value, bool) or not isinstance(value, int):
-            return dict(UNGRADED)
+            return ungraded()
         fields[field] = max(0, min(ceiling, value))
 
-    return {"verdict": verdict, **fields}
+    return {"verdict": verdict, "delivery": delivery, **fields}
 
 
 def grades_agree(mine: dict, theirs: dict, policy: Policy) -> bool:
