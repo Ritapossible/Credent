@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { bpToPercent, formatBond, formatDuration, shortAddress, shortDigest } from '../core/format'
 import type { GradedAttestation } from '../chain/registry'
+import type { DeliveryState } from '../chain/oracle'
 import type { Verdict } from '../core/bonding'
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -21,6 +22,23 @@ const VERDICT_TONE: Record<Verdict, string> = {
   partial: 'warning',
   unfulfilled: 'critical',
   ungraded: 'neutral',
+}
+
+/**
+ * What this grade was made against, said plainly.
+ *
+ * The single most important line on this card, because an attestation is
+ * written by one counterparty about the other and a bad enough grade forfeits
+ * the other side's collateral. `verified` means the graders fetched the work
+ * from where the provider committed it and judged that -- not the account
+ * above, which the attester wrote.
+ */
+const DELIVERY_LABEL: Record<DeliveryState, string> = {
+  verified:
+    'the delivered work, fetched by the validators and matching the digest the provider committed',
+  absent: 'no delivery was ever committed, so there was no work to fetch',
+  unverified:
+    'a delivery was committed but could not be retrieved or did not match its digest, so it could not forfeit collateral',
 }
 
 export default function AttestationCard({ attestation }: { attestation: GradedAttestation }) {
@@ -53,6 +71,8 @@ export default function AttestationCard({ attestation }: { attestation: GradedAt
         <dd>{attestation.scope}</dd>
         <dt>Attested outcome</dt>
         <dd>{attestation.claim}</dd>
+        <dt>Graded against</dt>
+        <dd>{DELIVERY_LABEL[attestation.delivery]}</dd>
       </dl>
 
       <div className="att__grades">

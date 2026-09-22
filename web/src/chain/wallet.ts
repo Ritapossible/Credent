@@ -597,6 +597,47 @@ export function acceptEngagement(
   return submit(account, 'accept_engagement', [engagementId], collateral)
 }
 
+/**
+ * Commit where the finished work is, and what it hashes to. Provider only.
+ *
+ * This transaction *is* the signed event the grading is bound to: the chain
+ * recovered the provider's key to run it, so the commitment is signed without
+ * this contract having to verify a signature itself. From here on, `attest`
+ * fetches these bytes inside consensus and grades them, instead of grading
+ * whatever the other party writes about the work.
+ *
+ * Only while the engagement is open. It freezes at close, because a commitment
+ * that can still move once the work is in dispute is not a commitment.
+ */
+export function submitDelivery(
+  account: string,
+  input: { engagementId: string; uri: string; digest: string },
+): Promise<WriteResult> {
+  return submit(account, 'submit_delivery', [input.engagementId, input.uri, input.digest])
+}
+
+/**
+ * The SHA-256 of whatever is served at `uri`, hex, computed in the browser.
+ *
+ * So a provider commits a digest they did not have to work out by hand, and --
+ * more usefully -- so they find out *before* committing whether the graders
+ * will be able to fetch it at all. A URL that cannot be read here is one that
+ * lands the engagement in `unverified`, where the work cannot defend itself.
+ *
+ * Throws rather than guessing. The caller can still paste a digest computed
+ * elsewhere, which is the escape hatch for a host that refuses cross-origin
+ * reads but serves the validators perfectly well.
+ */
+export async function digestOfUrl(uri: string): Promise<string> {
+  const response = await fetch(uri)
+  if (!response.ok) throw new Error(`${uri} answered ${response.status}`)
+  const bytes = await response.arrayBuffer()
+  const hash = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
 /** Mark the work finished, which is what opens attestation. Either counterparty. */
 export function closeEngagement(account: string, engagementId: string): Promise<WriteResult> {
   return submit(account, 'close_engagement', [engagementId])

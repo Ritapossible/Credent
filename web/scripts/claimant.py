@@ -100,6 +100,25 @@ class Claimant(gl.Contract):
         ).accept_engagement(engagement_id)
 
     @gl.public.write
+    def deliver(self, engagement_id: str, uri: str, digest: str) -> None:
+        """Commit where this contract's finished work is, and what it hashes to.
+
+        Same reason `release` exists: the oracle checks the caller against the
+        engagement's provider, and the provider is this contract, so the
+        commitment has to originate here. The wallet that funded the contract
+        is not the provider and is refused.
+
+        A provider that never calls this has committed no delivery, and an
+        attestation against it is graded on that absence -- which is an
+        on-chain fact rather than the other party's account, and is enough to
+        forfeit the collateral. Delivering is not optional if the collateral
+        matters.
+        """
+        gl.get_contract_at(self.oracle).emit(on="accepted").submit_delivery(
+            engagement_id, uri, digest
+        )
+
+    @gl.public.write
     def release(self, engagement_id: str) -> None:
         """Ask the oracle to release this engagement's collateral.
 

@@ -209,10 +209,43 @@ const quote = await view<Record<string, unknown>>(ORACLE, 'collateral_quote',
 const required = asBig(quote.required)
 console.log(`    quoted ${gen(required)} collateral at ${quote.rate_bp}bp for an agent with no record`)
 
+/**
+ * The deliverable, and the digest of exactly those bytes.
+ *
+ * Committed to this repository so it has a stable public URL the validators
+ * can fetch: that is what makes it a *validator-retrievable artifact* rather
+ * than a claim about one.
+ */
+const DELIVERY_URI =
+  'https://raw.githubusercontent.com/Ritapossible/credent/main/examples/orders_clean.py'
+const DELIVERY_DIGEST =
+  '1eb2ebd5f2d0f517f37aa63f235408ed9311325d24785a0c32d4a670221013b1'
+
 const oracleBefore = await balanceOf(ORACLE)
 await call(CLAIMANT, 'accept', [id], required, 'accept — the provider posts collateral through its contract')
 await settleTo(() => balanceOf(ORACLE), (v) => v >= oracleBefore + required)
 check((await balanceOf(ORACLE)) - oracleBefore === required, `the contract took exactly ${gen(required)} of collateral`)
+
+// The provider commits the finished work before the engagement closes, which
+// is what binds the grading to an artifact rather than to whatever either
+// party writes about it. A run that skips this is graded on an absent
+// delivery, and an absent delivery forfeits -- so this is not decoration, it
+// is the difference between the provider keeping their collateral and losing
+// it.
+await call(CLAIMANT, 'deliver', [id, DELIVERY_URI, DELIVERY_DIGEST], 0n,
+  "submit_delivery — the provider commits the work and its digest")
+// Read it back, but wait for it: the claimant forwards with `emit(on=
+// "accepted")`, so the oracle's side of that call lands in a later
+// transaction and a read taken straight afterwards sees the state before it.
+const committedAt = await settleTo(
+  async () => {
+    const d = await view<Record<string, unknown>>(ORACLE, 'delivery_of', [id])
+    return asBig(d.committed_at)
+  },
+  (v) => v > 0n,
+  5 * 60 * 1000,
+)
+check(committedAt > 0n, 'the delivery is committed on chain before the engagement closes')
 
 await call(ORACLE, 'close_engagement', [id], 0n, 'close_engagement — the client marks the work delivered')
 

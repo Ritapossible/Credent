@@ -1168,3 +1168,47 @@ def test_the_deliverable_reaches_the_prompt_separately_from_the_claim(
         "a missing commitment must be named to the grader, not passed as an "
         "empty artifact indistinguishable from a retrieval failure"
     )
+
+
+def test_the_documented_address_is_the_deployed_one() -> None:
+    """`deployments.json` is the record; the README and `.env.example` must agree.
+
+    This has now gone wrong three times, in three different ways: the README's
+    tables kept citing a superseded pair after a redeploy, the link text named
+    one address while the href pointed at another, and `.env.example` went on
+    handing new contributors the previous contract long after it had been
+    replaced -- which is worse than a stale document, because `cp .env.example
+    .env` is step one of the quick start and the contract it named no longer
+    had the methods the app calls.
+
+    The addresses move whenever the contract is rebuilt, so the only durable
+    fix is to stop maintaining three copies by hand and let a test read them.
+    """
+    import json
+
+    deployments = json.loads((ROOT / "deployments.json").read_text(encoding="utf-8"))
+    studio = deployments["studionet"]["address"]
+    bradbury = deployments["testnet-bradbury"]["address"]
+
+    env = (ROOT / "web" / ".env.example").read_text(encoding="utf-8")
+    match = re.search(r"VITE_CONTRACT_ADDRESS=(0x[0-9a-fA-F]{40})", env)
+    assert match, ".env.example no longer sets VITE_CONTRACT_ADDRESS"
+    assert match.group(1) == studio, (
+        f".env.example hands out {match.group(1)}, but studionet is deployed at "
+        f"{studio}. A contributor following the quick start would point the app "
+        "at the wrong contract."
+    )
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert studio in readme, f"the README never names the studionet deployment {studio}"
+    assert bradbury in readme, f"the README never names the bradbury deployment {bradbury}"
+
+    # And the superseded ones must be gone, not merely outnumbered.
+    for stale in re.findall(r"explorer-studio\.genlayer\.com/address/(0x[0-9a-fA-F]{40})", readme):
+        if stale.lower() != studio.lower():
+            # Other studionet addresses are fine - claimants, probes, recipients -
+            # so long as they are not being presented as the oracle.
+            context = readme[max(0, readme.index(stale) - 200) : readme.index(stale)]
+            assert "Studio" not in context.split("\n")[-1], (
+                f"{stale} is presented as the studionet oracle, but that is {studio}"
+            )

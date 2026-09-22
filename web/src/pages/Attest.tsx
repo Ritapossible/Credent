@@ -28,6 +28,8 @@ import {
   attest,
   claimCollateral,
   closeEngagement,
+  digestOfUrl,
+  submitDelivery,
   openEngagement,
   reclaimBond,
   releaseCollateral,
@@ -115,6 +117,13 @@ export default function Attest() {
 
   const [acceptId, setAcceptId] = useState('')
   const [acceptState, runAccept] = useAction()
+
+  const [deliverId, setDeliverId] = useState('')
+  const [deliverUri, setDeliverUri] = useState('')
+  const [deliverDigest, setDeliverDigest] = useState('')
+  const [hashing, setHashing] = useState(false)
+  const [hashError, setHashError] = useState<string | null>(null)
+  const [deliverState, runDeliver] = useAction()
 
   const [closeId, setCloseId] = useState('')
   const [closeState, runClose] = useAction()
@@ -322,6 +331,106 @@ export default function Attest() {
 
         <Step
           index={3}
+          title="Commit the delivery"
+          blurb="Provider only, and only while the engagement is open. This transaction is what binds the grading to the work: the validators fetch these bytes themselves and grade them, instead of grading what the other party writes about them."
+        >
+          <div className="field">
+            <label htmlFor="deliver-id">Engagement id</label>
+            <input
+              id="deliver-id"
+              className="input mono"
+              value={deliverId}
+              placeholder="eng-001"
+              onChange={(event) => setDeliverId(event.target.value)}
+            />
+          </div>
+
+          <div className="field">
+            <label htmlFor="deliver-uri">Where the finished work is (https)</label>
+            <input
+              id="deliver-uri"
+              className="input mono"
+              value={deliverUri}
+              placeholder="https://example.com/orders_clean.py"
+              onChange={(event) => {
+                setDeliverUri(event.target.value)
+                setDeliverDigest('')
+                setHashError(null)
+              }}
+            />
+          </div>
+
+          <div className="field">
+            <label htmlFor="deliver-digest">SHA-256 of those bytes</label>
+            <input
+              id="deliver-digest"
+              className="input mono"
+              value={deliverDigest}
+              placeholder="64 hex characters"
+              onChange={(event) => setDeliverDigest(event.target.value.trim())}
+            />
+          </div>
+
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={!deliverUri || hashing}
+            onClick={() => {
+              setHashing(true)
+              setHashError(null)
+              void digestOfUrl(deliverUri)
+                .then((hex) => setDeliverDigest(hex))
+                .catch((error: unknown) =>
+                  setHashError(
+                    error instanceof Error ? error.message : 'could not read that URL',
+                  ),
+                )
+                .finally(() => setHashing(false))
+            }}
+          >
+            {hashing ? 'Fetching…' : 'Fetch and hash it'}
+          </button>
+
+          {hashError ? (
+            <p className="note note--warn">
+              Could not read {deliverUri} from this browser: {hashError}. That may
+              only be the host refusing a cross-origin read — the validators are
+              not a browser and are not bound by it — so you can paste a digest
+              computed elsewhere. But if the URL is genuinely unreachable, the
+              graders will not be able to fetch it either, and the engagement
+              settles as <code>unverified</code>, where the work cannot defend
+              itself.
+            </p>
+          ) : null}
+
+          <p className="note">
+            The digest is committed, not derived, so the artifact cannot be
+            swapped afterwards — not by you once the work is questioned, and not
+            by anyone else who can write to that host. Keep it reachable until
+            the engagement settles.
+          </p>
+
+          <button
+            type="button"
+            className="btn"
+            disabled={!canWrite || deliverState.pending || !deliverId || !deliverUri || deliverDigest.length !== 64}
+            onClick={() =>
+              void runDeliver(() =>
+                submitDelivery(address as string, {
+                  engagementId: deliverId,
+                  uri: deliverUri,
+                  digest: deliverDigest,
+                }),
+              )
+            }
+          >
+            {deliverState.pending ? 'Committing…' : 'Commit the delivery'}
+          </button>
+          <Outcome state={deliverState} verb="Delivery committed." />
+        </Step>
+
+        <Step
+          index={4}
           title="Close it"
           blurb="Marks the work finished, which is what opens attestation. Either counterparty may close."
         >
@@ -348,7 +457,7 @@ export default function Attest() {
         </Step>
 
         <Step
-          index={4}
+          index={5}
           title="Attest"
           blurb="Grades your counterparty's side of a closed engagement. One model call, settled by validator consensus - this is the slow one."
         >
@@ -427,7 +536,7 @@ export default function Attest() {
         </Step>
 
         <Step
-          index={5}
+          index={6}
           title="Reclaim the bond"
           blurb="Returns a releasable bond once its lock has elapsed. Only the attester can, and only if the grade did not slash it."
         >
@@ -457,7 +566,7 @@ export default function Attest() {
         </Step>
 
         <Step
-          index={6}
+          index={7}
           title="Release the collateral"
           blurb="Returns work collateral to the provider who posted it - once the grade cleared them, or once the engagement has been closed for the dispute window with nobody grading it at all."
         >
@@ -490,7 +599,7 @@ export default function Attest() {
         </Step>
 
         <Step
-          index={7}
+          index={8}
           title="Claim forfeited collateral"
           blurb="Pays the collateral to the client when a substantiated attestation found the work undelivered. Accusation alone does not forfeit it - the attestation has to carry weight in the score first."
         >

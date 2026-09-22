@@ -1391,10 +1391,16 @@ says the standard should have been.
   happened. An attester asserting that nothing was delivered does not make a
   present, matching deliverable disappear.
 
-  When the DELIVERABLE block says no deliverable was retrieved, you have no
-  work in front of you. Say so through low `confidence` rather than assuming
-  either party is right, and remember that the attester's account of missing
-  work is still only an account.
+  When the DELIVERABLE block says no deliverable was *committed*, that is an
+  established fact about the record and not one party's claim: the provider
+  never said where the work is. Judge the committed scope against that. It is
+  not a reason for low `confidence` -- the record is clear, whatever the two
+  parties say about each other.
+
+  When the block says a deliverable was committed but could not be retrieved
+  or did not match its checksum, nothing was established either way. That is
+  genuine uncertainty and low `confidence` is the correct answer, because the
+  only thing left in front of you is the attester's account.
   "fulfilled"   -- the committed scope was met
   "partial"     -- some committed items were met and others were not
   "unfulfilled" -- the committed scope was not met
@@ -1459,8 +1465,9 @@ DELIVERY_NOTES = {
         "recovered. The block is empty.)"
     ),
     "absent": (
-        "DELIVERABLE (the provider never committed one. There is no record of "
-        "where the work is. The block is empty.)"
+        "DELIVERABLE (none was ever committed. The provider never recorded "
+        "where the work is, which is a fact about the record rather than "
+        "either party's account of it. The block is empty.)"
     ),
 }
 
@@ -3138,6 +3145,11 @@ class ReputationOracle(gl.Contract):
             "created_at": int(self.att_created_at[index]),
             "age_seconds": age,
             "verdict": self.att_verdict[index],
+            # What the graders established about the provider's deliverable
+            # when this grade was made. Carried in the list view and not only in
+            # `get_attestation`, because the basis a grade stood on is the first
+            # thing a reader wants beside the grade itself.
+            "delivery": self.att_delivery[index],
             "fulfilled": int(self.att_fulfilled[index]),
             "substantiated": int(self.att_substantiated[index]),
             "confidence": int(self.att_confidence[index]),

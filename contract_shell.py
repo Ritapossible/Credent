@@ -1670,6 +1670,11 @@ class ReputationOracle(gl.Contract):
             "created_at": int(self.att_created_at[index]),
             "age_seconds": age,
             "verdict": self.att_verdict[index],
+            # What the graders established about the provider's deliverable
+            # when this grade was made. Carried in the list view and not only in
+            # `get_attestation`, because the basis a grade stood on is the first
+            # thing a reader wants beside the grade itself.
+            "delivery": self.att_delivery[index],
             "fulfilled": int(self.att_fulfilled[index]),
             "substantiated": int(self.att_substantiated[index]),
             "confidence": int(self.att_confidence[index]),

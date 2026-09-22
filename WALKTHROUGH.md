@@ -41,13 +41,23 @@ rejected** (`engagement_exists`).
 | 1 | | Value of the work | `10` | |
 | 1 | | Scope | *see Scope below* | |
 | 2 | Accept it, posting collateral | Engagement id | `credent-demo-001` | **B** |
-| 3 | Close it | Engagement id | `credent-demo-001` | A **or** B |
-| 4 | Attest | Engagement id | `credent-demo-001` | **A** |
-| 4 | | Claim | *see Claim below* | |
-| 4 | | Evidence | *see Evidence below* | |
-| 5 | Reclaim the bond | Attestation id | the number step 4 returned (`0`, `1`, …) | **A** |
-| 6 | Release the collateral | Engagement id | `credent-demo-001` | **B** |
-| 7 | Claim forfeited collateral | Engagement id | *only if step 4 forfeited it* | **A** |
+| 3 | Commit the delivery | Engagement id | `credent-demo-001` | **B** |
+| 3 | | Where the work is | *see Delivery below* | |
+| 3 | | SHA-256 | press **Fetch and hash it** | |
+| 4 | Close it | Engagement id | `credent-demo-001` | A **or** B |
+| 5 | Attest | Engagement id | `credent-demo-001` | **A** |
+| 5 | | Claim | *see Claim below* | |
+| 5 | | Evidence | *see Evidence below* | |
+| 6 | Reclaim the bond | Attestation id | the number step 5 returned (`0`, `1`, …) | **A** |
+| 7 | Release the collateral | Engagement id | `credent-demo-001` | **B** |
+| 8 | Claim forfeited collateral | Engagement id | *only if step 5 forfeited it* | **A** |
+
+**Step 3 is not optional if the collateral matters.** It is the provider's own
+signed transaction saying where the finished work is and what it hashes to, and
+it is what the validators fetch and grade. Skip it and the attestation is
+graded against an *absent* delivery — which is an on-chain fact rather than the
+client's word, and it is enough to forfeit B's collateral to A. It must be done
+before step 4: closing the engagement freezes the commitment.
 
 Step 5 will not work today — see [The bond](#the-bond). Step 6 will, as soon as
 step 4 has graded the work: a clearing grade settles the collateral immediately,
@@ -74,6 +84,21 @@ orders_clean.csv sorted by order id. Runtime under 30 seconds on a laptop.
 Include a one-page README covering how to run it and what it does with
 malformed rows. Delivered by 2026-08-24.
 ```
+
+### Delivery
+
+Anything reachable over HTTPS whose bytes will not change. For a first run, the
+deliverable this repository serves works and needs nothing of your own:
+
+```text
+https://raw.githubusercontent.com/Ritapossible/credent/main/examples/orders_clean.py
+```
+
+Press **Fetch and hash it** rather than typing a digest. Besides filling the
+field, it tells you something the number does not: whether the URL can actually
+be read. One that cannot is one the graders may not be able to read either, and
+that settles the engagement as `unverified`, where the work cannot speak for
+itself.
 
 ### Claim
 

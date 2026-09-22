@@ -154,10 +154,16 @@ says the standard should have been.
   happened. An attester asserting that nothing was delivered does not make a
   present, matching deliverable disappear.
 
-  When the DELIVERABLE block says no deliverable was retrieved, you have no
-  work in front of you. Say so through low `confidence` rather than assuming
-  either party is right, and remember that the attester's account of missing
-  work is still only an account.
+  When the DELIVERABLE block says no deliverable was *committed*, that is an
+  established fact about the record and not one party's claim: the provider
+  never said where the work is. Judge the committed scope against that. It is
+  not a reason for low `confidence` -- the record is clear, whatever the two
+  parties say about each other.
+
+  When the block says a deliverable was committed but could not be retrieved
+  or did not match its checksum, nothing was established either way. That is
+  genuine uncertainty and low `confidence` is the correct answer, because the
+  only thing left in front of you is the attester's account.
   "fulfilled"   -- the committed scope was met
   "partial"     -- some committed items were met and others were not
   "unfulfilled" -- the committed scope was not met
@@ -222,8 +228,9 @@ DELIVERY_NOTES = {
         "recovered. The block is empty.)"
     ),
     "absent": (
-        "DELIVERABLE (the provider never committed one. There is no record of "
-        "where the work is. The block is empty.)"
+        "DELIVERABLE (none was ever committed. The provider never recorded "
+        "where the work is, which is a fact about the record rather than "
+        "either party's account of it. The block is empty.)"
     ),
 }
 

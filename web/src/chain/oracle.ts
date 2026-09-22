@@ -28,6 +28,19 @@ import { CONTRACT_ADDRESS, IS_CONFIGURED } from './config'
 /** The bond lifecycle states the contract writes (`_BOND_*` in the shell). */
 export type BondState = 'none' | 'locked' | 'released' | 'slashed'
 
+/**
+ * What the validators established about the provider's deliverable when a
+ * grade was made.
+ *
+ * `verified` -- they fetched the artifact the provider committed and it hashed
+ * to the digest that provider signed, so the grade was made against the work.
+ * `absent` -- no delivery was ever committed, which is an on-chain fact rather
+ * than the attester's word. `unverified` -- one was committed and could not be
+ * checked, and that state cannot forfeit collateral.
+ */
+export type DeliveryState = 'absent' | 'unverified' | 'verified'
+export const DELIVERY_STATES = ['absent', 'unverified', 'verified'] as const
+
 const BOND_STATES: readonly BondState[] = ['none', 'locked', 'released', 'slashed']
 
 export interface ChainAttestation {
@@ -48,6 +61,8 @@ export interface ChainAttestation {
   gradeBp: number
   substantiated: number
   confidence: number
+  /** The basis this grade was made on. See `DeliveryState`. */
+  delivery: DeliveryState
   repeatIndex: number
   bond: bigint
   bondState: BondState
@@ -334,6 +349,10 @@ function decodeSummary(value: unknown): ChainAttestationSummary {
   if (!(BOND_STATES as readonly string[]).includes(bondState)) {
     throw new Error(`get_attestations.bond_state: unknown state "${bondState}"`)
   }
+  const delivery = str(source, 'delivery', 'get_attestations')
+  if (!(DELIVERY_STATES as readonly string[]).includes(delivery)) {
+    throw new Error(`get_attestations.delivery: unknown state "${delivery}"`)
+  }
 
   return {
     id: int(source, 'id', 'get_attestations'),
@@ -343,6 +362,7 @@ function decodeSummary(value: unknown): ChainAttestationSummary {
     claim: str(source, 'claim', 'get_attestations'),
     scope: str(source, 'scope', 'get_attestations'),
     scopeDigest: str(source, 'scope_digest', 'get_attestations'),
+    delivery: delivery as DeliveryState,
     createdAt: int(source, 'created_at', 'get_attestations'),
     ageSeconds: int(source, 'age_seconds', 'get_attestations'),
     verdict: verdict as Verdict,
@@ -582,6 +602,35 @@ export async function liabilities(): Promise<Liabilities> {
 }
 
 /** What the next attestation from this attester about this subject would cost. */
+/** What the provider committed for an engagement, if anything. */
+export interface Delivery {
+  engagementId: string
+  /** False when the provider never submitted one, which is what lets a
+   *  forfeiting grade stand without resting on the accuser's account. */
+  committed: boolean
+  uri: string
+  digest: string
+  committedAt: number
+}
+
+/**
+ * Read the provider's delivery commitment.
+ *
+ * Worth reading before attesting rather than after: a client can see what the
+ * graders are going to fetch, and a provider can confirm the commitment landed
+ * before the engagement closes and freezes it.
+ */
+export async function deliveryOf(engagementId: string): Promise<Delivery> {
+  const source = asDict(await call('delivery_of', [engagementId]), 'delivery_of')
+  return {
+    engagementId: str(source, 'engagement_id', 'delivery_of'),
+    committed: Boolean(source.committed),
+    uri: str(source, 'uri', 'delivery_of'),
+    digest: str(source, 'digest', 'delivery_of'),
+    committedAt: int(source, 'committed_at', 'delivery_of'),
+  }
+}
+
 export async function bondForNext(attester: string, subject: string): Promise<bigint> {
   const raw = await call('bond_for_next', [
     addressArg(attester, 'bond_for_next.attester'),
