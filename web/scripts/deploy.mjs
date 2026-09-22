@@ -46,6 +46,12 @@ const POLICY = [
   15000n,     // collateral_ceiling_bp
   2500n,      // collateral_floor_bp
   2500n,      // collateral_forfeit_bp
+  // The provider's fair chance to commit a delivery, measured from acceptance
+  // to close. Below it a missing commitment cannot forfeit: either party may
+  // close, and closing freezes the commitment, so without this a client could
+  // close the instant collateral was posted and bill the provider for an
+  // absence the client caused.
+  900n,       // delivery_window_seconds
 ]
 
 /** Bradbury under-estimates gas for a contract this size and the client does

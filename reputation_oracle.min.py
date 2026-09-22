@@ -12,6 +12,7 @@ BP = 10000
 NEUTRAL_BP = 5000
 U256_MAX = (1 << 256) - 1
 WITHDRAWAL_SETTLE_SECONDS = 900
+DELIVERY_WINDOW_SECONDS = 900
 RECIPIENT_MARKER_METHOD = "credent_recipient"
 RECIPIENT_MARKER = "credent-recipient-v1"
 MAX_COLLATERAL_BP = 100 * BP
@@ -151,6 +152,7 @@ class Policy:
  collateral_ceiling_bp: int = 15000
  collateral_floor_bp: int = 2500
  collateral_forfeit_bp: int = 2500
+ delivery_window_seconds: int = DELIVERY_WINDOW_SECONDS
  def validate(self) -> None:
   if self.half_life_seconds < 1:
    raise ValueError("half_life_seconds must be >= 1")
@@ -184,6 +186,8 @@ class Policy:
    raise ValueError("collateral_floor_bp must be <= collateral_ceiling_bp")
   if not 0 <= self.collateral_forfeit_bp <= BP:
    raise ValueError("collateral_forfeit_bp out of range")
+  if self.delivery_window_seconds < 0:
+   raise ValueError("delivery_window_seconds out of range")
 def decay_bp(weight: int, age_seconds: int, half_life_seconds: int) -> int:
  if half_life_seconds < 1:
   raise ValueError("half_life_seconds must be >= 1")
@@ -285,9 +289,15 @@ COLLATERAL_FORFEIT = "forfeit"
 COLLATERAL_OUTCOMES = (COLLATERAL_RELEASABLE, COLLATERAL_FORFEIT)
 MAX_DELIVERY_URI_CHARS = 2048
 DELIVERY_ABSENT = "absent"
+DELIVERY_FORECLOSED = "foreclosed"
 DELIVERY_UNVERIFIED = "unverified"
 DELIVERY_VERIFIED = "verified"
-DELIVERY_STATES = (DELIVERY_ABSENT, DELIVERY_UNVERIFIED, DELIVERY_VERIFIED)
+DELIVERY_STATES = (
+DELIVERY_ABSENT,
+DELIVERY_FORECLOSED,
+DELIVERY_UNVERIFIED,
+DELIVERY_VERIFIED,
+)
 def collateral_rate_bp(score_bp: int, policy: Policy) -> int:
  policy.validate()
  if not isinstance(score_bp, int) or isinstance(score_bp, bool):
@@ -324,6 +334,14 @@ def collateral_outcome(grade: object, policy: Policy) -> str:
  if confidence < policy.min_confidence:
   return COLLATERAL_RELEASABLE
  return COLLATERAL_FORFEIT if fulfilled < policy.collateral_forfeit_bp else COLLATERAL_RELEASABLE
+def uncommitted_delivery(
+*, accepted_at: int, closed_at: int, window_seconds: int
+) -> str:
+ if closed_at <= 0 or accepted_at <= 0:
+  return DELIVERY_FORECLOSED
+ if closed_at - accepted_at < window_seconds:
+  return DELIVERY_FORECLOSED
+ return DELIVERY_ABSENT
 def verify_delivery(status: int, body: bytes | None, digest: str) -> tuple[str, str]:
  if status != 200 or body is None:
   return DELIVERY_UNVERIFIED, ""
@@ -336,7 +354,7 @@ def collateral_settlement(grade: object, policy: Policy, delivery: str) -> str:
   return COLLATERAL_RELEASABLE
  if collateral_outcome(grade, policy) != COLLATERAL_FORFEIT:
   return COLLATERAL_RELEASABLE
- if delivery == DELIVERY_UNVERIFIED:
+ if delivery == DELIVERY_UNVERIFIED or delivery == DELIVERY_FORECLOSED:
   return COLLATERAL_RELEASABLE
  return COLLATERAL_FORFEIT
 def canonicalize_grade(raw: str | dict, policy: Policy) -> dict:
@@ -672,6 +690,18 @@ def _slice(items, offset: int, limit: int) -> list:
  return [items[index] for index in range(offset, stop)]
 def _owed_key(address: Address) -> str:
  return address.as_hex.lower()
+def _lookup_key(recipient: object) -> str:
+ if isinstance(recipient, Address):
+  return recipient.as_hex.lower()
+ if isinstance(recipient, str):
+  text = recipient.strip().lower()
+  if len(text) == 42 and text.startswith("0x"):
+   for character in text[2:]:
+    if character not in "0123456789abcdef":
+     _fail(REASON_BAD_RECIPIENT)
+   return text
+ _fail(REASON_BAD_RECIPIENT)
+ return ""
 def _clean_recipient(raw: object) -> Address:
  if isinstance(raw, Address):
   address = raw
@@ -721,6 +751,7 @@ class ReputationOracle(gl.Contract):
  p_release_floor: u256
  p_bond_lock_seconds: u256
  p_withdrawal_settle_seconds: u256
+ p_delivery_window_seconds: u256
  p_collateral_ceiling_bp: u256
  p_collateral_floor_bp: u256
  p_collateral_forfeit_bp: u256
@@ -738,6 +769,7 @@ class ReputationOracle(gl.Contract):
  eng_delivery_uri: TreeMap[str, str]
  eng_delivery_digest: TreeMap[str, str]
  eng_delivery_at: TreeMap[str, u256]
+ eng_accepted_at: TreeMap[str, u256]
  att_engagement: DynArray[str]
  att_attester: DynArray[Address]
  att_subject: DynArray[Address]
@@ -783,6 +815,7 @@ withdrawal_settle_seconds: u256 = 900,
 collateral_ceiling_bp: u256 = 15000,
 collateral_floor_bp: u256 = 2500,
 collateral_forfeit_bp: u256 = 2500,
+delivery_window_seconds: u256 = DELIVERY_WINDOW_SECONDS,
 ):
   candidate = Policy(
 half_life_seconds=half_life_seconds,
@@ -798,6 +831,7 @@ bond_lock_seconds=bond_lock_seconds,
 collateral_ceiling_bp=collateral_ceiling_bp,
 collateral_floor_bp=collateral_floor_bp,
 collateral_forfeit_bp=collateral_forfeit_bp,
+delivery_window_seconds=delivery_window_seconds,
 )
   try:
    candidate.validate()
@@ -818,6 +852,7 @@ collateral_forfeit_bp=collateral_forfeit_bp,
   self.p_collateral_ceiling_bp = collateral_ceiling_bp
   self.p_collateral_floor_bp = collateral_floor_bp
   self.p_collateral_forfeit_bp = collateral_forfeit_bp
+  self.p_delivery_window_seconds = delivery_window_seconds
   self.total_owed = 0
   self.total_in_flight = 0
   self.total_bond_held = 0
@@ -845,6 +880,7 @@ slash_floor=int(self.p_slash_floor),
 release_floor=int(self.p_release_floor),
 bond_lock_seconds=int(self.p_bond_lock_seconds),
 withdrawal_settle_seconds=int(self.p_withdrawal_settle_seconds),
+delivery_window_seconds=int(self.p_delivery_window_seconds),
 collateral_ceiling_bp=int(self.p_collateral_ceiling_bp),
 collateral_floor_bp=int(self.p_collateral_floor_bp),
 collateral_forfeit_bp=int(self.p_collateral_forfeit_bp),
@@ -896,6 +932,7 @@ self, engagement_id: str, provider: Address, scope: str, stake: u256 = 0
   if required > 0:
    self.total_collateral_held = int(self.total_collateral_held) + required
   self.eng_state[engagement_id] = _ENG_OPEN
+  self.eng_accepted_at[engagement_id] = _now_seconds()
   excess = posted - required
   if excess > 0:
    self._credit(provider, excess)
@@ -970,6 +1007,11 @@ claim=claim,
   delivery_uri = self.eng_delivery_uri.get(engagement_id, "")
   delivery_digest = self.eng_delivery_digest.get(engagement_id, "")
   committed = int(self.eng_delivery_at.get(engagement_id, 0)) > 0
+  uncommitted = uncommitted_delivery(
+accepted_at=int(self.eng_accepted_at.get(engagement_id, 0)),
+closed_at=int(self.eng_closed_at.get(engagement_id, 0)),
+window_seconds=int(self.p_delivery_window_seconds),
+)
   def prompt_for(delivery: str, artifact: str) -> str:
    return build_attestation_prompt(
 salt=salt,
@@ -981,7 +1023,7 @@ artifact=artifact,
 )
   def leader() -> dict:
    if not committed:
-    delivery = DELIVERY_ABSENT
+    delivery = uncommitted
     artifact = ""
    else:
     try:
@@ -1006,7 +1048,7 @@ policy,
    theirs = decode_grade(result.calldata, policy)
    def regrade() -> dict:
     if not committed:
-     delivery = DELIVERY_ABSENT
+     delivery = uncommitted
      artifact = ""
     else:
      try:
@@ -1243,7 +1285,7 @@ settle_seconds=int(self.p_withdrawal_settle_seconds),
   self.total_owed = int(self.total_owed) + amount
   return {"to": key, "amount": amount, "outcome": WITHDRAWAL_RESTORED}
  @gl.public.view
- def withdrawal_of(self, recipient: str) -> dict:
+ def withdrawal_of(self, recipient: str | Address) -> dict:
   key = _owed_key(_clean_recipient(recipient))
   amount = int(self.in_flight.get(key, 0))
   opened_at = int(self.in_flight_at.get(key, 0))
@@ -1258,15 +1300,11 @@ else opened_at + int(self.p_withdrawal_settle_seconds),
 and _now_seconds() >= opened_at + int(self.p_withdrawal_settle_seconds),
 }
  @gl.public.view
- def in_flight_to(self, recipient: str) -> int:
-  if not isinstance(recipient, str):
-   return 0
-  return int(self.in_flight.get(recipient.lower(), 0))
+ def in_flight_to(self, recipient: str | Address) -> int:
+  return int(self.in_flight.get(_lookup_key(recipient), 0))
  @gl.public.view
- def is_proven(self, recipient: str) -> bool:
-  if not isinstance(recipient, str):
-   return False
-  return bool(self.proven.get(recipient.lower(), False))
+ def is_proven(self, recipient: str | Address) -> bool:
+  return bool(self.proven.get(_lookup_key(recipient), False))
  @gl.public.view
  def liabilities(self) -> dict:
   return {
@@ -1280,10 +1318,8 @@ and _now_seconds() >= opened_at + int(self.p_withdrawal_settle_seconds),
 "held": int(gl.get_contract_at(gl.message.contract_address).balance),
 }
  @gl.public.view
- def owed_to(self, recipient: str) -> int:
-  if not isinstance(recipient, str):
-   return 0
-  key = recipient.strip().lower()
+ def owed_to(self, recipient: str | Address) -> int:
+  key = _lookup_key(recipient)
   current = self.owed.get(key)
   return 0 if current is None else int(current)
  def _report(self, subject: Address) -> dict:
@@ -1502,6 +1538,7 @@ for raw in _slice(ids, int(offset), int(limit))
 "collateral_ceiling_bp": policy.collateral_ceiling_bp,
 "collateral_floor_bp": policy.collateral_floor_bp,
 "collateral_forfeit_bp": policy.collateral_forfeit_bp,
+"delivery_window_seconds": policy.delivery_window_seconds,
 }
  @gl.public.view
  def delivery_of(self, engagement_id: str) -> dict:

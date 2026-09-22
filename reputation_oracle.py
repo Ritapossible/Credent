@@ -142,6 +142,11 @@ U256_MAX = (1 << 256) - 1
 # a second transaction the recipient was going to send anyway.
 WITHDRAWAL_SETTLE_SECONDS = 900
 
+# How long a provider has to commit a delivery before a missing one counts
+# against them. Deliberately short: it exists to stop a client closing an
+# engagement the instant collateral is posted, not to model delivery time.
+DELIVERY_WINDOW_SECONDS = 900
+
 # The view method a push-payment recipient must implement, and the exact string
 # it must return. This is the one *exact* recipient test available: a wallet has
 # no code, so it cannot answer a view call at all, and the failure is not
@@ -432,6 +437,11 @@ class Policy:
     collateral_ceiling_bp: int = 15000  # 150% of stake at score 0
     collateral_floor_bp: int = 2500  # 25% of stake at a perfect score
     collateral_forfeit_bp: int = 2500  # fulfilled below 25% forfeits
+    # The provider's fair chance to commit a delivery, measured from acceptance
+    # to close. Below it a missing commitment is `foreclosed` rather than
+    # `absent` and cannot forfeit. A floor, not an estimate of how long work
+    # takes -- see `uncommitted_delivery`.
+    delivery_window_seconds: int = DELIVERY_WINDOW_SECONDS
 
     def validate(self) -> None:
         if self.half_life_seconds < 1:
@@ -466,6 +476,8 @@ class Policy:
             raise ValueError("collateral_floor_bp must be <= collateral_ceiling_bp")
         if not 0 <= self.collateral_forfeit_bp <= BP:
             raise ValueError("collateral_forfeit_bp out of range")
+        if self.delivery_window_seconds < 0:
+            raise ValueError("delivery_window_seconds out of range")
 
 
 # --- decay ----------------------------------------------------------------
@@ -732,8 +744,15 @@ COLLATERAL_OUTCOMES = (COLLATERAL_RELEASABLE, COLLATERAL_FORFEIT)
 # What the validators were able to establish about the provider's deliverable at
 # the moment the grade was made.
 #
-# `absent`      the provider never committed a delivery. An on-chain fact: no
-#               transaction signed by them says where the work is.
+# `absent`      the provider never committed a delivery, and had the time to.
+#               An on-chain fact: no transaction signed by them says where the
+#               work is.
+# `foreclosed`  they never committed one either, but the engagement was closed
+#               before they had a fair chance to. Either party may close, and
+#               closing freezes the commitment, so a client who closes the
+#               moment collateral is posted can shut the provider out of the
+#               one step that would defend it. That is not the provider's
+#               failure and it must not cost them their collateral.
 # `unverified`  they committed one, but the validators could not retrieve it, or
 #               what came back did not hash to the digest they committed.
 # `verified`    retrieved, and it hashes to the digest the provider signed. The
@@ -742,9 +761,15 @@ COLLATERAL_OUTCOMES = (COLLATERAL_RELEASABLE, COLLATERAL_FORFEIT)
 MAX_DELIVERY_URI_CHARS = 2048
 
 DELIVERY_ABSENT = "absent"
+DELIVERY_FORECLOSED = "foreclosed"
 DELIVERY_UNVERIFIED = "unverified"
 DELIVERY_VERIFIED = "verified"
-DELIVERY_STATES = (DELIVERY_ABSENT, DELIVERY_UNVERIFIED, DELIVERY_VERIFIED)
+DELIVERY_STATES = (
+    DELIVERY_ABSENT,
+    DELIVERY_FORECLOSED,
+    DELIVERY_UNVERIFIED,
+    DELIVERY_VERIFIED,
+)
 
 
 def collateral_rate_bp(score_bp: int, policy: Policy) -> int:
@@ -866,6 +891,38 @@ def collateral_outcome(grade: object, policy: Policy) -> str:
     return COLLATERAL_FORFEIT if fulfilled < policy.collateral_forfeit_bp else COLLATERAL_RELEASABLE
 
 
+def uncommitted_delivery(
+    *, accepted_at: int, closed_at: int, window_seconds: int
+) -> str:
+    """Which kind of missing delivery this is: the provider's fault, or the client's.
+
+    Either counterparty may close an engagement, and closing freezes the
+    delivery commitment. Put those two together and a client can post an
+    engagement, wait for the provider to lock up collateral accepting it, close
+    it in the next block, and leave the provider unable to commit the one thing
+    that would defend them. The attestation then grades an absent deliverable,
+    which forfeits. Measured on a deployed contract before this existed: the
+    client took the whole 0.875 GEN of a provider the contract had refused to
+    let deliver.
+
+    So a missing commitment is only the provider's failure if the provider had
+    time to make one. `window_seconds` is that floor, measured from the moment
+    the collateral went in to the moment the engagement closed.
+
+    It is a fairness floor and not an estimate of how long work takes: a client
+    who waits it out can still close on an undelivered engagement, which is
+    exactly what they should be able to do. What they cannot do is deny the
+    opportunity and then bill for its absence.
+    """
+    if closed_at <= 0 or accepted_at <= 0:
+        # No acceptance or no close recorded. Nothing establishes that the
+        # provider had a chance, so this cannot be held against them.
+        return DELIVERY_FORECLOSED
+    if closed_at - accepted_at < window_seconds:
+        return DELIVERY_FORECLOSED
+    return DELIVERY_ABSENT
+
+
 def verify_delivery(status: int, body: bytes | None, digest: str) -> tuple[str, str]:
     """Decide what a fetched response proves about the committed artifact.
 
@@ -906,9 +963,13 @@ def collateral_settlement(grade: object, policy: Policy, delivery: str) -> str:
       and it hashed to the digest the provider signed. The grade was made
       against those bytes. A false account cannot make a delivered artifact
       read as undelivered, because the model is looking at the artifact.
-    * `absent` -- the provider never committed a delivery at all. That is an
-      on-chain fact rather than a claim: no transaction signed by them says
-      where the work is. A forfeit here rests on that absence.
+    * `absent` -- the provider never committed a delivery at all, and had the
+      time to. That is an on-chain fact rather than a claim: no transaction
+      signed by them says where the work is. A forfeit here rests on that
+      absence.
+    * `foreclosed` -- no commitment either, but the engagement closed before
+      the provider could make one. The absence is the client's doing, not the
+      provider's, so it returns the collateral. See `uncommitted_delivery`.
     * `unverified` -- they committed one and it could not be checked. Nobody
       established anything, so this returns the collateral. It is the same
       instinct as the rest of this module: an unproven case does not justify
@@ -933,7 +994,7 @@ def collateral_settlement(grade: object, policy: Policy, delivery: str) -> str:
         return COLLATERAL_RELEASABLE
     if collateral_outcome(grade, policy) != COLLATERAL_FORFEIT:
         return COLLATERAL_RELEASABLE
-    if delivery == DELIVERY_UNVERIFIED:
+    if delivery == DELIVERY_UNVERIFIED or delivery == DELIVERY_FORECLOSED:
         return COLLATERAL_RELEASABLE
     return COLLATERAL_FORFEIT
 
@@ -1615,6 +1676,38 @@ def _owed_key(address: Address) -> str:
     return address.as_hex.lower()
 
 
+def _lookup_key(recipient: object) -> str:
+    """The entitlement key for whatever form a caller holds.
+
+    These views used to be annotated `recipient: str` and open with
+    `if not isinstance(recipient, str): return 0`. An off-chain caller that
+    passed an `Address` -- which is what the reputation views on this same
+    contract take, and what every SDK helper produces -- got a silent zero
+    instead of their balance.
+
+    That is not a hypothetical. This project's own walkthrough asserted "the
+    accuser was credited nothing" by reading `owed_to` with a `CalldataAddress`
+    and comparing it to zero. It passed on a run where the accuser *had* been
+    credited 0.875 GEN, because the view answers zero to that argument whatever
+    the books say. A check that cannot fail is worse than no check, and it was
+    cited as evidence.
+
+    So both forms are accepted and anything else is refused out loud. A view
+    that guesses is a view that misleads.
+    """
+    if isinstance(recipient, Address):
+        return recipient.as_hex.lower()
+    if isinstance(recipient, str):
+        text = recipient.strip().lower()
+        if len(text) == 42 and text.startswith("0x"):
+            for character in text[2:]:
+                if character not in "0123456789abcdef":
+                    _fail(REASON_BAD_RECIPIENT)
+            return text
+    _fail(REASON_BAD_RECIPIENT)
+    return ""
+
+
 def _clean_recipient(raw: object) -> Address:
     """A payout recipient, or a classified refusal.
 
@@ -1805,6 +1898,7 @@ class ReputationOracle(gl.Contract):
     p_release_floor: u256
     p_bond_lock_seconds: u256
     p_withdrawal_settle_seconds: u256
+    p_delivery_window_seconds: u256
     p_collateral_ceiling_bp: u256
     p_collateral_floor_bp: u256
     p_collateral_forfeit_bp: u256
@@ -1834,6 +1928,9 @@ class ReputationOracle(gl.Contract):
     eng_delivery_uri: TreeMap[str, str]
     eng_delivery_digest: TreeMap[str, str]
     eng_delivery_at: TreeMap[str, u256]
+    # When the collateral went in. The delivery window runs from here, so a
+    # client cannot close the provider out of committing and then bill for it.
+    eng_accepted_at: TreeMap[str, u256]
 
     # Attestations. Append-only; the shared index is the attestation id.
     att_engagement: DynArray[str]
@@ -1948,6 +2045,8 @@ class ReputationOracle(gl.Contract):
         collateral_ceiling_bp: u256 = 15000,
         collateral_floor_bp: u256 = 2500,
         collateral_forfeit_bp: u256 = 2500,
+        # Appended last: storage layout is order-sensitive.
+        delivery_window_seconds: u256 = DELIVERY_WINDOW_SECONDS,
     ):
         """Deploy with a policy.
 
@@ -1971,6 +2070,7 @@ class ReputationOracle(gl.Contract):
             collateral_ceiling_bp=collateral_ceiling_bp,
             collateral_floor_bp=collateral_floor_bp,
             collateral_forfeit_bp=collateral_forfeit_bp,
+            delivery_window_seconds=delivery_window_seconds,
         )
         try:
             candidate.validate()
@@ -1992,6 +2092,7 @@ class ReputationOracle(gl.Contract):
         self.p_collateral_ceiling_bp = collateral_ceiling_bp
         self.p_collateral_floor_bp = collateral_floor_bp
         self.p_collateral_forfeit_bp = collateral_forfeit_bp
+        self.p_delivery_window_seconds = delivery_window_seconds
 
         # Plain `0`, never `u256(0)`: on this runner the integer aliases are
         # `typing.Annotated[int, ...]`, so they annotate and do not call.
@@ -2049,6 +2150,7 @@ class ReputationOracle(gl.Contract):
             release_floor=int(self.p_release_floor),
             bond_lock_seconds=int(self.p_bond_lock_seconds),
             withdrawal_settle_seconds=int(self.p_withdrawal_settle_seconds),
+            delivery_window_seconds=int(self.p_delivery_window_seconds),
             collateral_ceiling_bp=int(self.p_collateral_ceiling_bp),
             collateral_floor_bp=int(self.p_collateral_floor_bp),
             collateral_forfeit_bp=int(self.p_collateral_forfeit_bp),
@@ -2165,6 +2267,7 @@ class ReputationOracle(gl.Contract):
         if required > 0:
             self.total_collateral_held = int(self.total_collateral_held) + required
         self.eng_state[engagement_id] = _ENG_OPEN
+        self.eng_accepted_at[engagement_id] = _now_seconds()
 
         # Overpayment goes straight back, as it does in `attest`. Holding it
         # would make the collateral curve a floor rather than a price, and the
@@ -2309,6 +2412,18 @@ class ReputationOracle(gl.Contract):
         delivery_uri = self.eng_delivery_uri.get(engagement_id, "")
         delivery_digest = self.eng_delivery_digest.get(engagement_id, "")
         committed = int(self.eng_delivery_at.get(engagement_id, 0)) > 0
+        # Which kind of missing commitment this is, decided from the record
+        # rather than from either party's account of it. Either counterparty
+        # may close, and closing freezes the commitment, so a client who closes
+        # the moment collateral is posted shuts the provider out of the one
+        # step that would defend it. That absence is the client's doing, and
+        # `uncommitted_delivery` is where it stops being chargeable to the
+        # provider.
+        uncommitted = uncommitted_delivery(
+            accepted_at=int(self.eng_accepted_at.get(engagement_id, 0)),
+            closed_at=int(self.eng_closed_at.get(engagement_id, 0)),
+            window_seconds=int(self.p_delivery_window_seconds),
+        )
 
         def prompt_for(delivery: str, artifact: str) -> str:
             # Pure, so it can be shared by both closures below. Only the two
@@ -2329,7 +2444,7 @@ class ReputationOracle(gl.Contract):
             # asserts and the others take on trust. `verify_delivery` is the
             # pure half and lives in the engine, where a test can drive it.
             if not committed:
-                delivery = DELIVERY_ABSENT
+                delivery = uncommitted
                 artifact = ""
             else:
                 try:
@@ -2368,7 +2483,7 @@ class ReputationOracle(gl.Contract):
                 # asserts and the others take on trust. `verify_delivery` is the
                 # pure half and lives in the engine, where a test can drive it.
                 if not committed:
-                    delivery = DELIVERY_ABSENT
+                    delivery = uncommitted
                     artifact = ""
                 else:
                     try:
@@ -2929,7 +3044,7 @@ class ReputationOracle(gl.Contract):
         self.total_owed = int(self.total_owed) + amount
         return {"to": key, "amount": amount, "outcome": WITHDRAWAL_RESTORED}
     @gl.public.view
-    def withdrawal_of(self, recipient: str) -> dict:
+    def withdrawal_of(self, recipient: str | Address) -> dict:
         """An outstanding withdrawal in full, so it can be watched from outside.
 
         `amount` is what is in flight, `opened_at` the consensus second
@@ -2954,18 +3069,14 @@ class ReputationOracle(gl.Contract):
         }
 
     @gl.public.view
-    def in_flight_to(self, recipient: str) -> int:
+    def in_flight_to(self, recipient: str | Address) -> int:
         """What this contract has emitted to an address and not yet resolved."""
-        if not isinstance(recipient, str):
-            return 0
-        return int(self.in_flight.get(recipient.lower(), 0))
+        return int(self.in_flight.get(_lookup_key(recipient), 0))
 
     @gl.public.view
-    def is_proven(self, recipient: str) -> bool:
+    def is_proven(self, recipient: str | Address) -> bool:
         """Whether `withdraw` will deliver to this address."""
-        if not isinstance(recipient, str):
-            return False
-        return bool(self.proven.get(recipient.lower(), False))
+        return bool(self.proven.get(_lookup_key(recipient), False))
 
     # --- views --------------------------------------------------------------
 
@@ -3008,17 +3119,12 @@ class ReputationOracle(gl.Contract):
         }
 
     @gl.public.view
-    def owed_to(self, recipient: str) -> int:
+    def owed_to(self, recipient: str | Address) -> int:
         """What this contract owes an address but has not yet paid out.
 
         Free to call, and the number a recipient checks before withdrawing.
         """
-        if not isinstance(recipient, str):
-            return 0
-        # Lowercased to match `_owed_key`. An off-chain caller passes whichever
-        # form it happens to hold -- a checksummed address from a wallet, a
-        # lowercase one from a log -- and both must find the same entry.
-        key = recipient.strip().lower()
+        key = _lookup_key(recipient)
         current = self.owed.get(key)
         return 0 if current is None else int(current)
 
@@ -3369,6 +3475,7 @@ class ReputationOracle(gl.Contract):
             "collateral_ceiling_bp": policy.collateral_ceiling_bp,
             "collateral_floor_bp": policy.collateral_floor_bp,
             "collateral_forfeit_bp": policy.collateral_forfeit_bp,
+            "delivery_window_seconds": policy.delivery_window_seconds,
         }
 
     @gl.public.view

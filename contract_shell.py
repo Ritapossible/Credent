@@ -140,6 +140,38 @@ def _owed_key(address: Address) -> str:
     return address.as_hex.lower()
 
 
+def _lookup_key(recipient: object) -> str:
+    """The entitlement key for whatever form a caller holds.
+
+    These views used to be annotated `recipient: str` and open with
+    `if not isinstance(recipient, str): return 0`. An off-chain caller that
+    passed an `Address` -- which is what the reputation views on this same
+    contract take, and what every SDK helper produces -- got a silent zero
+    instead of their balance.
+
+    That is not a hypothetical. This project's own walkthrough asserted "the
+    accuser was credited nothing" by reading `owed_to` with a `CalldataAddress`
+    and comparing it to zero. It passed on a run where the accuser *had* been
+    credited 0.875 GEN, because the view answers zero to that argument whatever
+    the books say. A check that cannot fail is worse than no check, and it was
+    cited as evidence.
+
+    So both forms are accepted and anything else is refused out loud. A view
+    that guesses is a view that misleads.
+    """
+    if isinstance(recipient, Address):
+        return recipient.as_hex.lower()
+    if isinstance(recipient, str):
+        text = recipient.strip().lower()
+        if len(text) == 42 and text.startswith("0x"):
+            for character in text[2:]:
+                if character not in "0123456789abcdef":
+                    _fail(REASON_BAD_RECIPIENT)
+            return text
+    _fail(REASON_BAD_RECIPIENT)
+    return ""
+
+
 def _clean_recipient(raw: object) -> Address:
     """A payout recipient, or a classified refusal.
 
@@ -330,6 +362,7 @@ class ReputationOracle(gl.Contract):
     p_release_floor: u256
     p_bond_lock_seconds: u256
     p_withdrawal_settle_seconds: u256
+    p_delivery_window_seconds: u256
     p_collateral_ceiling_bp: u256
     p_collateral_floor_bp: u256
     p_collateral_forfeit_bp: u256
@@ -359,6 +392,9 @@ class ReputationOracle(gl.Contract):
     eng_delivery_uri: TreeMap[str, str]
     eng_delivery_digest: TreeMap[str, str]
     eng_delivery_at: TreeMap[str, u256]
+    # When the collateral went in. The delivery window runs from here, so a
+    # client cannot close the provider out of committing and then bill for it.
+    eng_accepted_at: TreeMap[str, u256]
 
     # Attestations. Append-only; the shared index is the attestation id.
     att_engagement: DynArray[str]
@@ -473,6 +509,8 @@ class ReputationOracle(gl.Contract):
         collateral_ceiling_bp: u256 = 15000,
         collateral_floor_bp: u256 = 2500,
         collateral_forfeit_bp: u256 = 2500,
+        # Appended last: storage layout is order-sensitive.
+        delivery_window_seconds: u256 = DELIVERY_WINDOW_SECONDS,
     ):
         """Deploy with a policy.
 
@@ -496,6 +534,7 @@ class ReputationOracle(gl.Contract):
             collateral_ceiling_bp=collateral_ceiling_bp,
             collateral_floor_bp=collateral_floor_bp,
             collateral_forfeit_bp=collateral_forfeit_bp,
+            delivery_window_seconds=delivery_window_seconds,
         )
         try:
             candidate.validate()
@@ -517,6 +556,7 @@ class ReputationOracle(gl.Contract):
         self.p_collateral_ceiling_bp = collateral_ceiling_bp
         self.p_collateral_floor_bp = collateral_floor_bp
         self.p_collateral_forfeit_bp = collateral_forfeit_bp
+        self.p_delivery_window_seconds = delivery_window_seconds
 
         # Plain `0`, never `u256(0)`: on this runner the integer aliases are
         # `typing.Annotated[int, ...]`, so they annotate and do not call.
@@ -574,6 +614,7 @@ class ReputationOracle(gl.Contract):
             release_floor=int(self.p_release_floor),
             bond_lock_seconds=int(self.p_bond_lock_seconds),
             withdrawal_settle_seconds=int(self.p_withdrawal_settle_seconds),
+            delivery_window_seconds=int(self.p_delivery_window_seconds),
             collateral_ceiling_bp=int(self.p_collateral_ceiling_bp),
             collateral_floor_bp=int(self.p_collateral_floor_bp),
             collateral_forfeit_bp=int(self.p_collateral_forfeit_bp),
@@ -690,6 +731,7 @@ class ReputationOracle(gl.Contract):
         if required > 0:
             self.total_collateral_held = int(self.total_collateral_held) + required
         self.eng_state[engagement_id] = _ENG_OPEN
+        self.eng_accepted_at[engagement_id] = _now_seconds()
 
         # Overpayment goes straight back, as it does in `attest`. Holding it
         # would make the collateral curve a floor rather than a price, and the
@@ -834,6 +876,18 @@ class ReputationOracle(gl.Contract):
         delivery_uri = self.eng_delivery_uri.get(engagement_id, "")
         delivery_digest = self.eng_delivery_digest.get(engagement_id, "")
         committed = int(self.eng_delivery_at.get(engagement_id, 0)) > 0
+        # Which kind of missing commitment this is, decided from the record
+        # rather than from either party's account of it. Either counterparty
+        # may close, and closing freezes the commitment, so a client who closes
+        # the moment collateral is posted shuts the provider out of the one
+        # step that would defend it. That absence is the client's doing, and
+        # `uncommitted_delivery` is where it stops being chargeable to the
+        # provider.
+        uncommitted = uncommitted_delivery(
+            accepted_at=int(self.eng_accepted_at.get(engagement_id, 0)),
+            closed_at=int(self.eng_closed_at.get(engagement_id, 0)),
+            window_seconds=int(self.p_delivery_window_seconds),
+        )
 
         def prompt_for(delivery: str, artifact: str) -> str:
             # Pure, so it can be shared by both closures below. Only the two
@@ -854,7 +908,7 @@ class ReputationOracle(gl.Contract):
             # asserts and the others take on trust. `verify_delivery` is the
             # pure half and lives in the engine, where a test can drive it.
             if not committed:
-                delivery = DELIVERY_ABSENT
+                delivery = uncommitted
                 artifact = ""
             else:
                 try:
@@ -893,7 +947,7 @@ class ReputationOracle(gl.Contract):
                 # asserts and the others take on trust. `verify_delivery` is the
                 # pure half and lives in the engine, where a test can drive it.
                 if not committed:
-                    delivery = DELIVERY_ABSENT
+                    delivery = uncommitted
                     artifact = ""
                 else:
                     try:
@@ -1454,7 +1508,7 @@ class ReputationOracle(gl.Contract):
         self.total_owed = int(self.total_owed) + amount
         return {"to": key, "amount": amount, "outcome": WITHDRAWAL_RESTORED}
     @gl.public.view
-    def withdrawal_of(self, recipient: str) -> dict:
+    def withdrawal_of(self, recipient: str | Address) -> dict:
         """An outstanding withdrawal in full, so it can be watched from outside.
 
         `amount` is what is in flight, `opened_at` the consensus second
@@ -1479,18 +1533,14 @@ class ReputationOracle(gl.Contract):
         }
 
     @gl.public.view
-    def in_flight_to(self, recipient: str) -> int:
+    def in_flight_to(self, recipient: str | Address) -> int:
         """What this contract has emitted to an address and not yet resolved."""
-        if not isinstance(recipient, str):
-            return 0
-        return int(self.in_flight.get(recipient.lower(), 0))
+        return int(self.in_flight.get(_lookup_key(recipient), 0))
 
     @gl.public.view
-    def is_proven(self, recipient: str) -> bool:
+    def is_proven(self, recipient: str | Address) -> bool:
         """Whether `withdraw` will deliver to this address."""
-        if not isinstance(recipient, str):
-            return False
-        return bool(self.proven.get(recipient.lower(), False))
+        return bool(self.proven.get(_lookup_key(recipient), False))
 
     # --- views --------------------------------------------------------------
 
@@ -1533,17 +1583,12 @@ class ReputationOracle(gl.Contract):
         }
 
     @gl.public.view
-    def owed_to(self, recipient: str) -> int:
+    def owed_to(self, recipient: str | Address) -> int:
         """What this contract owes an address but has not yet paid out.
 
         Free to call, and the number a recipient checks before withdrawing.
         """
-        if not isinstance(recipient, str):
-            return 0
-        # Lowercased to match `_owed_key`. An off-chain caller passes whichever
-        # form it happens to hold -- a checksummed address from a wallet, a
-        # lowercase one from a log -- and both must find the same entry.
-        key = recipient.strip().lower()
+        key = _lookup_key(recipient)
         current = self.owed.get(key)
         return 0 if current is None else int(current)
 
@@ -1894,6 +1939,7 @@ class ReputationOracle(gl.Contract):
             "collateral_ceiling_bp": policy.collateral_ceiling_bp,
             "collateral_floor_bp": policy.collateral_floor_bp,
             "collateral_forfeit_bp": policy.collateral_forfeit_bp,
+            "delivery_window_seconds": policy.delivery_window_seconds,
         }
 
     @gl.public.view

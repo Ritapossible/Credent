@@ -60,6 +60,11 @@ U256_MAX = (1 << 256) - 1
 # a second transaction the recipient was going to send anyway.
 WITHDRAWAL_SETTLE_SECONDS = 900
 
+# How long a provider has to commit a delivery before a missing one counts
+# against them. Deliberately short: it exists to stop a client closing an
+# engagement the instant collateral is posted, not to model delivery time.
+DELIVERY_WINDOW_SECONDS = 900
+
 # The view method a push-payment recipient must implement, and the exact string
 # it must return. This is the one *exact* recipient test available: a wallet has
 # no code, so it cannot answer a view call at all, and the failure is not
@@ -350,6 +355,11 @@ class Policy:
     collateral_ceiling_bp: int = 15000  # 150% of stake at score 0
     collateral_floor_bp: int = 2500  # 25% of stake at a perfect score
     collateral_forfeit_bp: int = 2500  # fulfilled below 25% forfeits
+    # The provider's fair chance to commit a delivery, measured from acceptance
+    # to close. Below it a missing commitment is `foreclosed` rather than
+    # `absent` and cannot forfeit. A floor, not an estimate of how long work
+    # takes -- see `uncommitted_delivery`.
+    delivery_window_seconds: int = DELIVERY_WINDOW_SECONDS
 
     def validate(self) -> None:
         if self.half_life_seconds < 1:
@@ -384,6 +394,8 @@ class Policy:
             raise ValueError("collateral_floor_bp must be <= collateral_ceiling_bp")
         if not 0 <= self.collateral_forfeit_bp <= BP:
             raise ValueError("collateral_forfeit_bp out of range")
+        if self.delivery_window_seconds < 0:
+            raise ValueError("delivery_window_seconds out of range")
 
 
 # --- decay ----------------------------------------------------------------
@@ -650,8 +662,15 @@ COLLATERAL_OUTCOMES = (COLLATERAL_RELEASABLE, COLLATERAL_FORFEIT)
 # What the validators were able to establish about the provider's deliverable at
 # the moment the grade was made.
 #
-# `absent`      the provider never committed a delivery. An on-chain fact: no
-#               transaction signed by them says where the work is.
+# `absent`      the provider never committed a delivery, and had the time to.
+#               An on-chain fact: no transaction signed by them says where the
+#               work is.
+# `foreclosed`  they never committed one either, but the engagement was closed
+#               before they had a fair chance to. Either party may close, and
+#               closing freezes the commitment, so a client who closes the
+#               moment collateral is posted can shut the provider out of the
+#               one step that would defend it. That is not the provider's
+#               failure and it must not cost them their collateral.
 # `unverified`  they committed one, but the validators could not retrieve it, or
 #               what came back did not hash to the digest they committed.
 # `verified`    retrieved, and it hashes to the digest the provider signed. The
@@ -660,9 +679,15 @@ COLLATERAL_OUTCOMES = (COLLATERAL_RELEASABLE, COLLATERAL_FORFEIT)
 MAX_DELIVERY_URI_CHARS = 2048
 
 DELIVERY_ABSENT = "absent"
+DELIVERY_FORECLOSED = "foreclosed"
 DELIVERY_UNVERIFIED = "unverified"
 DELIVERY_VERIFIED = "verified"
-DELIVERY_STATES = (DELIVERY_ABSENT, DELIVERY_UNVERIFIED, DELIVERY_VERIFIED)
+DELIVERY_STATES = (
+    DELIVERY_ABSENT,
+    DELIVERY_FORECLOSED,
+    DELIVERY_UNVERIFIED,
+    DELIVERY_VERIFIED,
+)
 
 
 def collateral_rate_bp(score_bp: int, policy: Policy) -> int:
@@ -784,6 +809,38 @@ def collateral_outcome(grade: object, policy: Policy) -> str:
     return COLLATERAL_FORFEIT if fulfilled < policy.collateral_forfeit_bp else COLLATERAL_RELEASABLE
 
 
+def uncommitted_delivery(
+    *, accepted_at: int, closed_at: int, window_seconds: int
+) -> str:
+    """Which kind of missing delivery this is: the provider's fault, or the client's.
+
+    Either counterparty may close an engagement, and closing freezes the
+    delivery commitment. Put those two together and a client can post an
+    engagement, wait for the provider to lock up collateral accepting it, close
+    it in the next block, and leave the provider unable to commit the one thing
+    that would defend them. The attestation then grades an absent deliverable,
+    which forfeits. Measured on a deployed contract before this existed: the
+    client took the whole 0.875 GEN of a provider the contract had refused to
+    let deliver.
+
+    So a missing commitment is only the provider's failure if the provider had
+    time to make one. `window_seconds` is that floor, measured from the moment
+    the collateral went in to the moment the engagement closed.
+
+    It is a fairness floor and not an estimate of how long work takes: a client
+    who waits it out can still close on an undelivered engagement, which is
+    exactly what they should be able to do. What they cannot do is deny the
+    opportunity and then bill for its absence.
+    """
+    if closed_at <= 0 or accepted_at <= 0:
+        # No acceptance or no close recorded. Nothing establishes that the
+        # provider had a chance, so this cannot be held against them.
+        return DELIVERY_FORECLOSED
+    if closed_at - accepted_at < window_seconds:
+        return DELIVERY_FORECLOSED
+    return DELIVERY_ABSENT
+
+
 def verify_delivery(status: int, body: bytes | None, digest: str) -> tuple[str, str]:
     """Decide what a fetched response proves about the committed artifact.
 
@@ -824,9 +881,13 @@ def collateral_settlement(grade: object, policy: Policy, delivery: str) -> str:
       and it hashed to the digest the provider signed. The grade was made
       against those bytes. A false account cannot make a delivered artifact
       read as undelivered, because the model is looking at the artifact.
-    * `absent` -- the provider never committed a delivery at all. That is an
-      on-chain fact rather than a claim: no transaction signed by them says
-      where the work is. A forfeit here rests on that absence.
+    * `absent` -- the provider never committed a delivery at all, and had the
+      time to. That is an on-chain fact rather than a claim: no transaction
+      signed by them says where the work is. A forfeit here rests on that
+      absence.
+    * `foreclosed` -- no commitment either, but the engagement closed before
+      the provider could make one. The absence is the client's doing, not the
+      provider's, so it returns the collateral. See `uncommitted_delivery`.
     * `unverified` -- they committed one and it could not be checked. Nobody
       established anything, so this returns the collateral. It is the same
       instinct as the rest of this module: an unproven case does not justify
@@ -851,7 +912,7 @@ def collateral_settlement(grade: object, policy: Policy, delivery: str) -> str:
         return COLLATERAL_RELEASABLE
     if collateral_outcome(grade, policy) != COLLATERAL_FORFEIT:
         return COLLATERAL_RELEASABLE
-    if delivery == DELIVERY_UNVERIFIED:
+    if delivery == DELIVERY_UNVERIFIED or delivery == DELIVERY_FORECLOSED:
         return COLLATERAL_RELEASABLE
     return COLLATERAL_FORFEIT
 

@@ -66,7 +66,12 @@ async function submit(who, fn, args, value = 0n) {
       return hash
     } catch (e) {
       const t = String(e.message ?? e)
-      if (!/(-32005|capacity|rate limit)/.test(t) || i >= 8) throw e
+      // Studio intermittently answers an HTML gateway page instead of JSON,
+      // which surfaces as a parse error rather than an RPC one. It is a
+      // transient fault on their side and it has killed two runs, so it is
+      // retried like the rate limits.
+      const transient = /(-32005|capacity|rate limit|is not valid JSON|<!DOCTYPE|fetch failed|ETIMEDOUT|ECONNRESET)/.test(t)
+      if (!transient || i >= 8) throw e
       await sleep(Math.min(2000 * 2 ** i, 20000))
     }
   }
@@ -129,6 +134,16 @@ async function engagement(id, { deliver }) {
     await submit(prov, 'submit_delivery', [id, URI, DIGEST])
   } else {
     console.log(`    (no submit_delivery — the provider commits nothing)`)
+    // Wait the provider's fair chance out before closing. Close sooner and
+    // this is `foreclosed` -- the client's doing -- which is scenario 3.
+    const window = Number((await view('get_policy', [])).delivery_window_seconds)
+    if (window > 0) {
+      console.log(`    waiting out the ${window}s delivery window before closing`)
+      for (let waited = 0; waited < window + 30; waited += 60) {
+        await sleep(60_000)
+        console.log(`         ...waiting (${waited + 60}s)`)
+      }
+    }
   }
   const committed = await view('delivery_of', [id])
   console.log(`      committed on chain: ${committed.committed}`)
@@ -165,13 +180,18 @@ check(delivered.delivery === 'verified', 'the graders fetched the committed arti
 check(delivered.state !== 'forfeit', 'a false accusation did not forfeit a delivered provider\'s collateral')
 
 console.log(`\n    claim_collateral, expected to be refused`)
-const owedBefore = BigInt(await view('owed_to', [addr(clientAcct.address)]))
+// A plain string, not calldata. `owed_to` used to be declared `recipient: str`
+// and answered zero to anything else, so reading it with a `CalldataAddress`
+// returned 0 whatever the books said -- and this check, which is the one that
+// matters, passed on a run where the accuser *had* been credited 0.875 GEN.
+// The contract takes both forms now; this reads it the way the ABI declares.
+const owedBefore = BigInt(await view('owed_to', [clientAcct.address]))
 try {
   await submit(client, 'claim_collateral', [`bind-ok-${stamp}`])
 } catch (e) {
   console.log(`      refused: ${String(e.message ?? e).slice(0, 120)}`)
 }
-const owedAfter = BigInt(await view('owed_to', [addr(clientAcct.address)]))
+const owedAfter = BigInt(await view('owed_to', [clientAcct.address]))
 check(owedAfter === owedBefore, `the accuser was credited nothing (${gen(owedBefore)} GEN before and after)`)
 
 console.log(`\n=== 2. the provider committed no delivery at all ===`)
@@ -179,8 +199,48 @@ const nothing = await engagement(`bind-none-${stamp}`, { deliver: false })
 check(nothing.delivery === 'absent', 'the absence of a signed delivery is what the graders saw')
 check(nothing.state === 'forfeit', 'a provider who delivered nothing still forfeits')
 
+console.log(`\n=== 3. the client closes at once, denying the provider the chance ===`)
+const fid = `bind-fore-${stamp}`
+console.log(`\n  ${fid}`)
+console.log(`    open_engagement`)
+await submit(client, 'open_engagement', [fid, addr(provAcct.address), SCOPE, STAKE])
+const foreQuote = BigInt((await view('collateral_quote', [addr(provAcct.address), STAKE])).required)
+console.log(`    accept_engagement — the provider posts ${gen(foreQuote)} GEN`)
+await submit(prov, 'accept_engagement', [fid], foreQuote)
+console.log(`    close_engagement — immediately, before any delivery can be committed`)
+await submit(client, 'close_engagement', [fid])
+console.log(`    submit_delivery — the provider tries anyway`)
+try {
+  await submit(prov, 'submit_delivery', [fid, URI, DIGEST])
+} catch (e) {
+  console.log(`      refused: ${String(e.message ?? e).slice(0, 80)}`)
+}
+// Judged on state rather than on an exception. A transaction the contract
+// *rejected* still reaches ACCEPTED -- consensus agreeing on a refusal is a
+// success for the network -- so a refused call does not throw here.
+const foreCommitted = (await view('delivery_of', [fid])).committed
+check(!foreCommitted, 'the commitment is frozen once the engagement closes')
+const foreBond = BigInt(await view('bond_for_next', [addr(clientAcct.address), addr(provAcct.address)]))
+console.log(`    attest — the same accusation, on a delivery the client foreclosed`)
+await submit(client, 'attest', [fid, FALSE_CLAIM, EVIDENCE], foreBond)
+const foreCount = Number(await view('attestation_count', []))
+const foreGrade = await view('get_attestation', [foreCount - 1])
+const foreState = (await view('get_engagement', [fid])).collateral_state
+console.log(`      delivery established by the graders: ${foreGrade.delivery}`)
+console.log(`      collateral_state: ${foreState}`)
+check(foreGrade.delivery === 'foreclosed', 'the absence is recorded as the client\'s doing, not the provider\'s')
+check(foreState !== 'forfeit', 'a provider refused the chance to deliver keeps their collateral')
+
+const foreOwedBefore = BigInt(await view('owed_to', [clientAcct.address]))
+try { await submit(client, 'claim_collateral', [fid]) } catch (e) {
+  console.log(`      claim refused: ${String(e.message ?? e).slice(0, 80)}`)
+}
+const foreOwedAfter = BigInt(await view('owed_to', [clientAcct.address]))
+check(foreOwedAfter === foreOwedBefore,
+  `the accuser was credited nothing (${gen(foreOwedBefore)} GEN before and after)`)
+
 console.log(`\noracle    ${EXPLORER}/address/${ORACLE}`)
 console.log(failures === 0
-  ? '\nbinding ok — a claim alone no longer redirects collateral, and a missing delivery still does'
+  ? '\nbinding ok — a claim alone no longer redirects collateral, a missing delivery still does,\n            and an absence the accuser manufactured does not'
   : `\n${failures} check(s) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

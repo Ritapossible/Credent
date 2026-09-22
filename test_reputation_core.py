@@ -1578,3 +1578,60 @@ class TestCollateralSettlement:
         g = self._forfeiting()
         for state in core.DELIVERY_STATES:
             assert core.collateral_settlement(g, POLICY, state) in core.COLLATERAL_OUTCOMES
+
+
+class TestUncommittedDelivery:
+    """Whose failure a missing delivery is.
+
+    Either counterparty may close an engagement, and closing freezes the
+    delivery commitment. A client who closes the moment collateral is posted
+    therefore shuts the provider out of the one step that would defend it --
+    and the resulting `absent` delivery forfeits. That was measured on a
+    deployed contract before this existed: the client took the whole 0.875 GEN
+    of a provider the contract had refused to let deliver.
+    """
+
+    WINDOW = core.DELIVERY_WINDOW_SECONDS
+
+    def test_closing_at_once_is_the_client_doing(self):
+        assert core.uncommitted_delivery(
+            accepted_at=1_000, closed_at=1_001, window_seconds=self.WINDOW
+        ) == core.DELIVERY_FORECLOSED
+
+    def test_closing_after_the_window_is_the_provider_failure(self):
+        assert core.uncommitted_delivery(
+            accepted_at=1_000, closed_at=1_000 + self.WINDOW, window_seconds=self.WINDOW
+        ) == core.DELIVERY_ABSENT
+
+    def test_the_boundary_belongs_to_the_provider(self):
+        """One second short is still foreclosed. The window is a guarantee, so
+        it is met or it is not."""
+        assert core.uncommitted_delivery(
+            accepted_at=0, closed_at=self.WINDOW - 1, window_seconds=self.WINDOW
+        ) == core.DELIVERY_FORECLOSED
+
+    @pytest.mark.parametrize(
+        "accepted,closed", [(0, 5_000), (1_000, 0), (0, 0), (-5, 9_999)]
+    )
+    def test_an_incomplete_record_cannot_convict(self, accepted, closed):
+        """No acceptance or no close recorded means nothing establishes that
+        the provider had a chance, and an unproven case does not take money."""
+        assert core.uncommitted_delivery(
+            accepted_at=accepted, closed_at=closed, window_seconds=self.WINDOW
+        ) == core.DELIVERY_FORECLOSED
+
+    def test_a_clock_that_runs_backwards_cannot_convict(self):
+        assert core.uncommitted_delivery(
+            accepted_at=9_000, closed_at=1_000, window_seconds=self.WINDOW
+        ) == core.DELIVERY_FORECLOSED
+
+    def test_a_foreclosed_delivery_never_forfeits(self):
+        """The whole point. However damning the grade, collateral cannot move
+        on an absence the client manufactured."""
+        damning = core.canonicalize_grade(
+            grade(verdict=core.VERDICT_UNFULFILLED, fulfilled=0, substantiated=95, confidence=99),
+            POLICY,
+        )
+        assert core.collateral_settlement(
+            damning, POLICY, core.DELIVERY_FORECLOSED
+        ) == core.COLLATERAL_RELEASABLE

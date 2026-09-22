@@ -244,7 +244,7 @@ def test_genvm_lint_validates_the_artifact_and_extracts_a_full_schema() -> None:
     # The schema is the ABI a client reads to learn what it can call. A missing
     # or partial one is the symptom both defects above produced.
     assert report["validate"]["methods"] == len(EXPECTED_PUBLIC_METHODS)
-    assert report["validate"]["ctor_params"] == 14, "the fourteen policy parameters"
+    assert report["validate"]["ctor_params"] == 15, "the fifteen policy parameters"
 
 
 def test_the_artifact_has_no_future_import(artifact_source: str) -> None:
@@ -407,11 +407,13 @@ def test_entitlement_keys_go_through_the_lowercasing_helper(artifact_source: str
         if not isinstance(fn, ast.FunctionDef) or not touches_owed(fn):
             continue
         body = _code_of(fn)
-        # `owed_to` takes a string from a caller and lowercases it directly;
-        # it has no Address to run through the helper.
+        # `owed_to` takes whatever form the caller holds, so it goes through
+        # `_lookup_key` rather than lowercasing a string itself. That helper is
+        # what makes an `Address` and its checksummed text find one entry --
+        # and what stops the view answering zero to an argument it cannot read.
         if fn.name == "owed_to":
-            if ".lower()" not in body:
-                offenders.append(f"{fn.name} does not lowercase its key")
+            if "_lookup_key(" not in body:
+                offenders.append(f"{fn.name} does not canonicalize its key")
             continue
         if "_owed_key(" not in body:
             offenders.append(f"{fn.name} keys `owed` without _owed_key")
@@ -1164,9 +1166,12 @@ def test_the_deliverable_reaches_the_prompt_separately_from_the_claim(
         "the prompt is built without the deliverable, so the model grades the "
         "attester's account of the work instead of the work"
     )
-    assert "DELIVERY_ABSENT" in attest, (
-        "a missing commitment must be named to the grader, not passed as an "
-        "empty artifact indistinguishable from a retrieval failure"
+    assert "uncommitted_delivery(" in attest and "delivery = uncommitted" in attest, (
+        "a missing commitment must be classified before it reaches the grader. "
+        "Passing it as an empty artifact makes it indistinguishable from a "
+        "retrieval failure, and passing it as plain `absent` lets a client who "
+        "closed the engagement early bill the provider for an absence the "
+        "client caused"
     )
 
 

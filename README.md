@@ -86,7 +86,7 @@ vectors pinning the TypeScript port used by the site to the same answers.
 
 | Network | Address | Artifact | Version |
 |---|---|---|---|
-| GenLayer Studio | [`0xf0A6743C8Cb33da8992e0880739a1b714daA4738`](https://explorer-studio.genlayer.com/address/0xf0A6743C8Cb33da8992e0880739a1b714daA4738) | `reputation_oracle.py` | current |
+| GenLayer Studio | [`0x8CFD98a40fF2F06FD3241402E248B4D241F6995C`](https://explorer-studio.genlayer.com/address/0x8CFD98a40fF2F06FD3241402E248B4D241F6995C) | `reputation_oracle.py` | current |
 | Testnet Bradbury | [`0xaE321ADbd5d8769bFFd5d25d39251BB53E418524`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524) | `reputation_oracle.min.py` | **previous — see below** |
 
 **Bradbury is one version behind, and not by choice.** It currently refuses to
@@ -112,7 +112,7 @@ whitespace and nothing else: comments and docstrings are cut, indentation is
 rewritten as one space per level, and continuation lines inside brackets go
 flush left. Every row covered by a multi-line string is preserved byte for byte,
 because the grading prompts are triple-quoted and validators grade against them.
-159,690 bytes become 54,565 and `ast.dump` on both files is compared before
+165,277 bytes become 56,003 and `ast.dump` on both files is compared before
 either is written.
 
 Verify any deployment before trusting it:
@@ -135,7 +135,7 @@ cd credent
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest                  # 394 tests, no network
+python -m pytest                  # 403 tests, no network
 
 cd web
 npm install
@@ -416,8 +416,32 @@ the engine tests:
 | Delivery | Meaning | A forfeiting grade |
 |---|---|---|
 | `verified` | retrieved, and it hashes to the provider's commitment | forfeits — judged on the work |
-| `absent` | the provider never committed one | forfeits — on an on-chain fact, not a claim |
+| `absent` | no commitment, and the provider had time to make one | forfeits — on an on-chain fact, not a claim |
+| `foreclosed` | no commitment, because the engagement closed too soon | **releases** — the absence is the accuser's doing |
 | `unverified` | committed, but unretrievable or hash-mismatched | **releases** — nobody established anything |
+
+### The absence has to be the provider's
+
+Binding a forfeit to a missing deliverable creates a second way to attack the
+same money, and the first version of this shipped with it open. Either party
+may close an engagement, and closing freezes the commitment. So a client could
+open, wait for the provider to lock up collateral accepting it, close in the
+next transaction, and leave the provider unable to commit the one thing that
+would defend them — then attest, forfeit, and claim.
+
+That was not theoretical. Run against the deployed contract before the fix,
+with the same false accusation used above, the client was credited the
+provider's entire 0.875 GEN from a provider the contract itself had refused to
+let deliver, answering `engagement_closed_delivery_is_frozen`. Making a forfeit
+rest on an objective absence is right; letting the accuser manufacture the
+absence is not.
+
+`delivery_window_seconds` is the provider's fair chance, measured from
+acceptance to close. Below it a missing commitment is `foreclosed` rather than
+`absent` and cannot forfeit. It is a floor and not an estimate of how long work
+takes: a client who waits it out can still close on an undelivered engagement,
+which is exactly what they should be able to do. What they cannot do is deny
+the opportunity and then bill for its absence.
 
 `unverified` releasing is deliberate and it costs something: a provider who
 commits a deliberately unreachable artifact makes their collateral
@@ -434,29 +458,36 @@ difference is whether the provider committed a delivery.
 
 | | delivery | `fulfilled` | `substantiated` | collateral |
 |---|---|---|---|---|
-| provider committed the artifact | `verified` | 7500bp | 82 | **releasable** |
-| provider committed nothing | `absent` | 0bp | 82 | **forfeit** |
+| provider committed the artifact | `verified` | 8500bp | 78 | **releasable** |
+| provider committed nothing, and had the window | `absent` | 0bp | 88 | **forfeit** |
+| client closed at once, denying the chance | `foreclosed` | 0bp | — | **releasable** |
 
-Substantiation came back identical in the two rows, which makes this close to a
-controlled experiment: the pre-existing "an unevidenced accusation takes
-nothing" gate cannot be what separated them, because it saw the same number
-both times. What separated them is that in the first row the model could read
-the work, and rated it 7500bp against the committed scope.
+The first two rows are the binding itself: the same accusation, and the model
+rated the work at 8500bp in the row where it could read it. The third is the
+guard around it — the accusation is identical again, and the only difference is
+that the client closed the engagement before the provider could commit, so the
+absence is the accuser's doing and cannot be billed to the provider.
 
 | Step | Transaction |
 |---|---|
-| `open_engagement` | [`0x42d4a8aa`](https://explorer-studio.genlayer.com/tx/0x42d4a8aaca2742e27e861fb64fc55848594933b68b4afdaf8352cb530b14569f) |
-| `accept_engagement` — 0.875 GEN of collateral | [`0x3a2b9f19`](https://explorer-studio.genlayer.com/tx/0x3a2b9f19157abe6d561100cfbb89af3b59601506bf7c251f7a9ecc991c9a4a1f) |
-| **`submit_delivery` — the provider's signed commitment** | [`0xd5e4907c`](https://explorer-studio.genlayer.com/tx/0xd5e4907ca30cc1153edd87e1f26ddd08044fbeb9c65f38cef83102cbb4a55111) |
-| `close_engagement` | [`0xd6a694f2`](https://explorer-studio.genlayer.com/tx/0xd6a694f2c1ba7099bf8cf2d9315a8122bfe97d59ba490f011f87ded4dcd9def3) |
-| **`attest` — the false accusation, graded against the fetched artifact** | [`0x063a1215`](https://explorer-studio.genlayer.com/tx/0x063a1215c2d9baa1be3062a51273e6c8c12ebb593c3dc0a18247b08ae1fbefff) |
-| `claim_collateral` — refused, the accuser credited nothing | [`0x8613b41f`](https://explorer-studio.genlayer.com/tx/0x8613b41f29a914359d13c752c08ae320816dd5892a83f47a067bd13e388451d8) |
-| `open_engagement` — the control, with no delivery | [`0xf80340f2`](https://explorer-studio.genlayer.com/tx/0xf80340f2ce03f2c0e39df575abc1923ce901bb1cf01eadd7176bb32442268fa9) |
-| `accept_engagement` | [`0x03872612`](https://explorer-studio.genlayer.com/tx/0x0387261290c2d9c3f3afb676832e14903681f58ecd705b1c5a88d2ee223c6fdc) |
-| `close_engagement` | [`0x2882a5c7`](https://explorer-studio.genlayer.com/tx/0x2882a5c786ca169021f2916a979a097eda4c47632dd96ee6b5f9af0aaa4bcd54) |
-| **`attest` — the same accusation forfeits, with nothing committed** | [`0xbac84497`](https://explorer-studio.genlayer.com/tx/0xbac8449706f0e757924205e59534e979bf7839ad41d8388cb30f990bae79ca4f) |
+| `open_engagement` | [`0x2b7f1b0b`](https://explorer-studio.genlayer.com/tx/0x2b7f1b0b8b9516bcaca5d6227275ea201d519bae51d412880106de31a8f95eb3) |
+| `accept_engagement` — 0.8777 GEN of collateral | [`0x7ed9762a`](https://explorer-studio.genlayer.com/tx/0x7ed9762a34d82ff53ae1d68b0d5a6ec11a35cc82eb154cbddae1f230f37af5ca) |
+| **`submit_delivery` — the provider's signed commitment** | [`0xc7041a3e`](https://explorer-studio.genlayer.com/tx/0xc7041a3e0f114011df3575040222d5bf22b28f6501f893aa6a594425845be34f) |
+| `close_engagement` | [`0x30fca87d`](https://explorer-studio.genlayer.com/tx/0x30fca87d34b9e168787160799f977b55eb85f3d2c04c378de3e86e0b903ac25c) |
+| **`attest` — the false accusation, graded against the fetched artifact** | [`0x6ca6a749`](https://explorer-studio.genlayer.com/tx/0x6ca6a74991c1d1c70ae002a78432c355a7f64cdc37d2c22c85d48e365b95a160) |
+| `claim_collateral` — refused, the accuser credited nothing | [`0x94649f53`](https://explorer-studio.genlayer.com/tx/0x94649f5321520574495b2bde8726147390028157dc733c29d69887d45680597d) |
+| `open_engagement` — the control, with no delivery | [`0x9386c052`](https://explorer-studio.genlayer.com/tx/0x9386c052d03b894664a61f7b9ddc55ee8985bfbaeabe98428f80827d0a0aa1c1) |
+| `accept_engagement` | [`0x561568c7`](https://explorer-studio.genlayer.com/tx/0x561568c77f1b0ddbed72026c1722c0a93c15f5b68f19ee35a012beef6a89d660) |
+| `close_engagement` — after the full 900s delivery window | [`0x85345488`](https://explorer-studio.genlayer.com/tx/0x853454888017bbb4d230cd2e8a46e92d6413549755bb7430cd9ac8ee8cfea047) |
+| **`attest` — the same accusation forfeits, with nothing committed** | [`0x2583e32b`](https://explorer-studio.genlayer.com/tx/0x2583e32b7e4a96cc9bc2ef966c155a99c40f6427fbe1e8f4a3173be3eff7a606) |
+| `open_engagement` — the grief attempt | [`0x393044b8`](https://explorer-studio.genlayer.com/tx/0x393044b891b9c1f9e0116c447a45a10e66183c50e695558eeca9b469180ab6ae) |
+| `accept_engagement` | [`0xd319d8a1`](https://explorer-studio.genlayer.com/tx/0xd319d8a1e87b4335e3a55c621194acf2b6d632ba242f1e58e4148bc9e3b43b87) |
+| **`close_engagement` — immediately, before any delivery** | [`0x98bc08dc`](https://explorer-studio.genlayer.com/tx/0x98bc08dc3bcb936600a39536ee50a1ca806e451788ed4b4cdc5ebe8b70237246) |
+| `submit_delivery` — the provider tries anyway, frozen out | [`0x50b3b2cd`](https://explorer-studio.genlayer.com/tx/0x50b3b2cd7b57752d144c92e1709476e970528dd6c249b0c8ff17b61fbbea105c) |
+| **`attest` — the same accusation, and the collateral stays put** | [`0x4d29e001`](https://explorer-studio.genlayer.com/tx/0x4d29e001c4a8eeb885bea49a23a47447c6707012d9ea13b8e8c33095ca9ab35e) |
+| `claim_collateral` — refused | [`0x769e3474`](https://explorer-studio.genlayer.com/tx/0x769e3474eeb2415591b058a371f81f80d1ed03cc3a9a45554e0b3841a0b5c036) |
 
-The artifact both runs point at is
+The artifact these runs point at is
 [`examples/orders_clean.py`](examples/orders_clean.py), served over HTTPS from
 this repository so the validators fetch exactly the bytes whose digest the
 provider committed.
@@ -477,6 +508,31 @@ itself — the retrieved deliverable, no commitment, or a commitment that could
 not be checked. That line is the one a reader needs most, because an
 attestation is one counterparty's account of the other and the grade moves the
 other side's money.
+
+### A check that could not fail
+
+Also worth recording. `owed_to`, `is_proven`, `in_flight_to` and
+`withdrawal_of` were annotated `recipient: str` and opened with
+`if not isinstance(recipient, str): return 0`. Every other address-taking view
+on this contract takes an `Address`, which is what the SDK helpers produce, so
+a caller doing the obvious thing got a silent zero rather than their balance.
+
+That is how a false line got into this document. The binding walkthrough
+asserted *"the accuser was credited nothing"* by reading `owed_to` with a
+`CalldataAddress` and comparing it to zero — and it passed on a run where the
+accuser **had** been credited 0.875 GEN, because the view answers zero to that
+argument whatever the books say. Measured on the same contract, same account:
+
+```text
+owed_to(client) as a plain string    : 0.875000 GEN
+owed_to(client) as CalldataAddress   : 0.000000 GEN
+```
+
+A check that cannot fail is worse than no check, and this one was cited as
+evidence. All four views now take either form and refuse anything else out
+loud, rather than guessing; the walkthrough reads them the way the ABI
+declares; and a direct-mode test asserts the three spellings of one address
+agree.
 
 ### A prompt that gave the wrong answer away
 
@@ -510,7 +566,7 @@ forfeit at all.
 ### Offline — no network, runs in CI
 
 ```bash
-python -m pytest                 # 394 tests: engine, prompts, contract, parity
+python -m pytest                 # 403 tests: engine, prompts, contract, parity
 cd web
 npm run parity                   # 3,421 vectors: the TS port agrees with the engine
 npm run units                    # formatting, error text, calldata encoding
@@ -544,7 +600,7 @@ explaining the rule.
 ### Direct mode — the contract executed, no node and no keys
 
 ```bash
-./run_direct_tests.sh          # seventeen tests, well under a second
+./run_direct_tests.sh          # twenty-one tests, well under a second
 ```
 
 GenLayer's own `genlayer-test` harness runs `reputation_oracle.py` in memory.
@@ -619,16 +675,16 @@ ok   the contract covers everything it has not sent
 ```
 
 The same script, same result, on the current studionet deployment
-[`0xf0A6743C`](https://explorer-studio.genlayer.com/address/0xf0A6743C8Cb33da8992e0880739a1b714daA4738),
-paying [`0xd03BfFdA`](https://explorer-studio.genlayer.com/address/0xd03BfFdAAb1364bac33ad833a85c750ca7dC8E9E):
-[`attest`](https://explorer-studio.genlayer.com/tx/0xc0b93dd3c629bd487065cae4cca60f970572ea01c79aca293978f2e4027a9caf),
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0x36d7cddff425d86473b5f649db1e46545c7832511e1e8a752abb700b2e570460)
+[`0x8CFD98a4`](https://explorer-studio.genlayer.com/address/0x8CFD98a40fF2F06FD3241402E248B4D241F6995C),
+paying [`0xc3847D81`](https://explorer-studio.genlayer.com/address/0xc3847D812A65CaD94Ca4766d2dc23BD4fA117caA):
+[`attest`](https://explorer-studio.genlayer.com/tx/0x690c1ef37993c0dddde4da97a9ffa101109d5465dd9793abe128900e4d56eb99),
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0x188edc20ee2ebd7c8f2c3199d663f47cbc2c7fe2398953c75c3a19ca6f915cdf)
 (`0 GEN -> 0.875 GEN`),
-[`reclaim`](https://explorer-studio.genlayer.com/tx/0xcf1f1f6798d5ae566bf38f56dbd5b1ce02e45b848692b4266ccfe8ec7d516305)
+[`reclaim`](https://explorer-studio.genlayer.com/tx/0xf20ff3c20bf731386c3cb7a86a945926e532b6864aea00a9b8498392a984e58d)
 after the settle window,
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0x01cf714425c60bf6f883e4a10b26fd7760b2cc08bded46da546b8e7af009849f)
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0xe7e2e2d9bd33e30427fa0e6a53e9a518e9cb6324afd02928722180bd718c17d2)
 of the wallet's assigned credit, and a wallet's
-[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0xbd697e04243ae754e5bd327fd30590332d48f691e03fb2d5ef6941e792583727).
+[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0xcd89a5334e882afe9f300bc409fb5cd9cf8dcc8795e1e1f1ec1a0eb5f289faaa).
 
 That run now commits a delivery before it closes the engagement, because
 without one it is graded against an absent deliverable and the provider's
@@ -763,7 +819,7 @@ recovery decision was moved there.
 
 ## Configuration
 
-The contract takes fourteen policy parameters, in constructor order:
+The contract takes fifteen policy parameters, in constructor order:
 
 | Parameter | Production | Meaning |
 |---|---|---|
@@ -781,6 +837,7 @@ The contract takes fourteen policy parameters, in constructor order:
 | `collateral_ceiling_bp` | 15000 | collateral at score 0, in bp of stake |
 | `collateral_floor_bp` | 2500 | collateral at score 10000 |
 | `collateral_forfeit_bp` | 2500 | `fulfilled` below this forfeits |
+| `delivery_window_seconds` | 900 | the provider's fair chance to commit a delivery |
 
 Deploying without them takes the contract defaults, and the seventh of those is
 `min_bond = 0`, which switches the bond off entirely.
@@ -788,7 +845,7 @@ Deploying without them takes the contract defaults, and the seventh of those is
 Site configuration is `web/.env`:
 
 ```bash
-VITE_CONTRACT_ADDRESS=0xf0A6743C8Cb33da8992e0880739a1b714daA4738
+VITE_CONTRACT_ADDRESS=0x8CFD98a40fF2F06FD3241402E248B4D241F6995C
 VITE_GENLAYER_NETWORK=studionet
 ```
 
@@ -961,9 +1018,9 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 394 tests and 3,421 parity vectors, plus seventeen
+Offline the project carries 403 tests and 3,421 parity vectors, plus twenty-one
 direct-mode tests that execute the contract itself, and `genvm-lint` validates
-the rebuilt schema at 29 methods and 14 constructor parameters.
+the rebuilt schema at 31 methods and 15 constructor parameters.
 
 The review's sentence — a wallet marking itself proven, `withdraw` clearing an
 owed balance before an undeliverable transfer, no restoration path — is now
@@ -972,12 +1029,16 @@ by a test that runs the contract, by a test that runs the arithmetic, and by a
 transaction on a deployed contract you can open in an explorer.
 
 An attestation can no longer redirect collateral on the strength of the
-accuser's own account. A provider commits the finished work with a signed
+accuser's own account, and the accuser cannot manufacture the absence it would
+rest on either. A provider commits the finished work with a signed
 transaction of their own, the validators fetch it inside consensus and check it
 against the digest that transaction carried, and the grade is made against
 those bytes. Run against the deployed contract, the same false accusation left
-a delivered provider's collateral alone and took it from one who had committed
-nothing — the only difference between the two being the commitment.
+a delivered provider's collateral alone, took it from one who had the full
+delivery window and committed nothing, and left it alone again against a
+provider the client had closed out before they could commit — three outcomes
+from one accusation, separated only by what the record says about the
+deliverable.
 
 ---
 

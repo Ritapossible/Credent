@@ -202,14 +202,26 @@ class TestAClaimCannotRedirectCollateral:
         )
 
     def test_a_provider_who_delivered_nothing_still_forfeits(
-        self, oracle, direct_vm, direct_alice, direct_bob
+        self, oracle, direct_vm, chain, direct_alice, direct_bob
     ):
         """The other half. Binding the forfeit to an artifact must not become a
         shield for a provider who never produced one: with no commitment there
         is no signed delivery, and that absence is an on-chain fact rather than
         the client's word for it.
         """
+        import datetime
+
         _engagement(oracle, direct_vm, direct_alice, direct_bob, "e-nothing")
+        # Past the delivery window first: closing sooner would be the client
+        # foreclosing the commitment, which is a different case and is tested
+        # in `TestAClientCannotForecloseTheDelivery`.
+        window = int(oracle.get_policy()["delivery_window_seconds"])
+        chain.warp(
+            (
+                datetime.datetime.now(datetime.timezone.utc)
+                + datetime.timedelta(seconds=window + 60)
+            ).isoformat()
+        )
         direct_vm.sender = direct_alice
         oracle.close_engagement("e-nothing")
         direct_vm.mock_llm(r".*", DAMNING)
@@ -242,3 +254,119 @@ class TestAClaimCannotRedirectCollateral:
         assert oracle.get_engagement("e-swap")["collateral_state"] != "forfeit", (
             "an unestablished deliverable was enough to take the collateral"
         )
+
+
+class TestAClientCannotForecloseTheDelivery:
+    """The hole the first version of this binding left open.
+
+    Either counterparty may close an engagement, and closing freezes the
+    delivery commitment. So a client could open, wait for the provider to lock
+    up collateral accepting it, close in the next transaction, and leave the
+    provider unable to commit the one thing that would defend them. The
+    attestation then graded an absent deliverable and forfeited.
+
+    Measured on the deployed contract before the fix, with the same false
+    accusation used above: the client was credited the provider's entire
+    0.875 GEN, from a provider the contract itself had refused to let deliver.
+    Making the forfeit rest on an objective absence is right; letting the
+    accuser manufacture the absence is not.
+    """
+
+    def test_a_provider_closed_out_at_once_keeps_their_collateral(
+        self, oracle, direct_vm, direct_alice, direct_bob
+    ):
+        _engagement(oracle, direct_vm, direct_alice, direct_bob, "e-foreclose")
+
+        # The client closes immediately, before the provider can commit.
+        direct_vm.sender = direct_alice
+        oracle.close_engagement("e-foreclose")
+
+        direct_vm.sender = direct_bob
+        try:
+            oracle.submit_delivery("e-foreclose", URI, DIGEST)
+        except Exception:
+            pass  # frozen at close, as designed
+        else:
+            raise AssertionError("the commitment was still open after close")
+
+        direct_vm.mock_llm(r".*", DAMNING)
+        attestation = _attest(oracle, direct_vm, direct_alice, "e-foreclose")
+
+        assert oracle.get_attestation(attestation)["delivery"] == "foreclosed", (
+            "the contract read this as the provider's failure, when the client "
+            "is the one who closed the door"
+        )
+        assert oracle.get_engagement("e-foreclose")["collateral_state"] != "forfeit", (
+            "a client took a provider's collateral by refusing them the chance "
+            "to deliver"
+        )
+
+    def test_the_client_can_still_close_once_the_window_has_passed(
+        self, oracle, direct_vm, chain, direct_alice, direct_bob
+    ):
+        """The window is a fair chance, not a shield. A provider who had the
+        time and delivered nothing still answers for it."""
+        import datetime
+
+        _engagement(oracle, direct_vm, direct_alice, direct_bob, "e-waited")
+        window = int(oracle.get_policy()["delivery_window_seconds"])
+
+        later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+            seconds=window + 60
+        )
+        chain.warp(later.isoformat())
+
+        direct_vm.sender = direct_alice
+        oracle.close_engagement("e-waited")
+        direct_vm.mock_llm(r".*", DAMNING)
+        attestation = _attest(oracle, direct_vm, direct_alice, "e-waited")
+
+        assert oracle.get_attestation(attestation)["delivery"] == "absent"
+        assert oracle.get_engagement("e-waited")["collateral_state"] == "forfeit", (
+            "a provider who had the full window and committed nothing kept "
+            "their collateral anyway"
+        )
+
+
+class TestThePayoutViewsAnswerHonestly:
+    """A view that answers zero to an argument it cannot read is worse than one
+    that refuses.
+
+    These four were annotated `recipient: str` and opened with
+    `if not isinstance(recipient, str): return 0`. Every other address-taking
+    view on this contract takes an `Address`, so a caller doing the obvious
+    thing got a silent zero. This project's own walkthrough asserted "the
+    accuser was credited nothing" that way, and it passed on a run where the
+    accuser had been credited 0.875 GEN.
+    """
+
+    def test_both_forms_find_the_same_entitlement(
+        self, oracle, direct_vm, direct_alice, direct_bob
+    ):
+        _engagement(oracle, direct_vm, direct_alice, direct_bob, "e-views")
+        direct_vm.sender = direct_bob
+        oracle.submit_delivery("e-views", URI, DIGEST)
+        direct_vm.sender = direct_alice
+        oracle.close_engagement("e-views")
+        direct_vm.mock_web(r"provider\.test", {"status": 200, "body": ARTIFACT})
+        direct_vm.mock_llm(r".*", DAMNING)
+        _attest(oracle, direct_vm, direct_alice, "e-views")
+
+        hex_form = oracle.get_engagement("e-views")["provider"]
+        as_address = int(oracle.owed_to(address(hex_form)))
+        as_checksummed = int(oracle.owed_to(hex_form))
+        as_lowercase = int(oracle.owed_to(hex_form.lower()))
+        assert as_address == as_checksummed == as_lowercase, (
+            f"one address, three answers: Address={as_address}, "
+            f"checksummed={as_checksummed}, lowercase={as_lowercase}"
+        )
+
+    def test_an_unreadable_argument_is_refused_rather_than_answered(
+        self, oracle, direct_vm
+    ):
+        for junk in ("", "0xnothex", "not an address", "0x1234"):
+            try:
+                oracle.owed_to(junk)
+            except Exception:
+                continue
+            raise AssertionError(f"owed_to answered for {junk!r} instead of refusing")
