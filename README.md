@@ -619,16 +619,22 @@ ok   the contract covers everything it has not sent
 ```
 
 The same script, same result, on the current studionet deployment
-[`0x71D56985`](https://explorer-studio.genlayer.com/address/0xf0A6743C8Cb33da8992e0880739a1b714daA4738),
-paying [`0x603f8456`](https://explorer-studio.genlayer.com/address/0x603f84562BA01715Fb71e88C307B43910F9b17f6):
-[`attest`](https://explorer-studio.genlayer.com/tx/0x9b1c99f4f6d3fd02eb83d84822cb1fa77402695c77871d20f4f1ee743968dba8),
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0xa8495e690607f0b4f27067036f15c3a1c1e1a334ecbed3cb968df7414dc837a8)
+[`0xf0A6743C`](https://explorer-studio.genlayer.com/address/0xf0A6743C8Cb33da8992e0880739a1b714daA4738),
+paying [`0xd03BfFdA`](https://explorer-studio.genlayer.com/address/0xd03BfFdAAb1364bac33ad833a85c750ca7dC8E9E):
+[`attest`](https://explorer-studio.genlayer.com/tx/0xc0b93dd3c629bd487065cae4cca60f970572ea01c79aca293978f2e4027a9caf),
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0x36d7cddff425d86473b5f649db1e46545c7832511e1e8a752abb700b2e570460)
 (`0 GEN -> 0.875 GEN`),
-[`reclaim`](https://explorer-studio.genlayer.com/tx/0xa38f03af247563f5516c7d85c1812ec454a85128cb4b70d8ecb4e34fce25610f)
+[`reclaim`](https://explorer-studio.genlayer.com/tx/0xcf1f1f6798d5ae566bf38f56dbd5b1ce02e45b848692b4266ccfe8ec7d516305)
 after the settle window,
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0xfe9ec857241cee21016e6329113c1b249739b066db01798ab13fe939453f4aa9)
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0x01cf714425c60bf6f883e4a10b26fd7760b2cc08bded46da546b8e7af009849f)
 of the wallet's assigned credit, and a wallet's
-[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0x5de5b6c1ca41d8124b48ac75ff97d6b4dad266dcc1d02f7df8fdd9372ecef4f3).
+[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0xbd697e04243ae754e5bd327fd30590332d48f691e03fb2d5ef6941e792583727).
+
+That run now commits a delivery before it closes the engagement, because
+without one it is graded against an absent deliverable and the provider's
+collateral is forfeitable — which is what the binding is for, and what the
+settlement script was quietly demonstrating against itself until it was
+updated.
 
 Studionet reports the classified reason behind each refusal, so that last
 transaction reads `recipient_has_not_proven_it_can_receive` in the explorer,
