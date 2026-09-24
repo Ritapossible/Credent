@@ -42,6 +42,26 @@ const GEN = 10n ** 18n
 const gen = v => (Number(v) / 1e18).toFixed(6)
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
+/**
+ * The attestation `attest` just wrote, waited for rather than assumed.
+ *
+ * Reading `attestation_count` straight after the write can still answer the
+ * pre-write value, and `get_attestation(count - 1)` is then an out-of-range
+ * index that takes the read down rather than returning anything.
+ */
+async function latestAttestation(before) {
+  for (let i = 0; i < 60; i++) {
+    try {
+      const n = Number(await view('attestation_count', []))
+      if (n > before) return await view('get_attestation', [n - 1])
+    } catch {
+      // transient read failure; try again
+    }
+    await sleep(5000)
+  }
+  throw new Error(`attestation_count never rose past ${before}`)
+}
+
 const clientAcct = createAccount(readFileSync(`${KD}/client.key`, 'utf8').trim())
 const provAcct = createAccount(readFileSync(`${KD}/provider.key`, 'utf8').trim())
 const client = createClient({ chain: CHAIN, account: clientAcct })
@@ -151,12 +171,12 @@ async function engagement(id, { deliver }) {
   console.log(`    close_engagement`)
   await submit(client, 'close_engagement', [id])
 
+  const attestedBefore = Number(await view('attestation_count', []))
   const bond = BigInt(await view('bond_for_next', [addr(clientAcct.address), addr(provAcct.address)]))
   console.log(`    attest — the client posts ${gen(bond)} GEN and accuses the provider of delivering nothing`)
   await submit(client, 'attest', [id, FALSE_CLAIM, EVIDENCE], bond)
 
-  const count = Number(await view('attestation_count', []))
-  const graded = await view('get_attestation', [count - 1])
+  const graded = await latestAttestation(attestedBefore)
   const state = (await view('get_engagement', [id])).collateral_state
   console.log(`      delivery established by the graders: ${graded.delivery}`)
   console.log(`      grade: ${graded.verdict}  fulfilled ${graded.fulfilled}bp  substantiated ${graded.substantiated}`)
@@ -220,11 +240,11 @@ try {
 // success for the network -- so a refused call does not throw here.
 const foreCommitted = (await view('delivery_of', [fid])).committed
 check(!foreCommitted, 'the commitment is frozen once the engagement closes')
+const foreAttestedBefore = Number(await view('attestation_count', []))
 const foreBond = BigInt(await view('bond_for_next', [addr(clientAcct.address), addr(provAcct.address)]))
 console.log(`    attest — the same accusation, on a delivery the client foreclosed`)
 await submit(client, 'attest', [fid, FALSE_CLAIM, EVIDENCE], foreBond)
-const foreCount = Number(await view('attestation_count', []))
-const foreGrade = await view('get_attestation', [foreCount - 1])
+const foreGrade = await latestAttestation(foreAttestedBefore)
 const foreState = (await view('get_engagement', [fid])).collateral_state
 console.log(`      delivery established by the graders: ${foreGrade.delivery}`)
 console.log(`      collateral_state: ${foreState}`)

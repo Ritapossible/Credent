@@ -166,6 +166,35 @@ for (const address of advertised) {
   check(`the README's deployment line names a current address`, known.has(address), address)
 }
 
+// The delivery states the site knows must be every state the contract can put
+// on an attestation. The decoder rejects an unknown one by throwing, so a
+// state added on chain and not here does not degrade a card -- it takes the
+// whole attestation list down.
+//
+// Not hypothetical. `foreclosed` was added to the contract and the site was
+// not told. A second edit put `delivery` in the wrong view entirely, so the
+// deployed list carried no such key while the contract still matched its
+// source byte for byte. Neither showed up in a Python test, a lint, or a
+// deployment check.
+const engineSource = readFileSync(new URL('../../reputation_core.py', import.meta.url), 'utf8')
+const engineStates = [...engineSource.matchAll(/^DELIVERY_[A-Z]+ = "([a-z]+)"$/gm)].map((m) => m[1])
+const siteStates = [...readFileSync(
+  new URL('../src/chain/oracle.ts', import.meta.url),
+  'utf8',
+).matchAll(/export const DELIVERY_STATES = \[([^\]]+)\]/g)]
+  .flatMap((m) => [...m[1].matchAll(/'([a-z]+)'/g)].map((x) => x[1]))
+
+check(
+  'the site knows every delivery state the contract can emit',
+  engineStates.length > 0 && engineStates.every((st) => siteStates.includes(st)),
+  `contract: ${engineStates.join(', ')} | site: ${siteStates.join(', ')}`,
+)
+check(
+  'and claims no state the contract cannot emit',
+  siteStates.length > 0 && siteStates.every((st) => engineStates.includes(st)),
+  `site: ${siteStates.join(', ')}`,
+)
+
 console.log()
 if (failures > 0) {
   console.error(`${failures} check(s) failed`)

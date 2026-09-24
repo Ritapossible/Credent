@@ -34,12 +34,14 @@ export type BondState = 'none' | 'locked' | 'released' | 'slashed'
  *
  * `verified` -- they fetched the artifact the provider committed and it hashed
  * to the digest that provider signed, so the grade was made against the work.
- * `absent` -- no delivery was ever committed, which is an on-chain fact rather
- * than the attester's word. `unverified` -- one was committed and could not be
- * checked, and that state cannot forfeit collateral.
+ * `absent` -- none was committed although the provider had the window to,
+ * which is an on-chain fact rather than the attester's word. `foreclosed` --
+ * none was committed either, but the engagement closed before the provider
+ * could, so the absence is the accuser's doing. `unverified` -- one was
+ * committed and could not be checked. The last two cannot forfeit.
  */
-export type DeliveryState = 'absent' | 'unverified' | 'verified'
-export const DELIVERY_STATES = ['absent', 'unverified', 'verified'] as const
+export type DeliveryState = 'absent' | 'foreclosed' | 'unverified' | 'verified'
+export const DELIVERY_STATES = ['absent', 'foreclosed', 'unverified', 'verified'] as const
 
 const BOND_STATES: readonly BondState[] = ['none', 'locked', 'released', 'slashed']
 

@@ -112,7 +112,7 @@ whitespace and nothing else: comments and docstrings are cut, indentation is
 rewritten as one space per level, and continuation lines inside brackets go
 flush left. Every row covered by a multi-line string is preserved byte for byte,
 because the grading prompts are triple-quoted and validators grade against them.
-165,277 bytes become 56,003 and `ast.dump` on both files is compared before
+166,840 bytes become 56,003 and `ast.dump` on both files is compared before
 either is written.
 
 Verify any deployment before trusting it:
@@ -135,7 +135,7 @@ cd credent
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest                  # 403 tests, no network
+python -m pytest                  # 410 tests, no network
 
 cd web
 npm install
@@ -566,7 +566,7 @@ forfeit at all.
 ### Offline — no network, runs in CI
 
 ```bash
-python -m pytest                 # 403 tests: engine, prompts, contract, parity
+python -m pytest                 # 410 tests: engine, prompts, contract, parity
 cd web
 npm run parity                   # 3,421 vectors: the TS port agrees with the engine
 npm run units                    # formatting, error text, calldata encoding
@@ -896,22 +896,34 @@ takes the first. Both properties are pinned:
 `test_it_never_gives_back_value_that_really_left` and
 `test_a_second_withdrawal_can_cost_the_first_its_restore`.
 
-**A restore can, in one case, be paid out of money nobody is owed.** If the
-contract holds more than everything it is committed to, plus the withdrawal, a
-delivered claim can still satisfy the test and be paid a second time out of the
-difference. Slashed bonds used to be that difference, which made it worth
-attacking; they are now counted, so what remains is value somebody sent the
-contract for no reason — and taking it back returns exactly what it cost to put
-there, which is an expensive way to break even. It can never reach an
-entitlement, a locked bond or a posted collateral.
+**A restore is allowed only when the balance is exactly the books.** `reclaim`
+used to ask whether the contract still *covered* everything it owed, which
+reads as "so nothing can have left". That inference holds only at equality.
+Let the contract hold one wei more than it is committed to and a delivered
+withdrawal still satisfies it, because the surplus absorbs the gap the payout
+left behind.
 
-**A forfeit still turns on a model's reading, once the work is in hand.** The
-binding decides *what* is graded, not *who* grades it: with a verified artifact
-the model judges the deliverable against the committed scope, and that judgement
-is what moves the collateral. What is structural is the rest of it — only the
-provider can say where the work is, the graders fetch it themselves, a body that
-does not match its commitment is discarded, and a deliverable nobody could
-establish cannot forfeit at all.
+That fired. On a deployed contract carrying 0.125 GEN of residue from
+half-finished runs, a 0.875 GEN payout arrived, `reclaim` restored it anyway,
+and the recipient withdrew again — ending with 1.8 GEN in hand against an
+entitlement of 0.925. A contract cannot tell its own surplus from its own
+float: value arrives through payable entry points that each account for what
+they took, and residue from a crashed run looks identical to a healthy
+balance. So the test stopped inferring. A restore now requires `held ==
+committed`, the one state in which nothing can have left unaccounted for.
+
+The cost is a restore missed whenever any surplus exists, which loses value
+rather than duplicating it — the same direction every other judgement here
+fails in, and the one a contract holding other people's money has to prefer.
+
+**One coincidence remains.** If the surplus equals the payout to the wei, the
+payout's own gap is filled exactly and the balance lands back on the committed
+figure, so a delivered claim is restored. Closing that needs the contract to
+know its surplus, and it cannot — residue from a crashed run is
+indistinguishable from float. The exposure went from *every* surplus to one
+exact coincidence; it is asserted by
+`test_a_surplus_equal_to_the_payout_is_the_one_case_left` rather than left to
+be discovered.
 
 **A provider must keep the artifact retrievable until the engagement settles.**
 The digest is frozen at close, so a host that is down during the attestation
@@ -1018,7 +1030,7 @@ transfer, against both throwaway instances and the submitted deployments. A
 wallet cannot reach any part of it — not `withdraw`, not `confirm_recipient`,
 not `prove_recipient` — on either network.
 
-Offline the project carries 403 tests and 3,421 parity vectors, plus twenty-one
+Offline the project carries 410 tests and 3,421 parity vectors, plus twenty-one
 direct-mode tests that execute the contract itself, and `genvm-lint` validates
 the rebuilt schema at 31 methods and 15 constructor parameters.
 

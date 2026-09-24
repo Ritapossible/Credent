@@ -1263,7 +1263,32 @@ def resolve_withdrawal(
     """
     if elapsed_seconds < settle_seconds:
         return WITHDRAWAL_UNSETTLED
-    if held >= committed:
+    # Equality, not `>=`, and the difference is a double payment.
+    #
+    # `>=` reads "the contract still covers everything it owes, so nothing can
+    # have left". That inference holds only when the balance is exactly the
+    # books. Let the contract hold one wei more than it is committed to and a
+    # *delivered* withdrawal still satisfies it: the surplus absorbs the
+    # shortfall the payout left behind, and the claim is handed back to a
+    # recipient who already has the money.
+    #
+    # Measured, not reasoned about. On a deployed contract carrying 0.125 GEN
+    # of residue from earlier runs, a 0.875 GEN payout arrived, `reclaim`
+    # restored it anyway, and the recipient withdrew again -- ending with
+    # 1.8 GEN in hand against an entitlement of 0.925.
+    #
+    # The contract cannot tell its own surplus from its own float: value
+    # arrives through payable entry points that each account for what they
+    # took, and residue from a half-finished run looks identical to a balance
+    # that is merely healthy. So the test stops inferring. A restore is
+    # allowed only when the balance *is* the committed figure, which is the
+    # one state in which nothing can have left unaccounted for.
+    #
+    # The cost is a restore missed whenever a surplus exists, which loses
+    # value rather than duplicating it -- the same direction every other
+    # judgement in this module fails in, and the one a contract holding other
+    # people's money has to prefer.
+    if held == committed:
         return WITHDRAWAL_RESTORED
     return WITHDRAWAL_DELIVERED
 
@@ -3251,11 +3276,6 @@ class ReputationOracle(gl.Contract):
             "created_at": int(self.att_created_at[index]),
             "age_seconds": age,
             "verdict": self.att_verdict[index],
-            # What the graders established about the provider's deliverable
-            # when this grade was made. Carried in the list view and not only in
-            # `get_attestation`, because the basis a grade stood on is the first
-            # thing a reader wants beside the grade itself.
-            "delivery": self.att_delivery[index],
             "fulfilled": int(self.att_fulfilled[index]),
             "substantiated": int(self.att_substantiated[index]),
             "confidence": int(self.att_confidence[index]),
@@ -3336,6 +3356,12 @@ class ReputationOracle(gl.Contract):
             "scope_digest": self.eng_digest[engagement_id],
             "created_at": int(self.att_created_at[index]),
             "age_seconds": age,
+            # What the graders established about the provider's deliverable
+            # when this grade was made. Carried by the *list* views and not
+            # only by `get_attestation`: the basis a grade stood on is the
+            # first thing a reader wants beside the grade, and a client
+            # decoding this page has no second call to fall back on.
+            "delivery": self.att_delivery[index],
             "verdict": self.att_verdict[index],
             "fulfilled": int(self.att_fulfilled[index]),
             "substantiated": int(self.att_substantiated[index]),

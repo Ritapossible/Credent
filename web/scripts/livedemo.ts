@@ -92,7 +92,15 @@ async function submit<T>(fn: () => Promise<T>, attempts = 25): Promise<T> {
       return await fn()
     } catch (err) {
       const text = err instanceof Error ? err.message : String(err)
-      if (!/(-32005|node is at capacity|gas rate limit exceeded)/.test(text) || attempt >= attempts) throw err
+      // Studio intermittently answers an HTML gateway page instead of JSON,
+      // which surfaces as a parse error rather than an RPC one. Transient, and
+      // it has ended two otherwise-clean runs, so it is retried alongside the
+      // rate limits.
+      const transient =
+        /(-32005|node is at capacity|gas rate limit exceeded|is not valid JSON|<!DOCTYPE|fetch failed|ETIMEDOUT|ECONNRESET)/.test(
+          text,
+        )
+      if (!transient || attempt >= attempts) throw err
       const advised = Number(/retryAfterMs"?\s*:\s*(\d+)/.exec(text)?.[1] ?? 0)
       const delay = Math.max(advised + 250, wait)
       console.log(`         node at capacity; waiting ${Math.round(delay / 1000)}s (${attempt}/${attempts})`)

@@ -36,7 +36,10 @@ const VERDICT_TONE: Record<Verdict, string> = {
 const DELIVERY_LABEL: Record<DeliveryState, string> = {
   verified:
     'the delivered work, fetched by the validators and matching the digest the provider committed',
-  absent: 'no delivery was ever committed, so there was no work to fetch',
+  absent:
+    'no delivery was committed, though the provider had the window to commit one',
+  foreclosed:
+    'no delivery was committed, because the engagement was closed before the provider could \u2014 so the absence is the accuser\u2019s doing and cannot forfeit collateral',
   unverified:
     'a delivery was committed but could not be retrieved or did not match its digest, so it could not forfeit collateral',
 }

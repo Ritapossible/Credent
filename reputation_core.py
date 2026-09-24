@@ -1181,7 +1181,32 @@ def resolve_withdrawal(
     """
     if elapsed_seconds < settle_seconds:
         return WITHDRAWAL_UNSETTLED
-    if held >= committed:
+    # Equality, not `>=`, and the difference is a double payment.
+    #
+    # `>=` reads "the contract still covers everything it owes, so nothing can
+    # have left". That inference holds only when the balance is exactly the
+    # books. Let the contract hold one wei more than it is committed to and a
+    # *delivered* withdrawal still satisfies it: the surplus absorbs the
+    # shortfall the payout left behind, and the claim is handed back to a
+    # recipient who already has the money.
+    #
+    # Measured, not reasoned about. On a deployed contract carrying 0.125 GEN
+    # of residue from earlier runs, a 0.875 GEN payout arrived, `reclaim`
+    # restored it anyway, and the recipient withdrew again -- ending with
+    # 1.8 GEN in hand against an entitlement of 0.925.
+    #
+    # The contract cannot tell its own surplus from its own float: value
+    # arrives through payable entry points that each account for what they
+    # took, and residue from a half-finished run looks identical to a balance
+    # that is merely healthy. So the test stops inferring. A restore is
+    # allowed only when the balance *is* the committed figure, which is the
+    # one state in which nothing can have left unaccounted for.
+    #
+    # The cost is a restore missed whenever a surplus exists, which loses
+    # value rather than duplicating it -- the same direction every other
+    # judgement in this module fails in, and the one a contract holding other
+    # people's money has to prefer.
+    if held == committed:
         return WITHDRAWAL_RESTORED
     return WITHDRAWAL_DELIVERED
 

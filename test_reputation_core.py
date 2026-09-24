@@ -1239,18 +1239,29 @@ class TestResolveWithdrawal:
         )
 
     def test_money_still_here_means_the_transfer_failed(self):
-        """The contract covers every obligation with the claim on its books."""
+        """The balance *is* the books, so nothing can have left."""
         assert (
             core.resolve_withdrawal(
                 elapsed_seconds=self.SETTLE, held=1000, committed=1000
             )
             == core.WITHDRAWAL_RESTORED
         )
+
+    def test_one_wei_of_surplus_is_not_proof_that_nothing_left(self):
+        """This used to assert `restored`, and that was the double payment.
+
+        A balance one wei above the books does not show that a payout failed.
+        It shows the contract is carrying something it does not owe -- and
+        that surplus is exactly what lets a *delivered* claim still look
+        covered, because it absorbs the gap the payout left behind. Held at
+        1001 against a committed 1000, a 1 wei payout that arrived leaves the
+        balance at 1000 and reads as a failure under `>=`.
+        """
         assert (
             core.resolve_withdrawal(
                 elapsed_seconds=self.SETTLE, held=1001, committed=1000
             )
-            == core.WITHDRAWAL_RESTORED
+            == core.WITHDRAWAL_DELIVERED
         )
 
     def test_money_gone_means_the_transfer_landed(self):
@@ -1345,18 +1356,19 @@ class TestResolveWithdrawal:
         whether the free money came from a slashing or from anywhere else: with
         it counted, a delivered claim is refused.
         """
-        # 100 paid out, 100 still owed to others, and 500 of slashed bonds.
-        # Without the slashings counted, held (500) covers obligations (100) and
-        # the delivered claim would be restored out of them.
+        # 500 held, of which 500 is slashed bonds owed to nobody. Leave the
+        # slashings out of the committed figure and the books read as exactly
+        # balanced, which is the one state a restore is allowed in -- so the
+        # delivered claim is handed back out of the slashings.
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=500, committed=100
+                elapsed_seconds=self.SETTLE, held=500, committed=500
             )
             == core.WITHDRAWAL_RESTORED
         ), "the arithmetic itself is unchanged; what changes is what is counted"
         assert (
             core.resolve_withdrawal(
-                elapsed_seconds=self.SETTLE, held=500, committed=100 + 500
+                elapsed_seconds=self.SETTLE, held=500, committed=500 + 500
             )
             == core.WITHDRAWAL_DELIVERED
         ), "with the slashings counted, the delivered claim is refused"
@@ -1385,6 +1397,86 @@ class TestResolveWithdrawal:
     # Concurrency: what the rule guarantees when more than one withdrawal
     # is outstanding at once, and what it deliberately gives up.
     # ------------------------------------------------------------------
+
+    def test_a_surplus_cannot_buy_back_a_delivered_claim(self):
+        """The double payment, with the numbers it actually happened at.
+
+        A deployed contract was carrying 0.125 GEN of residue from
+        half-finished runs. A 0.875 GEN payout arrived; `reclaim` restored it
+        anyway, because the surplus was larger than nothing and the old test
+        only asked whether the balance still *covered* the books. The
+        recipient withdrew a second time and finished with 1.8 GEN in hand
+        against an entitlement of 0.925.
+
+        Under `>=` this case returns `restored`. It must not.
+        """
+        committed = 13_207_200_000_000_000_000   # what the contract owed
+        surplus = 125_000_000_000_000_000        # residue nobody is owed
+        paid = 875_000_000_000_000_000           # the payout that arrived
+
+        assert core.resolve_withdrawal(
+            elapsed_seconds=self.SETTLE,
+            held=committed + surplus - paid,
+            committed=committed,
+            settle_seconds=self.SETTLE,
+        ) == core.WITHDRAWAL_DELIVERED
+
+    def test_no_surplus_can_buy_back_any_delivered_claim(self):
+        """And not only at that one arithmetic. Across a grid of surpluses and
+        payouts, a claim whose value left is never handed back."""
+        committed = 10_000
+        for surplus in range(0, 5_000, 137):
+            for paid in range(1, 5_000, 211):
+                assert core.resolve_withdrawal(
+                    elapsed_seconds=self.SETTLE,
+                    held=committed + surplus - paid,
+                    committed=committed,
+                    settle_seconds=self.SETTLE,
+                ) == core.WITHDRAWAL_DELIVERED, (
+                    f"a delivered payout of {paid} was restored with a "
+                    f"surplus of {surplus}"
+                )
+
+    def test_a_failed_transfer_still_restores_when_the_books_are_exact(self):
+        """The restore has to survive the fix, or the mechanism is gone."""
+        assert core.resolve_withdrawal(
+            elapsed_seconds=self.SETTLE, held=10_000, committed=10_000,
+            settle_seconds=self.SETTLE,
+        ) == core.WITHDRAWAL_RESTORED
+
+    def test_a_surplus_equal_to_the_payout_is_the_one_case_left(self):
+        """The limit of what equality buys, on the record rather than implied.
+
+        `held == committed` removes the general surplus hole: any residue that
+        is not *exactly* the amount being judged leaves the balance off the
+        books and the claim reads as delivered. What it cannot separate is the
+        coincidence where the surplus equals the payout to the wei, because
+        then the payout's own gap is filled precisely and the balance lands
+        back on the committed figure.
+
+        This is asserted rather than fixed. Closing it needs the contract to
+        know its surplus, and it cannot: value arrives through payable entry
+        points that each account for what they took, so residue from a crashed
+        run is indistinguishable from float. The exposure is one coincidence
+        wide instead of every surplus, and it is written into Limitations.
+        """
+        committed, paid = 10_000, 875
+        assert core.resolve_withdrawal(
+            elapsed_seconds=self.SETTLE,
+            held=committed + paid - paid,
+            committed=committed,
+            settle_seconds=self.SETTLE,
+        ) == core.WITHDRAWAL_RESTORED
+
+    def test_a_surplus_costs_a_genuine_restore(self):
+        """The price, stated rather than hidden. With residue in the contract
+        a genuinely failed transfer reads as delivered and the claim closes.
+        That loses value instead of duplicating it, which is the direction
+        every other judgement here fails in."""
+        assert core.resolve_withdrawal(
+            elapsed_seconds=self.SETTLE, held=10_001, committed=10_000,
+            settle_seconds=self.SETTLE,
+        ) == core.WITHDRAWAL_DELIVERED
 
     def test_it_never_gives_back_value_that_really_left(self):
         """The safety property. No arrangement of concurrent withdrawals can

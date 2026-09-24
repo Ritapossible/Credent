@@ -455,7 +455,7 @@ settle_seconds: int = WITHDRAWAL_SETTLE_SECONDS,
 ) -> str:
  if elapsed_seconds < settle_seconds:
   return WITHDRAWAL_UNSETTLED
- if held >= committed:
+ if held == committed:
   return WITHDRAWAL_RESTORED
  return WITHDRAWAL_DELIVERED
 def scope_digest(scope: str) -> str:
@@ -1408,7 +1408,6 @@ n_counted=counted,
 "created_at": int(self.att_created_at[index]),
 "age_seconds": age,
 "verdict": self.att_verdict[index],
-"delivery": self.att_delivery[index],
 "fulfilled": int(self.att_fulfilled[index]),
 "substantiated": int(self.att_substantiated[index]),
 "confidence": int(self.att_confidence[index]),
@@ -1452,6 +1451,7 @@ for index in _slice(range(len(self.att_engagement)), int(offset), int(limit))
 "scope_digest": self.eng_digest[engagement_id],
 "created_at": int(self.att_created_at[index]),
 "age_seconds": age,
+"delivery": self.att_delivery[index],
 "verdict": self.att_verdict[index],
 "fulfilled": int(self.att_fulfilled[index]),
 "substantiated": int(self.att_substantiated[index]),

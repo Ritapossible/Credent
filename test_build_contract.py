@@ -1217,3 +1217,40 @@ def test_the_documented_address_is_the_deployed_one() -> None:
             assert "Studio" not in context.split("\n")[-1], (
                 f"{stale} is presented as the studionet oracle, but that is {studio}"
             )
+
+
+def test_the_list_views_carry_the_grading_basis(artifact_source: str) -> None:
+    """`_summarize` must carry `delivery`, not just `get_attestation`.
+
+    The site reads attestations through the paged list views and decodes every
+    row strictly, so a field missing there is not a blank space on a card --
+    it throws, and the whole list fails. This went wrong exactly that way: the
+    edit meant for `_summarize` landed in `get_attestation` instead, and was
+    *duplicated* there rather than rejected, so the contract built, linted,
+    deployed and matched its source byte for byte while the list it served had
+    no `delivery` key at all.
+
+    Nothing caught it. The structural tests read `attest`, the direct-mode
+    tests read `get_attestation`, and both were satisfied. This is the check
+    that would have failed.
+    """
+    tree = ast.parse(artifact_source)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+    # `ast.unparse` normalises string quotes, so match the key either way.
+    def names_delivery(body: str) -> int:
+        return body.count("'delivery'") + body.count('"delivery"')
+
+    assert names_delivery(_code_of(fns["_summarize"])), (
+        "the list views omit `delivery`, so a client decoding a page cannot "
+        "tell what any grade was made against -- and a strict decoder throws"
+    )
+
+    # And exactly once each: a repeated key in a dict literal is not an error,
+    # it is silently the last one winning, which is how this hid.
+    for name in ("_summarize", "get_attestation"):
+        mentions = names_delivery(_code_of(fns[name]))
+        assert mentions == 1, (
+            f"{name} names `delivery` {mentions} times; a repeated key in a "
+            "dict literal is just the last one winning"
+        )
