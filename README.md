@@ -459,7 +459,7 @@ difference is whether the provider committed a delivery.
 | | delivery | `fulfilled` | `substantiated` | collateral |
 |---|---|---|---|---|
 | provider committed the artifact | `verified` | 8500bp | 78 | **releasable** |
-| provider committed nothing, and had the window | `absent` | 0bp | 88 | **forfeit** |
+| provider committed nothing, and had the window | `absent` | 0bp | 100 | **forfeit** |
 | client closed at once, denying the chance | `foreclosed` | 0bp | — | **releasable** |
 
 The first two rows are the binding itself: the same accusation, and the model
@@ -470,22 +470,21 @@ absence is the accuser's doing and cannot be billed to the provider.
 
 | Step | Transaction |
 |---|---|
-| `open_engagement` | [`0x2b7f1b0b`](https://explorer-studio.genlayer.com/tx/0x2b7f1b0b8b9516bcaca5d6227275ea201d519bae51d412880106de31a8f95eb3) |
-| `accept_engagement` — 0.8777 GEN of collateral | [`0x7ed9762a`](https://explorer-studio.genlayer.com/tx/0x7ed9762a34d82ff53ae1d68b0d5a6ec11a35cc82eb154cbddae1f230f37af5ca) |
-| **`submit_delivery` — the provider's signed commitment** | [`0xc7041a3e`](https://explorer-studio.genlayer.com/tx/0xc7041a3e0f114011df3575040222d5bf22b28f6501f893aa6a594425845be34f) |
-| `close_engagement` | [`0x30fca87d`](https://explorer-studio.genlayer.com/tx/0x30fca87d34b9e168787160799f977b55eb85f3d2c04c378de3e86e0b903ac25c) |
-| **`attest` — the false accusation, graded against the fetched artifact** | [`0x6ca6a749`](https://explorer-studio.genlayer.com/tx/0x6ca6a74991c1d1c70ae002a78432c355a7f64cdc37d2c22c85d48e365b95a160) |
-| `claim_collateral` — refused, the accuser credited nothing | [`0x94649f53`](https://explorer-studio.genlayer.com/tx/0x94649f5321520574495b2bde8726147390028157dc733c29d69887d45680597d) |
-| `open_engagement` — the control, with no delivery | [`0x9386c052`](https://explorer-studio.genlayer.com/tx/0x9386c052d03b894664a61f7b9ddc55ee8985bfbaeabe98428f80827d0a0aa1c1) |
-| `accept_engagement` | [`0x561568c7`](https://explorer-studio.genlayer.com/tx/0x561568c77f1b0ddbed72026c1722c0a93c15f5b68f19ee35a012beef6a89d660) |
-| `close_engagement` — after the full 900s delivery window | [`0x85345488`](https://explorer-studio.genlayer.com/tx/0x853454888017bbb4d230cd2e8a46e92d6413549755bb7430cd9ac8ee8cfea047) |
-| **`attest` — the same accusation forfeits, with nothing committed** | [`0x2583e32b`](https://explorer-studio.genlayer.com/tx/0x2583e32b7e4a96cc9bc2ef966c155a99c40f6427fbe1e8f4a3173be3eff7a606) |
-| `open_engagement` — the grief attempt | [`0x393044b8`](https://explorer-studio.genlayer.com/tx/0x393044b891b9c1f9e0116c447a45a10e66183c50e695558eeca9b469180ab6ae) |
-| `accept_engagement` | [`0xd319d8a1`](https://explorer-studio.genlayer.com/tx/0xd319d8a1e87b4335e3a55c621194acf2b6d632ba242f1e58e4148bc9e3b43b87) |
-| **`close_engagement` — immediately, before any delivery** | [`0x98bc08dc`](https://explorer-studio.genlayer.com/tx/0x98bc08dc3bcb936600a39536ee50a1ca806e451788ed4b4cdc5ebe8b70237246) |
-| `submit_delivery` — the provider tries anyway, frozen out | [`0x50b3b2cd`](https://explorer-studio.genlayer.com/tx/0x50b3b2cd7b57752d144c92e1709476e970528dd6c249b0c8ff17b61fbbea105c) |
-| **`attest` — the same accusation, and the collateral stays put** | [`0x4d29e001`](https://explorer-studio.genlayer.com/tx/0x4d29e001c4a8eeb885bea49a23a47447c6707012d9ea13b8e8c33095ca9ab35e) |
-| `claim_collateral` — refused | [`0x769e3474`](https://explorer-studio.genlayer.com/tx/0x769e3474eeb2415591b058a371f81f80d1ed03cc3a9a45554e0b3841a0b5c036) |
+| `open_engagement` | [`0xe128abf1`](https://explorer-studio.genlayer.com/tx/0xe128abf1129f8a0574f0a1c6f0692092ffc686c6c8f88a7a1a39cd7b8befc3ed) |
+| `accept_engagement` — 0.875 GEN of collateral | [`0xeab3e176`](https://explorer-studio.genlayer.com/tx/0xeab3e1760e35237f565e1ae0d2d46582c2be7ae442a73fa07af1da9176dafdb8) |
+| **`submit_delivery` — the provider's signed commitment** | [`0x3bfd45da`](https://explorer-studio.genlayer.com/tx/0x3bfd45dace10f970cb5f01afdf724d4658031dc287dc790e06f37191693ba7af) |
+| `close_engagement` | [`0xdcf69ea7`](https://explorer-studio.genlayer.com/tx/0xdcf69ea72e2df3f56e0cd577d80f46d6c5b539b526edf924bde6bad1d1b3c682) |
+| **`attest` — the false accusation, graded against the fetched artifact** | [`0x27f5f3cc`](https://explorer-studio.genlayer.com/tx/0x27f5f3cc5cf4ef75da9742a5e8330b9361b329523b55d35203ba33c7316fb9cd) |
+| `claim_collateral` — refused, the accuser credited nothing | [`0x60e8ad54`](https://explorer-studio.genlayer.com/tx/0x60e8ad5429f5922096d6cef8ce96e555118d93e091a8a30cd0e4ff90511ec977) |
+| `open_engagement` — the control, with no delivery | [`0xfd9cd240`](https://explorer-studio.genlayer.com/tx/0xfd9cd2408f887440b21987b663436240bf02c4e80d995954dbfd599b34137a09) |
+| `accept_engagement` | [`0x9ed07c95`](https://explorer-studio.genlayer.com/tx/0x9ed07c95ffb89bc8b01286d41ea2db02b4bc4432c8509f5df03dbb06e0d81d3b) |
+| `close_engagement` — after the full 900s delivery window | [`0x5ffe1536`](https://explorer-studio.genlayer.com/tx/0x5ffe1536d6fa343fdea2e6d807af671af112c646df6d923d391a8cbe6c642c27) |
+| **`attest` — the same accusation forfeits, with nothing committed** | [`0x7e4a2c8a`](https://explorer-studio.genlayer.com/tx/0x7e4a2c8a522666eb8ee9cc96e481cccbc9c4b09d3c27ac230abd4ac7fd66f225) |
+| `open_engagement` — the grief attempt | [`0xd12ef4d3`](https://explorer-studio.genlayer.com/tx/0xd12ef4d3c46399fc4f7958ba8b2c6da204539b47aca2af7fc79c7858405aa649) |
+| `accept_engagement` | [`0xbefd2897`](https://explorer-studio.genlayer.com/tx/0xbefd289748ce1f0899dcb148f632e3320cce49e1ec8996b975393134fcf1e8c7) |
+| **`close_engagement` — immediately, before any delivery** | [`0xc93cd465`](https://explorer-studio.genlayer.com/tx/0xc93cd465d0392801c30a749014f11d0bb0a23353a83924dd28a6b6146163a431) |
+| **`attest` — the same accusation, and the collateral stays put** | [`0x39402319`](https://explorer-studio.genlayer.com/tx/0x394023194ca8bf99903f82007f7da54052aa61ab873514442dde537e5d354cd5) |
+| `claim_collateral` — refused | [`0xbb8bf895`](https://explorer-studio.genlayer.com/tx/0xbb8bf89591a383b6be36ce11325c4c595150515a501143bd8cd564cf1c4946b3) |
 
 The artifact these runs point at is
 [`examples/orders_clean.py`](examples/orders_clean.py), served over HTTPS from
@@ -675,16 +674,20 @@ ok   the contract covers everything it has not sent
 ```
 
 The same script, same result, on the current studionet deployment
-[`0x8CFD98a4`](https://explorer-studio.genlayer.com/address/0x772EbDBF33fBc2ac43ca0A586e7BAcB9e6c15901),
-paying [`0xc3847D81`](https://explorer-studio.genlayer.com/address/0xc3847D812A65CaD94Ca4766d2dc23BD4fA117caA):
-[`attest`](https://explorer-studio.genlayer.com/tx/0x690c1ef37993c0dddde4da97a9ffa101109d5465dd9793abe128900e4d56eb99),
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0x188edc20ee2ebd7c8f2c3199d663f47cbc2c7fe2398953c75c3a19ca6f915cdf)
+[`0x772EbDBF`](https://explorer-studio.genlayer.com/address/0x772EbDBF33fBc2ac43ca0A586e7BAcB9e6c15901),
+paying [`0xCB3Bf2eA`](https://explorer-studio.genlayer.com/address/0xCB3Bf2eA7f66994453f2c0f9f7f3804de770DF48):
+[`attest`](https://explorer-studio.genlayer.com/tx/0x2f9e38c64105bae745efa58b3898828245c9221ea983257cc4e315518b2ef5cc),
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0xf2d84c47fc279dd037b89afbc56f353935c1246af5d58af981e88ef3ea40587c)
 (`0 GEN -> 0.875 GEN`),
-[`reclaim`](https://explorer-studio.genlayer.com/tx/0xf20ff3c20bf731386c3cb7a86a945926e532b6864aea00a9b8498392a984e58d)
+[`reclaim`](https://explorer-studio.genlayer.com/tx/0x9557687b7ffd1e5e475b1e6385e0ea564310d2d832c537fee7e68afd8537aa68)
 after the settle window,
-[`withdraw`](https://explorer-studio.genlayer.com/tx/0xe7e2e2d9bd33e30427fa0e6a53e9a518e9cb6324afd02928722180bd718c17d2)
+[`withdraw`](https://explorer-studio.genlayer.com/tx/0x4ae39f7928e5afd8a4d70d99fc5c7feabcdee35f3e89740966fc75fd9f800568)
 of the wallet's assigned credit, and a wallet's
-[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0xcd89a5334e882afe9f300bc409fb5cd9cf8dcc8795e1e1f1ec1a0eb5f289faaa).
+[`withdraw` refused](https://explorer-studio.genlayer.com/tx/0xdfdee27e09d45b24e184230203eafc982802238ebbab3128d32b0bf64e47a0df).
+
+The claimant finished that run holding **0.925 GEN against an entitlement of
+0.925** — paid once. On the deployment before the exactness fix the same run
+left it holding 1.8 for the same work.
 
 That run now commits a delivery before it closes the engagement, because
 without one it is graded against an absent deliverable and the provider's
