@@ -86,7 +86,7 @@ vectors pinning the TypeScript port used by the site to the same answers.
 
 | Network | Address | Artifact | Version |
 |---|---|---|---|
-| GenLayer Studio | [`0x8CFD98a40fF2F06FD3241402E248B4D241F6995C`](https://explorer-studio.genlayer.com/address/0x8CFD98a40fF2F06FD3241402E248B4D241F6995C) | `reputation_oracle.py` | current |
+| GenLayer Studio | [`0x772EbDBF33fBc2ac43ca0A586e7BAcB9e6c15901`](https://explorer-studio.genlayer.com/address/0x772EbDBF33fBc2ac43ca0A586e7BAcB9e6c15901) | `reputation_oracle.py` | current |
 | Testnet Bradbury | [`0xaE321ADbd5d8769bFFd5d25d39251BB53E418524`](https://explorer-bradbury.genlayer.com/address/0xaE321ADbd5d8769bFFd5d25d39251BB53E418524) | `reputation_oracle.min.py` | **previous — see below** |
 
 **Bradbury is one version behind, and not by choice.** It currently refuses to
@@ -675,7 +675,7 @@ ok   the contract covers everything it has not sent
 ```
 
 The same script, same result, on the current studionet deployment
-[`0x8CFD98a4`](https://explorer-studio.genlayer.com/address/0x8CFD98a40fF2F06FD3241402E248B4D241F6995C),
+[`0x8CFD98a4`](https://explorer-studio.genlayer.com/address/0x772EbDBF33fBc2ac43ca0A586e7BAcB9e6c15901),
 paying [`0xc3847D81`](https://explorer-studio.genlayer.com/address/0xc3847D812A65CaD94Ca4766d2dc23BD4fA117caA):
 [`attest`](https://explorer-studio.genlayer.com/tx/0x690c1ef37993c0dddde4da97a9ffa101109d5465dd9793abe128900e4d56eb99),
 [`withdraw`](https://explorer-studio.genlayer.com/tx/0x188edc20ee2ebd7c8f2c3199d663f47cbc2c7fe2398953c75c3a19ca6f915cdf)
@@ -845,7 +845,7 @@ Deploying without them takes the contract defaults, and the seventh of those is
 Site configuration is `web/.env`:
 
 ```bash
-VITE_CONTRACT_ADDRESS=0x8CFD98a40fF2F06FD3241402E248B4D241F6995C
+VITE_CONTRACT_ADDRESS=0x772EbDBF33fBc2ac43ca0A586e7BAcB9e6c15901
 VITE_GENLAYER_NETWORK=studionet
 ```
 

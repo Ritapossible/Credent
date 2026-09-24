@@ -142,8 +142,37 @@ async function call(
   return { hash: String(hash), receipt }
 }
 
-const view = <T>(address: string, functionName: string, args: unknown[] = []): Promise<T> =>
-  client.readContract({ address: address as `0x${string}`, functionName, args: args as never[] }) as Promise<T>
+/**
+ * A contract read, retried through studio's intermittent gateway replies.
+ *
+ * The write path has honoured these since the rate limits; reads did not, and
+ * that is what ended a run: the settlement reached the payout, then died on a
+ * poll during the settle window, before `reclaim` -- the check the whole
+ * walkthrough exists for -- was ever reached. An HTML error page arrives as a
+ * JSON parse failure rather than an RPC error, so it has to be matched on the
+ * text.
+ */
+async function view<T>(address: string, functionName: string, args: unknown[] = []): Promise<T> {
+  let delay = 2_000
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return (await client.readContract({
+        address: address as `0x${string}`,
+        functionName,
+        args: args as never[],
+      })) as T
+    } catch (err) {
+      const text = String((err as Error)?.message ?? err)
+      const transient =
+        /(-32005|node is at capacity|gas rate limit exceeded|is not valid JSON|<!DOCTYPE|fetch failed|ETIMEDOUT|ECONNRESET)/.test(
+          text,
+        )
+      if (!transient || attempt >= 8) throw err
+      await sleep(delay)
+      delay = Math.min(delay * 2, 20_000)
+    }
+  }
+}
 
 const asBig = (v: unknown): bigint => BigInt(v as string | number | bigint)
 
